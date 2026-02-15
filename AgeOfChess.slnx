@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AgeOfChess.Server/AgeOfChess.Server.csproj" />
+  <Project Path="AgeOfChess.Tests/AgeOfChess.Tests.csproj" />
+</Solution>
