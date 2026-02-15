@@ -43,6 +43,15 @@ public abstract class Game
         GameEnded = true;
     }
 
+    /// <summary>
+    /// Ends the game immediately with a given result string (e.g. for resign or admin override).
+    /// </summary>
+    public void ForceEnd(string result)
+    {
+        Result = result;
+        GameEnded = true;
+    }
+
     public virtual void EndTurn()
     {
         PieceColor previousActiveColor = ActiveColor;

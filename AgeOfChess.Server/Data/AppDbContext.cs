@@ -18,6 +18,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<GameSession>()
             .HasOne(g => g.Lobby)
             .WithOne(l => l.GameSession)
-            .HasForeignKey<GameSession>(g => g.LobbyId);
+            .HasForeignKey<GameSession>(g => g.LobbyId)
+            .IsRequired(false);
+
+        modelBuilder.Entity<GameSession>()
+            .HasIndex(g => g.WhitePlayerToken)
+            .IsUnique();
+
+        modelBuilder.Entity<GameSession>()
+            .HasIndex(g => g.BlackPlayerToken)
+            .IsUnique();
     }
 }

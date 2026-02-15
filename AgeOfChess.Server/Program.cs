@@ -1,20 +1,21 @@
 using System.Text;
 using AgeOfChess.Server.Data;
 using AgeOfChess.Server.Hubs;
+using AgeOfChess.Server.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Database
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMySql(
-        builder.Configuration.GetConnectionString("Default"),
-        ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("Default"))
-    ));
+// Database (MySQL via Pomelo)
+var connStr = builder.Configuration.GetConnectionString("Default")
+    ?? throw new InvalidOperationException("ConnectionStrings:Default is required.");
 
-// Authentication (JWT)
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseMySql(connStr, ServerVersion.AutoDetect(connStr)));
+
+// JWT authentication — optional for most routes, required for future ranked features
 var jwtKey = builder.Configuration["Jwt:Key"]
     ?? throw new InvalidOperationException("Jwt:Key is required in configuration.");
 
@@ -28,7 +29,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuer = false,
             ValidateAudience = false,
         };
-        // Allow JWT via query string for SignalR connections
+        // Allow JWT via query string for SignalR (browsers can't set headers on WS connections)
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = ctx =>
@@ -45,6 +46,9 @@ builder.Services.AddAuthorization();
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
 
+// In-memory active game store (singleton — lives for the process lifetime)
+builder.Services.AddSingleton<GameSessionManager>();
+
 var app = builder.Build();
 
 app.UseDefaultFiles();
@@ -56,7 +60,7 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHub<GameHub>("/hub/game");
 
-// Fallback to index.html for client-side routing
+// Fallback to index.html for Svelte client-side routing
 app.MapFallbackToFile("index.html");
 
 app.Run();

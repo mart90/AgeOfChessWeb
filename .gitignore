@@ -16,10 +16,10 @@ packages/
 publish/
 
 # Credentials - never commit these
-appsettings.Production.json
+# appsettings.*.json files (Development, Production, etc.) are gitignored.
+# Fill in ConnectionStrings:Default and Jwt:Key in the appropriate override file.
 appsettings.*.json
 !appsettings.json
-!appsettings.Development.json
 
 # Node
 node_modules/
