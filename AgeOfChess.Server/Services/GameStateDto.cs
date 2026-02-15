@@ -48,7 +48,11 @@ public static class GameStateDtoBuilder
                 s.X, s.Y, s.Id,
                 s.Type.ToString(),
                 s.TemporaryColor.ToString(),
-                s.Object is Piece p ? new PieceDto(s.Object.GetType().Name, p.IsWhite) : null
+                s.Object is Piece p
+                    ? new PieceDto(s.Object.GetType().Name, p.IsWhite)
+                    : s.Object != null
+                        ? new PieceDto(s.Object.GetType().Name, false)
+                        : null
             )).ToList(),
             new PlayerDto(game.White.PlayedByStr, game.White.Gold, game.White.TimeMiliseconds, game.White.IsActive),
             new PlayerDto(game.Black.PlayedByStr, game.Black.Gold, game.Black.TimeMiliseconds, game.Black.IsActive),

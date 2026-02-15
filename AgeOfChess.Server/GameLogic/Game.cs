@@ -66,7 +66,22 @@ public abstract class Game
 
         if (TimeControlEnabled)
         {
-            previousActiveColor.TimeMiliseconds += TimeIncrementSeconds * 1000;
+            if (LastMoveTimestamp.HasValue)
+            {
+                var elapsed = (long)(DateTime.UtcNow - LastMoveTimestamp.Value).TotalMilliseconds;
+                previousActiveColor.TimeMiliseconds -= (int)elapsed;
+                previousActiveColor.TimeMiliseconds += TimeIncrementSeconds * 1000;
+                if (previousActiveColor.TimeMiliseconds <= 0)
+                {
+                    previousActiveColor.TimeMiliseconds = 0;
+                    Result = previousActiveColor.IsWhite ? "b+t" : "w+t";
+                }
+            }
+            else
+            {
+                // First move: clock hasn't been running, just add the increment
+                previousActiveColor.TimeMiliseconds += TimeIncrementSeconds * 1000;
+            }
         }
 
         LastMoveTimestamp = DateTime.UtcNow;
@@ -79,6 +94,13 @@ public abstract class Game
 
         if (!FirstMoveMade)
             FirstMoveMade = true;
+
+        // Time forfeit detected by EndTurn
+        if (Result != null && !GameEnded)
+        {
+            EndGame();
+            return;
+        }
 
         if (CheckForMate())
         {
