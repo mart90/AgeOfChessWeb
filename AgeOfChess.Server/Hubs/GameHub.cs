@@ -1,6 +1,9 @@
 using AgeOfChess.Server.Data;
 using AgeOfChess.Server.Data.Models;
 using AgeOfChess.Server.GameLogic;
+using AgeOfChess.Server.GameLogic.Map;
+using AgeOfChess.Server.GameLogic.PlaceableObjects;
+using AgeOfChess.Server.GameLogic.PlaceableObjects.Pieces;
 using AgeOfChess.Server.Services;
 using Microsoft.AspNetCore.SignalR;
 using System.Text.Json;
@@ -127,6 +130,41 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         }
 
         await base.OnDisconnectedAsync(exception);
+    }
+
+    /// <summary>
+    /// Returns legal destination squares for the piece at (fromX, fromY).
+    /// Called immediately when the player grabs a piece so the client can show green hints.
+    /// </summary>
+    public int[][] GetLegalMoves(string playerToken, int fromX, int fromY)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null || game.GameEnded) return [];
+        if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite) return [];
+
+        var sq = game.GetMap().GetSquareByCoordinates(fromX, fromY);
+        if (sq?.Object is not Piece piece) return [];
+
+        return game.GetMap().FindLegalDestinationsForPiece(piece, sq)
+                            .Select(s => new[] { s.X, s.Y })
+                            .ToArray();
+    }
+
+    /// <summary>
+    /// Returns legal placement squares for a given piece type.
+    /// Called immediately when the player grabs a shop piece.
+    /// </summary>
+    public int[][] GetLegalPlacements(string playerToken, string pieceCode)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null || game.GameEnded) return [];
+        if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite) return [];
+
+        var isPawn = pieceCode.Equals("p", StringComparison.OrdinalIgnoreCase);
+        var pf = new PathFinder(game.GetMap());
+        return pf.FindLegalDestinationsForPiecePlacement(game.ActiveColor.IsWhite, isPawn)
+                 .Select(s => new[] { s.X, s.Y })
+                 .ToArray();
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
