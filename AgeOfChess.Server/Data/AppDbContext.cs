@@ -15,6 +15,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasIndex(u => u.Username)
             .IsUnique();
 
+        // MySQL allows multiple NULLs in a unique index, so this correctly
+        // enforces that no two accounts share the same Google Subject ID.
+        modelBuilder.Entity<User>()
+            .HasIndex(u => u.GoogleId)
+            .IsUnique();
+
         modelBuilder.Entity<GameSession>()
             .HasOne(g => g.Lobby)
             .WithOne(l => l.GameSession)

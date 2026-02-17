@@ -24,12 +24,15 @@ public class GameSessionManager
     public ServerGame? GetById(int sessionId) =>
         _games.GetValueOrDefault(sessionId);
 
-    public ServerGame? GetByPlayerToken(string token)
+    public ServerGame? GetByPlayerToken(string? token)
     {
+        if (string.IsNullOrEmpty(token)) return null;
         if (_tokenIndex.TryGetValue(token, out int id))
             return GetById(id);
         return null;
     }
+
+    public IEnumerable<ServerGame> GetAll() => _games.Values;
 
     public void Remove(int sessionId)
     {

@@ -17,7 +17,13 @@ public record GameStateDto(
     PlayerDto Black,
     IReadOnlyList<string> Moves,
     string? Result,
-    bool GameEnded
+    bool GameEnded,
+    /// <summary>
+    /// Unix milliseconds when the current turn started (i.e. when the active player's clock began).
+    /// 0 if the first move has not yet been made (clocks not running).
+    /// </summary>
+    long TurnStartedAt,
+    bool TimeControlEnabled
 );
 
 public record SquareDto(
@@ -35,7 +41,8 @@ public record PlayerDto(
     string Name,
     int Gold,
     int TimeMsRemaining,
-    bool IsActive
+    bool IsActive,
+    int? Elo
 );
 
 public static class GameStateDtoBuilder
@@ -54,10 +61,14 @@ public static class GameStateDtoBuilder
                         ? new PieceDto(s.Object.GetType().Name, false)
                         : null
             )).ToList(),
-            new PlayerDto(game.White.PlayedByStr, game.White.Gold, game.White.TimeMiliseconds, game.White.IsActive),
-            new PlayerDto(game.Black.PlayedByStr, game.Black.Gold, game.Black.TimeMiliseconds, game.Black.IsActive),
+            new PlayerDto(game.White.PlayedByStr, game.White.Gold, game.White.TimeMiliseconds, game.White.IsActive, game.WhiteElo),
+            new PlayerDto(game.Black.PlayedByStr, game.Black.Gold, game.Black.TimeMiliseconds, game.Black.IsActive, game.BlackElo),
             game.MoveList.Select(m => m.ToNotation()).ToList(),
             game.Result,
-            game.GameEnded
+            game.GameEnded,
+            game.LastMoveTimestamp.HasValue
+                ? new DateTimeOffset(game.LastMoveTimestamp.Value, TimeSpan.Zero).ToUnixTimeMilliseconds()
+                : 0L,
+            game.TimeControlEnabled
         );
 }

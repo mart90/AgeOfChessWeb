@@ -30,6 +30,12 @@ namespace AgeOfChess.Server.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<int?>("BlackEloAtGame")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("BlackEloDelta")
+                        .HasColumnType("int");
+
                     b.Property<string>("BlackPlayerToken")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
@@ -60,6 +66,12 @@ namespace AgeOfChess.Server.Migrations
 
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("WhiteEloAtGame")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("WhiteEloDelta")
+                        .HasColumnType("int");
 
                     b.Property<string>("WhitePlayerToken")
                         .IsRequired()
@@ -125,8 +137,14 @@ namespace AgeOfChess.Server.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<int>("BlitzGamesPlayed")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("longtext");
 
                     b.Property<int>("EloBlitz")
                         .HasColumnType("int");
@@ -134,18 +152,35 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<int>("EloRapid")
                         .HasColumnType("int");
 
+                    b.Property<int>("EloSlow")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("longtext");
+
                     b.Property<int>("GamesPlayed")
                         .HasColumnType("int");
 
+                    b.Property<string>("GoogleId")
+                        .HasColumnType("varchar(255)");
+
                     b.Property<string>("PasswordHash")
-                        .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<int>("RapidGamesPlayed")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SlowGamesPlayed")
+                        .HasColumnType("int");
 
                     b.Property<string>("Username")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("GoogleId")
+                        .IsUnique();
 
                     b.HasIndex("Username")
                         .IsUnique();

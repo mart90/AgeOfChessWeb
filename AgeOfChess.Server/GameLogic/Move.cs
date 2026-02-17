@@ -14,9 +14,10 @@ public class Move
 
     public string? PiecePlaced { get; set; }
     public string? ObjectCaptured { get; set; }
+    public string? Suffix { get; set; }   // "+" for check, "#" for checkmate/stalemate
 
-    public string? SourceSquareStr => SourceSquareX != null ? $"{XToLetter(SourceSquareX.Value)}{SourceSquareY!.Value}" : null;
-    public string DestinationSquareStr => $"{XToLetter(DestinationSquareX)}{DestinationSquareY}";
+    public string? SourceSquareStr => SourceSquareX != null ? $"{XToLetter(SourceSquareX.Value)}{SourceSquareY!.Value + 1}" : null;
+    public string DestinationSquareStr => $"{XToLetter(DestinationSquareX)}{DestinationSquareY + 1}";
 
     public Move(string? sourceSquare, string destinationSquare, string? piecePlaced = null, string? objectCaptured = null)
     {
@@ -46,11 +47,18 @@ public class Move
 
     public string ToNotation()
     {
+        string body;
         if (PiecePlaced != null)
-            return $"{XToLetter(DestinationSquareX)}{DestinationSquareY}{PiecePlaced}";
-
-        string connector = ObjectCaptured != null ? "x" : "-";
-        return $"{XToLetter(SourceSquareX!.Value)}{SourceSquareY!.Value}{connector}{XToLetter(DestinationSquareX)}{DestinationSquareY}";
+        {
+            string pieceDisplay = PiecePlaced == "p" ? "p" : PiecePlaced.ToUpper();
+            body = $"{XToLetter(DestinationSquareX)}{DestinationSquareY + 1}={pieceDisplay}";
+        }
+        else
+        {
+            string connector = ObjectCaptured != null ? "x" : "-";
+            body = $"{XToLetter(SourceSquareX!.Value)}{SourceSquareY!.Value + 1}{connector}{XToLetter(DestinationSquareX)}{DestinationSquareY + 1}";
+        }
+        return body + (Suffix ?? "");
     }
 
     public static string ObjectTypeToStringId(Type placeableObjectType)
@@ -78,11 +86,11 @@ public class Move
     private static (int x, int y) SquareStringToXY(string squareString)
     {
         int x = LetterToX(squareString[0]);
-        int y = int.Parse(squareString[1..]);
+        int y = int.Parse(squareString[1..]) - 1;
         return (x, y);
     }
 
-    private static string XToLetter(int x) => ((char)(x + 96)).ToString();
+    private static string XToLetter(int x) => ((char)(x + 97)).ToString();
 
-    private static int LetterToX(char letter) => letter - 96;
+    private static int LetterToX(char letter) => letter - 97;
 }

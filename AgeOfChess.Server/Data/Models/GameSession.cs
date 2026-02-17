@@ -40,4 +40,11 @@ public class GameSession
     public GameResult Result { get; set; } = GameResult.InProgress;
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     public DateTime? EndedAt { get; set; }
+
+    // Elo ratings at the start of this game and the delta applied when it ended.
+    // Null for anonymous players or games that didn't affect ratings.
+    public int? WhiteEloAtGame { get; set; }
+    public int? BlackEloAtGame { get; set; }
+    public int? WhiteEloDelta  { get; set; }
+    public int? BlackEloDelta  { get; set; }
 }

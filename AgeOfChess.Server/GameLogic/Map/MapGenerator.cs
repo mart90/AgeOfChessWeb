@@ -13,8 +13,8 @@ public class MapGenerator
         if (width % 2 != 0 || height % 2 != 0)
             throw new ArgumentException("Map dimensions must be even.");
 
-        if (width < 8 || height < 8 || width > 20 || height > 20)
-            throw new ArgumentException("Map size must be between 8x8 and 20x20.");
+        if (width < 6 || height < 6 || width > 20 || height > 20)
+            throw new ArgumentException("Map size must be between 6x6 and 20x20.");
 
         _map = new Map(width, height);
 

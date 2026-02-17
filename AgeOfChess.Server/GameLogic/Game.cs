@@ -15,8 +15,8 @@ public abstract class Game
     public DateTime? LastMoveTimestamp { get; protected set; }
 
     protected Map.Map Map = null!;
-    protected bool TimeControlEnabled;
-    protected int TimeIncrementSeconds;
+    public bool TimeControlEnabled;
+    public int TimeIncrementSeconds;
     protected bool FirstMoveMade;
 
     private static readonly Dictionary<Type, int> PieceCosts = new()
@@ -219,7 +219,7 @@ public abstract class Game
             if (!activeKingLegalMoves.Any())
             {
                 // Checkmate
-                activeKingSquare.SetObject(new WhiteFlag());
+                if (MoveList.Count > 0) MoveList[^1].Suffix = "#";
                 Result = ActiveColor.IsWhite ? "b+c" : "w+c";
                 return true;
             }
@@ -227,6 +227,7 @@ public abstract class Game
             {
                 // In check — mark the king square red for the client
                 activeKingSquare.SetTemporaryColor(SquareColor.Red);
+                if (MoveList.Count > 0) MoveList[^1].Suffix = "+";
                 return false;
             }
         }
@@ -235,7 +236,7 @@ public abstract class Game
         int activePieceCount = Map.Squares.Count(e => e.Object is Piece piece && piece.IsWhite == ActiveColor.IsWhite);
         if (!activeKingLegalMoves.Any() && activePieceCount == 1 && InActiveColor.Gold < 15)
         {
-            activeKingSquare.SetObject(new WhiteFlag());
+            if (MoveList.Count > 0) MoveList[^1].Suffix = "#";
             Result = ActiveColor.IsWhite ? "b+s" : "w+s";
             return true;
         }

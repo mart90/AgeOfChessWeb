@@ -48,6 +48,8 @@ builder.Services.AddSignalR();
 
 // In-memory active game store (singleton — lives for the process lifetime)
 builder.Services.AddSingleton<GameSessionManager>();
+builder.Services.AddSingleton<MatchmakingService>();
+builder.Services.AddScoped<GameCreationService>();
 
 var app = builder.Build();
 
@@ -59,6 +61,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapHub<GameHub>("/hub/game");
+app.MapHub<MatchmakingHub>("/hub/matchmaking");
 
 // Fallback to index.html for Svelte client-side routing
 app.MapFallbackToFile("index.html");

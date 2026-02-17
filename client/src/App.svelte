@@ -1,17 +1,55 @@
 <script>
-  import HomePage from './HomePage.svelte';
-  import GamePage from './GamePage.svelte';
+  import { onMount }     from 'svelte';
+  import NavBar          from './NavBar.svelte';
+  import HomePage        from './HomePage.svelte';
+  import GamePage        from './GamePage.svelte';
+  import LoginPage       from './LoginPage.svelte';
+  import RegisterPage    from './RegisterPage.svelte';
+  import SettingsPage    from './SettingsPage.svelte';
+  import WatchPage       from './WatchPage.svelte';
+  import ProfilePage     from './ProfilePage.svelte';
+  import { authState, clearAuth } from './lib/auth.svelte.js';
+  import { getMe }       from './lib/api.js';
 
   let path = $state(window.location.pathname);
 
   window.addEventListener('popstate', () => { path = window.location.pathname; });
 
-  const gameMatch = $derived(path.match(/^\/game\/(\d+)/));
-  const gameId    = $derived(gameMatch ? parseInt(gameMatch[1]) : null);
+  const gameMatch    = $derived(path.match(/^\/game\/(\d+)/));
+  const gameId       = $derived(gameMatch ? parseInt(gameMatch[1]) : null);
+  const profileMatch = $derived(path.match(/^\/profile\/([^/]+)/));
+  const profileUser  = $derived(profileMatch ? decodeURIComponent(profileMatch[1]) : null);
+
+  // Restore user session from stored JWT on first load
+  onMount(async () => {
+    if (authState.token && !authState.user) {
+      const user = await getMe();
+      if (user) {
+        authState.user = user;
+      } else {
+        // Token is expired or invalid — clear it
+        clearAuth();
+      }
+    }
+  });
 </script>
+
+<NavBar />
 
 {#if gameId !== null}
   <GamePage {gameId} />
+{:else if profileUser !== null}
+  {#key profileUser}
+    <ProfilePage username={profileUser} />
+  {/key}
+{:else if path === '/login'}
+  <LoginPage />
+{:else if path === '/register'}
+  <RegisterPage />
+{:else if path === '/settings'}
+  <SettingsPage />
+{:else if path === '/watch'}
+  <WatchPage />
 {:else}
   <HomePage />
 {/if}
@@ -24,6 +62,8 @@
     background: #1a1a2e;
     color: #eee;
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
   :global(button) {
     cursor: pointer;
