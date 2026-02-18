@@ -5,10 +5,14 @@ export default defineConfig({
   plugins: [svelte()],
   server: {
     proxy: {
-      '/api': 'http://localhost:5132',
+      '/api': {
+        target: 'https://localhost:7074',
+        secure: false,
+      },
       '/hub': {
-        target: 'http://localhost:5132',
+        target: 'https://localhost:7074',
         ws: true,
+        secure: false,
       },
     },
   },

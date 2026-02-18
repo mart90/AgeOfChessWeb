@@ -15,14 +15,15 @@ public static class EloService
 
     /// <summary>
     /// Maps game settings to one of the three rating categories:
-    ///   Blitz  — time-controlled with ≤ 5 minutes starting time
-    ///   Rapid  — time-controlled with > 5 minutes starting time
-    ///   Slow   — no time control
+    ///   Slow   — no time control, or ≥ 30 minutes starting time  (30+15, 60+30, no timer)
+    ///   Rapid  — 10 or 15 minutes starting time                   (10+5, 15+10)
+    ///   Blitz  — time-controlled with &lt; 10 minutes starting time
     /// </summary>
     public static TimeControlCategory GetCategory(GameSettings s) =>
         !s.TimeControlEnabled       ? TimeControlCategory.Slow  :
-        s.StartTimeMinutes <= 5     ? TimeControlCategory.Blitz :
-                                      TimeControlCategory.Rapid;
+        s.StartTimeMinutes >= 30    ? TimeControlCategory.Slow  :
+        s.StartTimeMinutes >= 10    ? TimeControlCategory.Rapid :
+                                      TimeControlCategory.Blitz;
 
     /// <summary>
     /// Returns updated (whiteElo, blackElo) after a decisive result.

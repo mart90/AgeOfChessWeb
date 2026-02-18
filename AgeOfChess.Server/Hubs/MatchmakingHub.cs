@@ -27,7 +27,8 @@ public class MatchmakingHub(MatchmakingService matchmaking, IServiceScopeFactory
         int startTimeMinutes,
         int timeIncrementSeconds,
         string timePref,
-        string biddingPreference)
+        string biddingPreference,
+        string mapModePref = "m")
     {
         // Require authentication
         if (GetCurrentUserId() == null)
@@ -63,8 +64,12 @@ public class MatchmakingHub(MatchmakingService matchmaking, IServiceScopeFactory
             ? await GetEloAsync(userId, settings)
             : await GetEloForCategoryAsync(userId, timeCategory);
 
+        var normalizedMapMode = mapModePref.ToLowerInvariant() is "m" or "r" or "any"
+            ? mapModePref.ToLowerInvariant()
+            : "m";
+
         var entry = new MatchmakingEntry(
-            Context.ConnectionId, userId, elo, settings, isSpecific, timeCategory, boardSizeMin, boardSizeMax, biddingPref, DateTime.UtcNow);
+            Context.ConnectionId, userId, elo, settings, isSpecific, timeCategory, boardSizeMin, boardSizeMax, biddingPref, normalizedMapMode, DateTime.UtcNow);
 
         await matchmaking.AddToQueueAsync(entry);
     }

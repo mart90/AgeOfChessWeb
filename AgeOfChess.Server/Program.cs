@@ -50,9 +50,18 @@ builder.Services.AddSignalR();
 builder.Services.AddSingleton<GameSessionManager>();
 builder.Services.AddSingleton<MatchmakingService>();
 builder.Services.AddScoped<GameCreationService>();
+builder.Services.AddScoped<GameResumeService>();
+builder.Services.AddHostedService<GameCleanupService>();
 
 var app = builder.Build();
 
+// Reload in-progress slow games from the database before accepting connections
+using (var scope = app.Services.CreateScope())
+{
+    scope.ServiceProvider.GetRequiredService<GameResumeService>().ResumeSlowGames();
+}
+
+app.UseHttpsRedirection();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 

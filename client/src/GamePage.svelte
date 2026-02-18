@@ -1,9 +1,11 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { startHub } from './lib/hub.js';
+  import { navigate as navigateTo } from './lib/navigate.js';
   import Board from './Board.svelte';
   import MoveList from './MoveList.svelte';
   import { settings } from './lib/settings.svelte.js';
+  import { currentGame } from './lib/currentGame.svelte.js';
 
   const { gameId } = $props();
 
@@ -12,8 +14,8 @@
   const SHOP = [
     { code: 'q', name: 'Queen',  cost: 70 },
     { code: 'r', name: 'Rook',   cost: 35 },
-    { code: 'b', name: 'Bishop', cost: 25 },
-    { code: 'n', name: 'Knight', cost: 30 },
+    { code: 'b', name: 'Bishop', cost: 26 },
+    { code: 'n', name: 'Knight', cost: 28 },
     { code: 'p', name: 'Pawn',   cost: 20 },
   ];
 
@@ -21,10 +23,20 @@
 
   let hub            = null;
   let boardCanvas    = null;   // canvas element exposed by Board
+  let boardColHeight = $state(0);
   let gameState      = $state(null);
   let playerToken    = $state(null);
+
+  // Sync map seed to NavBar's Copy map seed button whenever gameState arrives
+  $effect(() => { if (gameState?.mapSeed) currentGame.mapSeed = gameState.mapSeed; });
+  onDestroy(() => { currentGame.mapSeed = null; document.title = 'Goldrush Gambit'; });
+
+  // Page title: "{White} vs {Black}" once we know player names
+  $effect(() => {
+    if (gameState) document.title = `${gameState.white.name} vs ${gameState.black.name}`;
+  });
   let isWhite        = $state(true);
-  let statusMsg      = $state('Connecting…');
+  let statusMsg      = $state('Loading…');
   let inviteUrl      = $state('');
   let isSpectator    = $state(false);
 
@@ -45,6 +57,38 @@
   let wasCreator       = false;        // captured at BiddingStarted, before ColorAssigned changes isWhite
   let pendingBidReveal = $state(null); // { opponentBid } shown to winner until acknowledged
   let resignPending    = $state(false);
+
+  // ── Rematch state ─────────────────────────────────────────────────────────
+
+  let rematchRequested         = $state(false);
+  let opponentRematchRequested = $state(false);
+
+  // ── Chat state ───────────────────────────────────────────────────────────
+
+  let chatMessages = $state([]);
+  let chatInput    = $state('');
+  let unreadChat   = $state(0);
+  let activeTab    = $state('moves');  // 'moves' | 'chat'
+  let chatEl       = $state(null);
+
+  function switchTab(tab) {
+    activeTab = tab;
+    if (tab === 'chat') unreadChat = 0;
+  }
+
+  function sendChat() {
+    const msg = chatInput.trim();
+    if (!msg || !hub || isSpectator) return;
+    hub.invoke('SendChat', playerToken, msg);
+    chatInput = '';
+  }
+
+  $effect(() => {
+    // Scroll chat to bottom whenever a new message arrives and chat is visible
+    if (chatEl && chatMessages.length > 0) {
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+  });
 
   function syncLocalTimes(state) {
     if (!state) return;
@@ -227,7 +271,7 @@
   // ── Board callbacks ───────────────────────────────────────────────────────
 
   async function onPieceGrabbed(x, y, clientX, clientY) {
-    if (!isMyTurn || gameState?.gameEnded) return;
+    if (!isMyTurn || gameState?.gameEnded || biddingState) return;
     const sq = gameState.squares.find(s => s.x === x && s.y === y);
     if (!sq?.piece || sq.piece.isWhite !== isWhite) return;
 
@@ -249,7 +293,7 @@
   }
 
   function onSquareClick(x, y) {
-    if (!isMyTurn || gameState?.gameEnded) return;
+    if (!isMyTurn || gameState?.gameEnded || biddingState) return;
     const sq = gameState.squares.find(s => s.x === x && s.y === y);
 
     if (selectedSquare) {
@@ -286,7 +330,7 @@
   // ── Shop drag ─────────────────────────────────────────────────────────────
 
   async function shopPointerDown(e, code) {
-    if (!isMyTurn || gameState?.gameEnded) return;
+    if (!isMyTurn || gameState?.gameEnded || biddingState) return;
     const item = SHOP.find(s => s.code === code);
     if (!item || (me?.gold ?? 0) < item.cost) return;
 
@@ -317,16 +361,105 @@
   // ── SignalR ───────────────────────────────────────────────────────────────
 
   onMount(async () => {
+    // Global event listeners and clock — needed for both replay and live paths.
+    window.addEventListener('pointermove', globalPointerMove);
+    window.addEventListener('pointerup',   globalPointerUp);
+    const clockInterval = setInterval(tickClocks, 250);
+    function teardown() {
+      window.removeEventListener('pointermove', globalPointerMove);
+      window.removeEventListener('pointerup',   globalPointerUp);
+      clearInterval(clockInterval);
+    }
+
+    // ── Probe: is this game live or finished? ─────────────────────────────────
+    let probe;
+    try {
+      const res = await fetch(`/api/game/${gameId}`);
+      if (!res.ok) { statusMsg = 'Game not found.'; return teardown; }
+      probe = await res.json();
+    } catch {
+      statusMsg = 'Could not connect to server.';
+      return teardown;
+    }
+
+    // ── Server-restarted game ─────────────────────────────────────────────────
+    if (probe.serverRestarted) {
+      statusMsg = 'This game was interrupted when the server restarted.';
+      return teardown;
+    }
+
+    // ── Finished game: load replay from stored moves ──────────────────────────
+    // Finished games return { movesJson, mapSeed, result, ... };
+    // live games return a GameStateDto with a `squares` array instead.
+    if ('movesJson' in probe) {
+      const storedColor = localStorage.getItem(`color_${gameId}`);
+      isWhite     = storedColor !== 'black';
+      isSpectator = true;
+      try {
+        const r = await fetch(`/api/game/${gameId}/replay`);
+        if (!r.ok) throw new Error();
+        const { snapshots } = await r.json();
+        if (!snapshots?.length) throw new Error();
+        stateHistory = snapshots;
+        gameState    = snapshots[snapshots.length - 1];
+        replayIndex  = stateHistory.length - 1;
+        statusMsg    = formatResult(gameState.result);
+      } catch {
+        statusMsg = 'Replay not available for this game.';
+      }
+      return teardown;
+    }
+
+    // ── Live game: connect to hub ─────────────────────────────────────────────
     const resolved = resolveToken();
     if (!resolved) {
       isSpectator = true;
     } else {
       playerToken = resolved.token;
       isWhite     = resolved.white;
-      inviteUrl   = localStorage.getItem(`inviteUrl_${gameId}`) ?? '';
     }
 
     hub = await startHub();
+
+    hub.onreconnecting(() => {
+      statusMsg = 'Connection lost — reconnecting…';
+    });
+    hub.onreconnected(async () => {
+      // Re-probe to check if the game is still live (server may have restarted)
+      try {
+        const res = await fetch(`/api/game/${gameId}`);
+        if (res.ok) {
+          const reprobe = await res.json();
+          if (reprobe.serverRestarted) {
+            statusMsg = 'This game was interrupted when the server restarted.';
+            return;
+          }
+          if (!('squares' in reprobe)) {
+            // Game finished while we were disconnected — show result
+            statusMsg = formatResult(reprobe.result) || 'Game ended.';
+            return;
+          }
+          // Game is still live — clear any stale bidding UI from before the disconnect.
+          // The hub will re-send BiddingStarted when both players reconnect if bidding
+          // is still genuinely in progress.
+          biddingState = null;
+        }
+      } catch { /* ignore probe failure, try to rejoin anyway */ }
+
+      try {
+        if (isSpectator) {
+          await hub.invoke('WatchGame', gameId);
+        } else if (playerToken) {
+          await hub.invoke('JoinGame', playerToken);
+          if (!gameState) statusMsg = 'Reconnected — waiting for opponent…';
+        }
+      } catch {
+        statusMsg = 'Reconnected, but failed to rejoin game — please refresh.';
+      }
+    });
+    hub.onclose(() => {
+      statusMsg = 'Connection lost — please refresh the page.';
+    });
 
     hub.on('GameStarted', (state) => {
       // If bidding just resolved and we're the winner, capture the opponent's bid for acknowledgement
@@ -350,13 +483,32 @@
       gameState = state; syncLocalTimes(state);
       statusMsg = formatResult(state.result); clearDrag();
       replayIndex = stateHistory.length - 1;  // enable replayer
+      localStorage.removeItem(`inviteUrl_${gameId}`);
     });
-    hub.on('Error',       (msg)   => console.warn('[GameHub]', msg));
+    hub.on('Error', (msg) => {
+      console.warn('[GameHub]', msg);
+    });
+    hub.on('ChatMessage', (msg) => {
+      chatMessages = [...chatMessages, msg];
+      if (activeTab !== 'chat') unreadChat++;
+    });
+    hub.on('ChatHistory', (msgs) => {
+      chatMessages = msgs;
+    });
     hub.on('BiddingStarted', (b) => { biddingState = b; bidSubmitted = isWhite ? b.creatorBidPlaced : b.joinerBidPlaced; wasCreator = isWhite; statusMsg = ''; inviteUrl = ''; });
     hub.on('BidPlaced',      (b) => { biddingState = b; });
     hub.on('ColorAssigned',  (white) => {
       isWhite = white;
       localStorage.setItem(`color_${gameId}`, white ? 'white' : 'black');
+    });
+    hub.on('RematchRequested', (requestedByWhite) => {
+      if (requestedByWhite === isWhite) rematchRequested = true;
+      else opponentRematchRequested = true;
+    });
+    hub.on('RematchReady', (newGameId, newToken, newIsWhite) => {
+      localStorage.setItem(`token_${newGameId}`, newToken);
+      localStorage.setItem(`color_${newGameId}`, newIsWhite ? 'white' : 'black');
+      navigateTo(`/game/${newGameId}`);
     });
 
     if (isSpectator) {
@@ -364,20 +516,14 @@
     } else {
       await hub.invoke('JoinGame', playerToken);
       if (!gameState) {
+        inviteUrl = localStorage.getItem(`inviteUrl_${gameId}`) ?? '';
         statusMsg = isWhite
           ? 'Share the invite link, then wait for your opponent…'
           : 'Waiting for the game to start…';
       }
     }
 
-    window.addEventListener('pointermove', globalPointerMove);
-    window.addEventListener('pointerup',   globalPointerUp);
-    const clockInterval = setInterval(tickClocks, 250);
-    return () => {
-      window.removeEventListener('pointermove', globalPointerMove);
-      window.removeEventListener('pointerup',   globalPointerUp);
-      clearInterval(clockInterval);
-    };
+    return teardown;
   });
 
   function resign() {
@@ -386,13 +532,19 @@
     resignPending = false;
   }
 
+  function requestRematch() {
+    if (!hub || rematchRequested) return;
+    rematchRequested = true;
+    hub.invoke('RequestRematch', playerToken);
+  }
+
   function copyInvite() {
     navigator.clipboard.writeText(inviteUrl).catch(() => {});
   }
 
   function submitBid() {
     const amount = parseInt(myBid);
-    if (isNaN(amount) || amount < 0) return;
+    if (isNaN(amount)) return;
     bidSubmitted = true;
     hub?.invoke('SubmitBid', playerToken, amount);
   }
@@ -423,31 +575,29 @@
 <div class="page">
 <div class="game-layout">
 
-  <!-- Opponent panel (top) -->
+  <!-- Opponent panel (top) — hidden until opponent connects -->
+  {#if opponent}
   <div class="player-panel">
-    {#if opponent}
-      <span class="dot" class:active={opponent.isActive && !biddingState}></span>
-      <span class="name">
-        {opponent.name}
-        {#if opponent.elo != null}<span class="elo-label">({opponent.elo})</span>{/if}
-        {#if !biddingState}<span class="color-label">{isWhite ? 'Black' : 'White'}</span>{/if}
-      </span>
-      <span class="gold">⚙ {opponent.gold}g</span>
-      {#if biddingState}
-        {@const oppBidPlaced = isWhite ? biddingState.joinerBidPlaced : biddingState.creatorBidPlaced}
-        {@const oppBidMs    = isWhite ? localJoinerMs : localCreatorMs}
-        {#if biddingState.initialMs < 86400000}
-          <span class="clock" class:ticking={!oppBidPlaced}>{formatTime(oppBidMs)}</span>
-        {/if}
-        {#if oppBidPlaced}<span class="bid-check">✓</span>{/if}
-      {:else if opponent.timeMsRemaining > 0}
-        {@const oppMs = isWhite ? localBlackMs : localWhiteMs}
-        <span class="clock" class:ticking={opponent.isActive}>{formatTime(oppMs)}</span>
+    <span class="dot" class:active={opponent.isActive && !biddingState}></span>
+    <span class="name">
+      {opponent.name}
+      {#if opponent.elo != null}<span class="elo-label">({opponent.elo})</span>{/if}
+      {#if !biddingState}<span class="color-label">{isWhite ? 'Black' : 'White'}</span>{/if}
+    </span>
+    <span class="gold">⚙ {opponent.gold}g</span>
+    {#if biddingState}
+      {@const oppBidPlaced = isWhite ? biddingState.joinerBidPlaced : biddingState.creatorBidPlaced}
+      {@const oppBidMs    = isWhite ? localJoinerMs : localCreatorMs}
+      {#if biddingState.initialMs < 86400000}
+        <span class="clock" class:ticking={!oppBidPlaced}>{formatTime(oppBidMs)}</span>
       {/if}
-    {:else}
-      <span class="name muted">Waiting for opponent…</span>
+      {#if oppBidPlaced}<span class="bid-check">✓</span>{/if}
+    {:else if opponent.timeMsRemaining > 0}
+      {@const oppMs = isWhite ? localBlackMs : localWhiteMs}
+      <span class="clock" class:ticking={opponent.isActive}>{formatTime(oppMs)}</span>
     {/if}
   </div>
+  {/if}
 
   <!-- Status / invite bar -->
   {#if statusMsg || inviteUrl}
@@ -462,6 +612,7 @@
   <!-- Board + move list side by side -->
   <div class="game-body">
     <div class="board-col">
+      <div class="board-main" bind:clientHeight={boardColHeight}>
       <div class="board-wrap">
         {#if displayedState}
           <Board
@@ -497,10 +648,19 @@
         <span class="bid-waiting">Resolving…</span>
       {:else if !bidSubmitted}
         <span class="bid-label">Bid for White:</span>
+        <span class="bid-help">
+          <button class="bid-help-btn" tabindex="-1">?</button>
+          <div class="bid-help-tip">
+            Both players secretly bid gold for the right to play White. The higher bidder
+            wins White and their bid is added to Black's starting gold.
+            <br><br>Bids can be negative when Black is better, which can happen on full random maps. In that case, Black starts with negative gold.
+            <br><br>
+            <strong>Example:</strong> You bid 8g, the opponent bids 6g. You play White, and the opponent plays Black with 8 starting gold.
+          </div>
+        </span>
         <input
           class="bid-input"
           type="number"
-          min="0"
           bind:value={myBid}
           onkeydown={(e) => e.key === 'Enter' && submitBid()}
         />
@@ -535,19 +695,54 @@
       </div>
     </div>
   {/if}
+      </div><!-- /.board-main -->
 
     </div><!-- /.board-col -->
 
-    <!-- Move list / replayer -->
+    <!-- Move list / chat panel -->
     {#if displayedState}
-      <div class="move-list-col">
-        <MoveList
-          moves={gameState?.moves ?? []}
-          activeIndex={replayIndex !== null ? replayIndex - 1 : (gameState?.moves?.length ?? 0) - 1}
-          replayMode={true}
-          onHoverMove={handleHoverMove}
-          onNavigate={navigate}
-        />
+      <div class="move-list-col" style={boardColHeight ? `max-height: ${boardColHeight}px` : ''}>
+        <div class="tab-bar">
+          <button class="tab" class:active={activeTab === 'moves'} onclick={() => switchTab('moves')}>Moves</button>
+          <button class="tab" class:active={activeTab === 'chat'} onclick={() => switchTab('chat')}>
+            Chat
+            {#if unreadChat > 0}<span class="badge">{unreadChat}</span>{/if}
+          </button>
+        </div>
+        {#if activeTab === 'moves'}
+          <MoveList
+            moves={gameState?.moves ?? []}
+            activeIndex={replayIndex !== null ? replayIndex - 1 : (gameState?.moves?.length ?? 0) - 1}
+            replayMode={true}
+            onHoverMove={handleHoverMove}
+            onNavigate={navigate}
+          />
+        {:else}
+          <div class="chat-messages" bind:this={chatEl}>
+            {#each chatMessages as msg}
+              <div class="chat-msg">
+                <span class="chat-sender">{msg.senderName}:</span>
+                <span class="chat-text">{msg.message}</span>
+              </div>
+            {/each}
+            {#if chatMessages.length === 0}
+              <span class="chat-empty">No messages yet</span>
+            {/if}
+          </div>
+          {#if !isSpectator && gameState && !gameState.gameEnded}
+            <div class="chat-input-row">
+              <input
+                class="chat-input"
+                type="text"
+                maxlength="500"
+                placeholder="Message…"
+                bind:value={chatInput}
+                onkeydown={(e) => e.key === 'Enter' && sendChat()}
+              />
+              <button class="chat-send-btn" onclick={sendChat}>Send</button>
+            </div>
+          {/if}
+        {/if}
       </div>
     {/if}
 
@@ -588,6 +783,19 @@
   </div>
 
   </div><!-- /.game-body -->
+
+  <!-- Rematch bar (only for players, after game ends) -->
+  {#if gameState?.gameEnded && !isSpectator}
+    <div class="rematch-bar">
+      {#if opponentRematchRequested && !rematchRequested}
+        <button class="rematch-btn accept" onclick={requestRematch}>Accept Rematch</button>
+      {:else if rematchRequested}
+        <span class="rematch-waiting">Rematch requested — waiting for opponent…</span>
+      {:else}
+        <button class="rematch-btn" onclick={requestRematch}>Request Rematch</button>
+      {/if}
+    </div>
+  {/if}
 
 </div><!-- /.game-layout -->
 </div><!-- /.page -->
@@ -638,6 +846,11 @@
     flex: 1 1 auto;
     min-width: 0;
   }
+  .board-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
   .move-list-col {
     display: flex;
     flex-direction: column;
@@ -645,13 +858,105 @@
     border: 1px solid #2a2a4a;
     border-radius: 6px;
     overflow: hidden;
-    flex: 0 0 220px;
+    flex: 0 0 280px;
   }
+
+  /* ── Tabs ── */
+  .tab-bar {
+    display: flex;
+    border-bottom: 1px solid #2a2a4a;
+    flex-shrink: 0;
+  }
+  .tab {
+    flex: 1;
+    padding: 0.45rem 0.5rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #888;
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+  }
+  .tab:hover { color: #ccc; }
+  .tab.active { color: #fff; border-bottom-color: #7b8cde; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.2em;
+    height: 1.2em;
+    padding: 0 0.25em;
+    border-radius: 999px;
+    background: #d04040;
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  /* ── Chat ── */
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+  }
+  .chat-msg {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+    line-height: 1.4;
+  }
+  .chat-sender {
+    color: #7b8cde;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .chat-text { color: #ddd; word-break: break-word; }
+  .chat-empty { color: #555; font-style: italic; padding: 0.25rem 0; }
+  .chat-input-row {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    border-top: 1px solid #2a2a4a;
+    flex-shrink: 0;
+  }
+  .chat-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.3rem 0.5rem;
+    background: #2d2d4a;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #eee;
+    font-size: 0.85rem;
+  }
+  .chat-input:focus { outline: none; border-color: #7b8cde; }
+  .chat-send-btn {
+    padding: 0.3rem 0.7rem;
+    background: #4a6fa5;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    white-space: nowrap;
+  }
+  .chat-send-btn:hover { background: #5c82c0; }
   @media (max-width: 700px) {
     .game-body { flex-direction: column; flex-wrap: nowrap; }
     .board-col    { order: 1; }
     .player-panel.me { order: 2; width: 100%; flex: none; }
-    .move-list-col { order: 3; flex: none; max-height: 220px; width: 100%; }
+    .move-list-col { order: 3; flex: none; max-height: 260px; width: 100%; }
   }
 
   /* ── Player panels ── */
@@ -750,6 +1055,48 @@
   .resign-cancel  { background: #3a3a3a; color: #aaa; }
   .resign-cancel:hover  { background: #505050; }
 
+  /* ── Bidding help tooltip ── */
+  .bid-help {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  .bid-help-btn {
+    width: 1.35em; height: 1.35em;
+    border-radius: 50%;
+    background: #2d2d4a;
+    border: 1px solid #555;
+    color: #7b8cde;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .bid-help-tip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 270px;
+    background: #1a1a30;
+    border: 1px solid #3a3a5a;
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8rem;
+    color: #aaa;
+    line-height: 1.55;
+    z-index: 100;
+    pointer-events: none;
+    text-align: left;
+  }
+  .bid-help-tip strong { color: #ccc; }
+  .bid-help:hover .bid-help-tip,
+  .bid-help:focus-within .bid-help-tip { display: block; }
+
   /* ── Bidding controls bar ── */
   .bid-controls { justify-content: center; gap: 0.6rem; flex-wrap: wrap; }
   .bid-label { font-size: 0.9rem; color: #ccc; }
@@ -769,4 +1116,30 @@
 
   /* ── Bid check / clock ── */
   .bid-check { font-size: 0.9rem; color: #7cfc00; flex-shrink: 0; }
+
+  /* ── Rematch bar ── */
+  .rematch-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem;
+  }
+  .rematch-btn {
+    padding: 0.45rem 1.4rem;
+    background: #1e2840;
+    border: 1px solid #364870;
+    border-radius: 6px;
+    color: #7a96cc;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .rematch-btn:hover { background: #263252; border-color: #4a6090; color: #90aae0; }
+  .rematch-btn.accept {
+    background: #1a3248;
+    border-color: #36688a;
+    color: #6aaecc;
+  }
+  .rematch-btn.accept:hover { background: #224060; border-color: #4a84aa; color: #80c4e0; }
+  .rematch-waiting { font-size: 0.85rem; color: #aaa; font-style: italic; }
 </style>

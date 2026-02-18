@@ -127,7 +127,13 @@
     padding: 0.4rem 0;
     font-size: 0.88rem;
     font-family: 'Courier New', monospace;
+    scrollbar-width: thin;
+    scrollbar-color: #3a3a6a #1a1a30;
   }
+  .move-list::-webkit-scrollbar { width: 6px; }
+  .move-list::-webkit-scrollbar-track { background: #1a1a30; }
+  .move-list::-webkit-scrollbar-thumb { background: #3a3a6a; border-radius: 3px; }
+  .move-list::-webkit-scrollbar-thumb:hover { background: #5a5a9a; }
 
   .move-row {
     display: flex;

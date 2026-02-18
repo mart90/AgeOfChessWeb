@@ -46,6 +46,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         // Send the current state immediately so the spectator sees the live board
         await Clients.Caller.SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
+
+        if (game.ChatMessages.Count > 0)
+            await Clients.Caller.SendAsync("ChatHistory", game.ChatMessages);
     }
 
     public async Task JoinGame(string playerToken)
@@ -75,14 +78,33 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             return;
         }
 
-        // Associate user ID if the player connected with a valid JWT
+        // Associate user ID and display name if the player connected with a valid JWT
         if (callerUserId.HasValue)
         {
             if (isWhite) game.WhiteUserId = callerUserId.Value;
             else         game.BlackUserId = callerUserId.Value;
+
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var user = await db.Users.FindAsync(callerUserId.Value);
+            if (user != null)
+            {
+                var cat = EloService.GetCategory(game.Settings);
+                int elo = cat switch
+                {
+                    TimeControlCategory.Blitz => user.EloBlitz,
+                    TimeControlCategory.Rapid => user.EloRapid,
+                    _                         => user.EloSlow,
+                };
+                if (isWhite) { game.White.PlayedByStr = user.EffectiveDisplayName; game.WhiteElo = elo; }
+                else         { game.Black.PlayedByStr = user.EffectiveDisplayName; game.BlackElo = elo; }
+            }
         }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, game.GroupName);
+
+        if (game.ChatMessages.Count > 0)
+            await Clients.Caller.SendAsync("ChatHistory", game.ChatMessages);
 
         if (game.WhiteConnected && game.BlackConnected)
         {
@@ -106,10 +128,12 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             }
             else
             {
-                // Player reconnecting — sync their client without disturbing the other player
-                await Clients.Caller.SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
+                // Both players now connected on a resumed/ongoing game — sync the whole group so
+                // a player who reconnected before their opponent (and is stuck at "waiting") also
+                // receives the current state.
+                await Clients.Group(game.GroupName).SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
                 if (game.Bidding != null && !game.Bidding.BothBid)
-                    await Clients.Caller.SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
+                    await Clients.Group(game.GroupName).SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
             }
         }
     }
@@ -124,6 +148,8 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             await Clients.Caller.SendAsync("Error", "Unauthorized.");
             return;
         }
+
+        if (game.Bidding != null && !game.Bidding.BothBid) return;
 
         if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite)
         {
@@ -153,6 +179,8 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             await Clients.Caller.SendAsync("Error", "Unauthorized.");
             return;
         }
+
+        if (game.Bidding != null && !game.Bidding.BothBid) return;
 
         if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite)
         {
@@ -221,6 +249,10 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         if (game.Bidding.BothBid)
         {
+            // Persist post-bidding state for slow games (tokens may have been swapped by ResolveBidding)
+            if (game.IsSlowGame)
+                await PersistBiddingResultAsync(game);
+
             // Let clients display the revealed bids for 2 seconds
             await Task.Delay(2000);
 
@@ -242,6 +274,27 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         game.ForceEnd(game.IsWhitePlayer(playerToken) ? "b+r" : "w+r");
 
         await BroadcastState(game);
+    }
+
+    public async Task SendChat(string playerToken, string message)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null) return;
+
+        if (!IsAuthorizedPlayer(game, playerToken)) return;
+
+        message = message.Trim();
+        if (string.IsNullOrEmpty(message) || message.Length > 500) return;
+
+        bool isWhite = game.IsWhitePlayer(playerToken);
+        string senderName = isWhite ? game.White.PlayedByStr : game.Black.PlayedByStr;
+        var msg = new ChatMessageDto(senderName, message, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        if (game.ChatMessages.Count >= 200)
+            game.ChatMessages.RemoveAt(0);
+        game.ChatMessages.Add(msg);
+
+        await Clients.Group(game.GroupName).SendAsync("ChatMessage", msg);
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
@@ -331,8 +384,124 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         if (game.GameEnded)
         {
             await PersistResult(game);
-            sessions.Remove(game.SessionId);
+            // Keep the game in sessions briefly so players can request a rematch.
+            // Fire-and-forget: remove after 10 minutes regardless of whether a rematch is created.
+            // RequestRematch also calls sessions.Remove when a rematch starts; the double-remove is harmless.
+            _ = Task.Delay(TimeSpan.FromMinutes(10))
+                    .ContinueWith(_ => sessions.Remove(game.SessionId));
         }
+        else if (game.IsSlowGame)
+        {
+            await PersistSlowGameProgressAsync(game);
+        }
+    }
+
+    /// <summary>
+    /// Called by a player after the game ends to request a rematch.
+    /// When both players request, a new game is created with the same settings on a fresh map.
+    /// If bidding is disabled, colors are swapped for the rematch.
+    /// </summary>
+    public async Task RequestRematch(string playerToken)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null || !game.GameEnded) return;
+        if (!IsAuthorizedPlayer(game, playerToken)) return;
+
+        bool isWhite = game.IsWhitePlayer(playerToken);
+        bool shouldCreate = game.RequestRematch(isWhite);
+
+        // Notify both players that someone requested a rematch
+        await Clients.Group(game.GroupName).SendAsync("RematchRequested", isWhite);
+
+        if (!shouldCreate) return;
+
+        // Build new settings: same config, fresh map (no seed)
+        var rematchSettings = new GameSettings
+        {
+            BoardSize          = game.Settings.BoardSize,
+            TimeControlEnabled = game.Settings.TimeControlEnabled,
+            StartTimeMinutes   = game.Settings.StartTimeMinutes,
+            TimeIncrementSeconds = game.Settings.TimeIncrementSeconds,
+            BiddingEnabled     = game.Settings.BiddingEnabled,
+            MapMode            = game.Settings.MapMode,
+            MapSeed            = null,
+        };
+
+        // Without bidding: swap colors. With bidding: same initial assignment (bidding will resolve).
+        GameCreationService.PlayerInfo whiteInfo, blackInfo;
+        if (!rematchSettings.BiddingEnabled)
+        {
+            whiteInfo = new GameCreationService.PlayerInfo(game.BlackUserId, game.BlackElo, game.Black.PlayedByStr);
+            blackInfo = new GameCreationService.PlayerInfo(game.WhiteUserId, game.WhiteElo, game.White.PlayedByStr);
+        }
+        else
+        {
+            whiteInfo = new GameCreationService.PlayerInfo(game.WhiteUserId, game.WhiteElo, game.White.PlayedByStr);
+            blackInfo = new GameCreationService.PlayerInfo(game.BlackUserId, game.BlackElo, game.Black.PlayedByStr);
+        }
+
+        using var scope = scopeFactory.CreateScope();
+        var creationService = scope.ServiceProvider.GetRequiredService<GameCreationService>();
+        var (_, newGame) = await creationService.CreateAsync(rematchSettings, whiteInfo, blackInfo);
+
+        // Without bidding: old White → new Black, old Black → new White
+        // With bidding:    old White → new White, old Black → new Black (colors TBD by bid)
+        bool biddingEnabled = rematchSettings.BiddingEnabled;
+        string oldWhiteToken = biddingEnabled ? newGame.WhitePlayerToken : newGame.BlackPlayerToken;
+        string oldBlackToken = biddingEnabled ? newGame.BlackPlayerToken : newGame.WhitePlayerToken;
+        bool   oldWhiteIsNewWhite = biddingEnabled;   // with bidding, initial; may change after bid
+        bool   oldBlackIsNewWhite = !biddingEnabled;  // without bidding: old Black becomes new White
+
+        if (game.WhiteConnectionId != null)
+            await Clients.Client(game.WhiteConnectionId)
+                .SendAsync("RematchReady", newGame.SessionId, oldWhiteToken, oldWhiteIsNewWhite);
+
+        if (game.BlackConnectionId != null)
+            await Clients.Client(game.BlackConnectionId)
+                .SendAsync("RematchReady", newGame.SessionId, oldBlackToken, oldBlackIsNewWhite);
+
+        // Remove the old game now that the rematch has been created
+        sessions.Remove(game.SessionId);
+    }
+
+    private async Task PersistSlowGameProgressAsync(ServerGame game)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var session = await db.GameSessions.FindAsync(game.SessionId);
+        if (session == null) return;
+
+        session.MovesJson = JsonSerializer.Serialize(game.MoveList.Select(m => m.ToNotation()));
+        session.MoveCount = game.MoveList.Count;
+        if (game.TimeControlEnabled)
+        {
+            session.WhiteTimeMsRemaining = game.White.TimeMiliseconds;
+            session.BlackTimeMsRemaining = game.Black.TimeMiliseconds;
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    private async Task PersistBiddingResultAsync(ServerGame game)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var session = await db.GameSessions.FindAsync(game.SessionId);
+        if (session == null) return;
+
+        // Tokens and user IDs may have been swapped by ResolveBidding
+        session.WhitePlayerToken = game.WhitePlayerToken;
+        session.BlackPlayerToken = game.BlackPlayerToken;
+        session.WhiteUserId      = game.WhiteUserId;
+        session.BlackUserId      = game.BlackUserId;
+        session.BlackStartingGold = game.Black.Gold;
+        if (game.TimeControlEnabled)
+        {
+            session.WhiteTimeMsRemaining = game.White.TimeMiliseconds;
+            session.BlackTimeMsRemaining = game.Black.TimeMiliseconds;
+        }
+
+        await db.SaveChangesAsync();
     }
 
     private async Task PersistResult(ServerGame game)
@@ -345,6 +514,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         session.Result    = ParseResult(game.Result);
         session.MovesJson = JsonSerializer.Serialize(game.MoveList.Select(m => m.ToNotation()));
+        session.MoveCount = game.MoveList.Count;
         session.EndedAt   = DateTime.UtcNow;
 
         // Update Elo for both players if they were both authenticated
@@ -369,8 +539,11 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         var blackUser = await db.Users.FindAsync(game.BlackUserId.Value);
         if (whiteUser == null || blackUser == null) return;
 
-        var settings = JsonSerializer.Deserialize<GameSettings>(session.SettingsJson)!;
-        var category = EloService.GetCategory(settings);
+        var category = EloService.GetCategory(new GameSettings
+        {
+            TimeControlEnabled = session.TimeControlEnabled,
+            StartTimeMinutes   = session.StartTimeMinutes,
+        });
 
         var (wElo, bElo) = category switch
         {

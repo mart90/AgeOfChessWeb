@@ -5,9 +5,13 @@
 
   const { username } = $props();
 
-  let profile  = $state(null);
-  let loading  = $state(true);
-  let error    = $state('');
+  let profile    = $state(null);
+  let loading    = $state(true);
+  let error      = $state('');
+  let totalGames = $state(0);
+  let startIndex = $state(0);
+
+  const PAGE_SIZE = 50;
 
   // ── Tabs & sorting ───────────────────────────────────────────────────────
 
@@ -17,33 +21,36 @@
 
   const TABS = ['all', 'blitz', 'rapid', 'slow'];
 
-  const filteredGames = $derived(
-    !profile ? [] :
-    activeTab === 'all' ? profile.games : profile.games.filter(g => g.category === activeTab)
-  );
-
-  const sortedGames = $derived([...filteredGames].sort((a, b) => {
-    const d = sortDir === 'asc' ? 1 : -1;
-    switch (sortCol) {
-      case 'endedAt':   return d * (new Date(a.endedAt) - new Date(b.endedAt));
-      case 'opponent':  return d * a.opponentName.localeCompare(b.opponentName);
-      case 'result':    return d * a.result.localeCompare(b.result);
-      case 'eloDelta':  return d * ((a.eloDelta ?? -9999) - (b.eloDelta ?? -9999));
-      case 'timeControl': return d * (tcLabel(a).localeCompare(tcLabel(b)));
-      case 'moveCount': return d * (a.moveCount - b.moveCount);
-      case 'boardSize': return d * (a.boardSize - b.boardSize);
-      default:          return 0;
-    }
-  }));
+  const displayGames = $derived(profile?.games ?? []);
 
   function sortBy(col) {
     if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
     else { sortCol = col; sortDir = col === 'endedAt' ? 'desc' : 'asc'; }
+    fetchGames(0);
   }
 
   function sortArrow(col) {
     if (sortCol !== col) return '';
     return sortDir === 'asc' ? ' ▲' : ' ▼';
+  }
+
+  async function fetchGames(si) {
+    startIndex = si;
+    loading = true;
+    error = '';
+    try {
+      const data = await getProfile(username, si, sortCol, sortDir, activeTab);
+      if (si === 0) {
+        profile = data;
+      } else {
+        profile = { ...profile, games: data.games };
+      }
+      totalGames = data.totalGames;
+    } catch (e) {
+      error = e.message ?? String(e);
+    } finally {
+      loading = false;
+    }
   }
 
   // ── Rating graph ─────────────────────────────────────────────────────────
@@ -120,15 +127,7 @@
     return `${g.startTimeMinutes}${inc}`;
   }
 
-  onMount(async () => {
-    try {
-      profile = await getProfile(username);
-    } catch (e) {
-      error = e.message ?? String(e);
-    } finally {
-      loading = false;
-    }
-  });
+  onMount(() => fetchGames(0));
 </script>
 
 <main>
@@ -191,7 +190,7 @@
     <!-- Tabs -->
     <div class="tabs">
       {#each TABS as t}
-        <button class="tab" class:active={activeTab === t} onclick={() => activeTab = t}>
+        <button class="tab" class:active={activeTab === t} onclick={() => { activeTab = t; fetchGames(0); }}>
           {t.charAt(0).toUpperCase() + t.slice(1)}
           {#if t !== 'all'}
             <span class="tab-count">({profile.stats[t].gamesPlayed})</span>
@@ -201,7 +200,7 @@
     </div>
 
     <!-- History table -->
-    {#if sortedGames.length === 0}
+    {#if displayGames.length === 0}
       <p class="muted no-games">No games in this category yet.</p>
     {:else}
       <div class="table-wrap">
@@ -218,7 +217,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each sortedGames as g}
+            {#each displayGames as g}
               <tr class="game-row" class:win={g.result === 'win'} class:loss={g.result === 'loss'}
                   onclick={() => navigate(`/game/${g.gameId}`)}>
                 <td class="col-date">{fmtDate(g.endedAt)}</td>
@@ -242,12 +241,23 @@
                 </td>
                 <td class="col-tc">{tcLabel(g)}</td>
                 <td class="col-moves">{g.moveCount}</td>
-                <td class="col-board">{g.boardSize}×{g.boardSize}</td>
+                <td class="col-board">{g.boardSize}×{g.boardSize}{g.mapMode === 'r' ? ' 🎲' : ''}</td>
               </tr>
             {/each}
           </tbody>
         </table>
       </div>
+      {#if totalGames > PAGE_SIZE}
+        <div class="pagination">
+          <button class="page-btn" disabled={startIndex === 0}
+                  onclick={() => fetchGames(startIndex - PAGE_SIZE)}>← Prev</button>
+          <span class="page-info">
+            {startIndex + 1}–{Math.min(startIndex + PAGE_SIZE, totalGames)} of {totalGames}
+          </span>
+          <button class="page-btn" disabled={startIndex + PAGE_SIZE >= totalGames}
+                  onclick={() => fetchGames(startIndex + PAGE_SIZE)}>Next →</button>
+        </div>
+      {/if}
     {/if}
 
   {/if}
@@ -416,6 +426,28 @@
   .col-tc    { color: #aaa; font-variant-numeric: tabular-nums; }
   .col-moves { color: #aaa; }
   .col-board { color: #aaa; }
+
+  /* ── Pagination ── */
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.75rem 0 0.25rem;
+    width: 100%;
+  }
+  .page-btn {
+    background: #22223a;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #aaa;
+    padding: 0.35rem 0.85rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .page-btn:hover:not(:disabled) { background: #2a2a4a; color: #eee; }
+  .page-btn:disabled { opacity: 0.35; cursor: default; }
+  .page-info { font-size: 0.82rem; color: #666; }
 
   @media (max-width: 600px) {
     .stats-row { flex-direction: column; }

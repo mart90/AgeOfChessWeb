@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { createGame, getMyGames, getGameToken } from './lib/api.js';
+  import { createGame, getMyGames, getGameToken, cancelChallenge, getOpenLobbies, joinLobby } from './lib/api.js';
   import { navigate }   from './lib/navigate.js';
   import { startMatchmakingHub, stopMatchmakingHub } from './lib/matchmakingHub.js';
   import { authState } from './lib/auth.svelte.js';
@@ -40,6 +40,8 @@
   let boardSize     = $state(_lb.boardSize ?? 10);
   let boardSizeMin  = $state(_ap.boardSizeMin ?? 8);
   let boardSizeMax  = $state(_ap.boardSizeMax ?? 12);
+  let mapMode       = $state(_lb.mapMode ?? 'm');      // 'm' | 'r'
+  let mapModePref   = $state(_ap.mapModePref ?? 'm');  // 'm' | 'r' | 'any'
 
   const trackGradient = $derived.by(() => {
     const pct = (v) => ((v - 6) / 10) * 100;
@@ -49,15 +51,33 @@
   // ── Create lobby ─────────────────────────────────────────────────────────
 
   let biddingEnabled = $state(_lb.biddingEnabled ?? false);
+  let isPrivate      = $state(_lb.isPrivate ?? false);
+  let mapSeed        = $state('');
   let creating       = $state(false);
   let lobbyError     = $state('');
+
+  const seedError = $derived.by(() => {
+    const s = mapSeed.trim();
+    if (!s) return null;
+    const m = s.match(/^([mr])_(\d+)x(\d+)_([0-9kmrft]+)$/);
+    if (!m) return 'Invalid seed format';
+    const w = parseInt(m[2]), h = parseInt(m[3]);
+    if (w < 6 || w > 16 || h < 6 || h > 16) return 'Board size in seed out of range (6–16)';
+    if (w % 2 !== 0 || h % 2 !== 0) return 'Board dimensions in seed must be even';
+    if (!s.includes('k')) return 'Seed must contain a king placement (k)';
+    return null;
+  });
+
+  const seedActive = $derived(mapSeed.trim() !== '');
+  const seedValid  = $derived(!seedActive || seedError === null);
 
   async function handleCreate() {
     creating = true;
     lobbyError = '';
     try {
       const modeSettings = MODES[selectedMode].settings;
-      const settings = { ...modeSettings, boardSize, biddingEnabled };
+      const trimmedSeed = mapSeed.trim() || null;
+      const settings = { ...modeSettings, boardSize, biddingEnabled, mapMode, mapSeed: trimmedSeed, isPrivate: authState.token ? isPrivate : false };
       const { gameId, whitePlayerToken, inviteUrl: serverInviteUrl } = await createGame(settings);
       const serverUrl = new URL(serverInviteUrl);
       const inviteUrl = window.location.origin + serverUrl.pathname + serverUrl.search;
@@ -86,10 +106,10 @@
   let biddingPref   = $state(_ap.biddingPref ?? 'Any');
 
   $effect(() => {
-    localStorage.setItem('autopair_settings', JSON.stringify({ autoTimeSel, biddingPref, boardSizeMin, boardSizeMax }));
+    localStorage.setItem('autopair_settings', JSON.stringify({ autoTimeSel, biddingPref, boardSizeMin, boardSizeMax, mapModePref }));
   });
   $effect(() => {
-    localStorage.setItem('lobby_settings', JSON.stringify({ selectedMode, boardSize, biddingEnabled }));
+    localStorage.setItem('lobby_settings', JSON.stringify({ selectedMode, boardSize, biddingEnabled, mapMode, isPrivate }));
   });
   let queueing      = $state(false);
   let queueCount    = $state(0);
@@ -116,7 +136,7 @@
       await hub.invoke('JoinQueue',
         boardSizeMin, boardSizeMax,
         m.timeControlEnabled, m.startTimeMinutes, m.timeIncrementSeconds,
-        timePref, biddingPref,
+        timePref, biddingPref, mapModePref,
       );
     } catch (e) {
       queueError = String(e.message ?? e);
@@ -135,15 +155,49 @@
     if (queueing) cancelQueue();
   });
 
-  // ── Ongoing games ─────────────────────────────────────────────────────────
+  // ── Ongoing games / open challenges ──────────────────────────────────────
 
-  let myGames = $state([]);
+  let myGames     = $state([]);
+  let openLobbies = $state([]);
+
+  const openChallenges = $derived(myGames.filter(g => g.waitingForOpponent));
+  const ongoingGames   = $derived(myGames.filter(g => !g.waitingForOpponent));
 
   onMount(async () => {
     if (authState.token) {
       try { myGames = await getMyGames(); } catch { /* ignore */ }
+      try { openLobbies = await getOpenLobbies(); } catch { /* ignore */ }
     }
   });
+
+  async function handleJoinLobby(lobby) {
+    try {
+      const { gameId, blackPlayerToken } = await joinLobby(lobby.id);
+      localStorage.setItem(`token_${gameId}`, blackPlayerToken);
+      localStorage.setItem(`color_${gameId}`, 'black');
+      navigate(`/game/${gameId}`);
+    } catch (e) {
+      // Best-effort — lobby may have been taken; refresh the list
+      try { openLobbies = await getOpenLobbies(); } catch { /* ignore */ }
+    }
+  }
+
+  function lobbyTimeLabel(g) {
+    if (!g.timeControlEnabled) return 'No timer';
+    const inc = g.timeIncrementSeconds > 0 ? `+${g.timeIncrementSeconds}` : '+0';
+    return `${g.startTimeMinutes}${inc}`;
+  }
+
+  async function handleCancelChallenge(g, e) {
+    e.stopPropagation();
+    try {
+      await cancelChallenge(g.id);
+      localStorage.removeItem(`token_${g.id}`);
+      localStorage.removeItem(`color_${g.id}`);
+      localStorage.removeItem(`inviteUrl_${g.id}`);
+      myGames = myGames.filter(x => x.id !== g.id);
+    } catch { /* ignore — may already be gone */ }
+  }
 
   function timeLabel(g) {
     if (!g.timeControlEnabled) return 'No timer';
@@ -166,12 +220,29 @@
 </script>
 
 <main>
-  <!-- Ongoing games (logged-in users only) -->
-  {#if myGames.length > 0}
+  <!-- Open challenges (waiting for opponent) -->
+  {#if openChallenges.length > 0}
+    <div class="ongoing-section">
+      <div class="ongoing-label">Open challenges</div>
+      <div class="ongoing-list">
+        {#each openChallenges as g}
+          <div class="ongoing-card challenge-card" onclick={() => openGame(g)} role="button" tabindex="0">
+            <span class="ongoing-tc">{timeLabel(g)}</span>
+            <span class="ongoing-right">
+              <button class="cancel-challenge-btn" onclick={(e) => handleCancelChallenge(g, e)}>Cancel</button>
+            </span>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  <!-- Ongoing games (both players connected) -->
+  {#if ongoingGames.length > 0}
     <div class="ongoing-section">
       <div class="ongoing-label">Ongoing games</div>
       <div class="ongoing-list">
-        {#each myGames as g}
+        {#each ongoingGames as g}
           <button class="ongoing-card" onclick={() => openGame(g)}>
             <span class="ongoing-opp">vs {g.opponentName}</span>
             <span class="ongoing-right">
@@ -190,7 +261,7 @@
       class="tab"
       class:active={tab === 'autopair'}
       onclick={() => { if (queueing) cancelQueue(); tab = 'autopair'; }}
-    >Auto pair</button>
+    >Automatch</button>
     <button
       class="tab"
       class:active={tab === 'lobby'}
@@ -234,7 +305,7 @@
     {#if tab === 'lobby'}
       <div class="option-row">
         <label for="board-size">Board size: <strong>{boardSize}×{boardSize}</strong></label>
-        <input id="board-size" type="range" min="6" max="16" step="2" bind:value={boardSize} />
+        <input id="board-size" type="range" min="6" max="16" step="2" bind:value={boardSize} disabled={seedActive && seedValid} />
       </div>
     {:else}
       <div class="option-row">
@@ -260,6 +331,12 @@
           <input type="checkbox" bind:checked={biddingEnabled} />
           Bid for colors
         </label>
+        {#if authState.token}
+          <label class="checkbox-label">
+            <input type="checkbox" bind:checked={isPrivate} />
+            Private
+          </label>
+        {/if}
       </div>
     {:else}
       <div class="option-row">
@@ -272,10 +349,44 @@
       </div>
     {/if}
 
+    <!-- Map layout -->
+    {#if tab === 'lobby'}
+      <div class="option-row">
+        <label for="map-mode">Map layout</label>
+        <select id="map-mode" bind:value={mapMode} disabled={seedActive && seedValid}>
+          <option value="m">Mirrored</option>
+          <option value="r">Full random</option>
+        </select>
+      </div>
+      <div class="option-row seed-row">
+        <label for="map-seed">Map seed</label>
+        <input
+          id="map-seed"
+          type="text"
+          bind:value={mapSeed}
+          placeholder="Paste a seed to replay a map…"
+          spellcheck="false"
+          autocomplete="off"
+          class:seed-invalid={seedActive && seedError}
+          class:seed-ok={seedActive && !seedError}
+        />
+      </div>
+      {#if seedError}<p class="error seed-error">{seedError}</p>{/if}
+    {:else}
+      <div class="option-row">
+        <label for="map-mode-pref">Map layout</label>
+        <select id="map-mode-pref" bind:value={mapModePref}>
+          <option value="m">Mirrored</option>
+          <option value="r">Full random</option>
+          <option value="any">Any</option>
+        </select>
+      </div>
+    {/if}
+
     <!-- Tab-specific bottom section -->
     {#if tab === 'lobby'}
       {#if lobbyError}<p class="error">{lobbyError}</p>{/if}
-      <button class="action-btn" onclick={handleCreate} disabled={creating}>
+      <button class="action-btn" onclick={handleCreate} disabled={creating || !seedValid}>
         {creating ? 'Creating…' : 'Create game'}
       </button>
 
@@ -302,6 +413,35 @@
       {/if}
     {/if}
   </div>
+
+  <!-- Open lobbies (for logged-in users) -->
+  {#if authState.token && openLobbies.length > 0}
+    <div class="ongoing-section open-lobbies-section">
+      <div class="ongoing-label">Open lobbies</div>
+      <div class="ongoing-list">
+        {#each openLobbies as lobby}
+          <div class="ongoing-card lobby-row">
+            <span class="ongoing-opp">
+              {lobby.creatorName}{lobby.creatorElo != null ? ` (${lobby.creatorElo})` : ''}
+            </span>
+            <span class="lobby-meta">
+              <span class="ongoing-tc">{lobbyTimeLabel(lobby)}</span>
+              <span class="ongoing-tc">{lobby.boardSize}×{lobby.boardSize}</span>
+              {#if lobby.isFullRandom}<span class="map-icon" title="Full random">🎲</span>{/if}
+              {#if lobby.mapSeed}
+                <button
+                  class="seed-copy-btn"
+                  title="Copy map seed"
+                  onclick={() => navigator.clipboard.writeText(lobby.mapSeed)}
+                >#</button>
+              {/if}
+            </span>
+            <button class="join-lobby-btn" onclick={() => handleJoinLobby(lobby)}>Join</button>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -500,6 +640,24 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .seed-row input[type="text"] {
+    flex: 1;
+    background: #2d2d4a;
+    border: 1px solid #3a3a5a;
+    border-radius: 5px;
+    color: #eee;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.88rem;
+    font-family: monospace;
+    min-width: 0;
+  }
+  .seed-row input.seed-invalid { border-color: #c05050; }
+  .seed-row input.seed-ok      { border-color: #4a9a4a; }
+  .seed-error { margin-top: -0.4rem; }
+
+  input[type="range"]:disabled { opacity: 0.35; cursor: default; }
+  select:disabled { opacity: 0.35; cursor: default; }
+
   .error { color: #e07070; font-size: 0.85rem; margin: 0; }
 
   .login-prompt {
@@ -565,5 +723,56 @@
     border: 1px solid rgba(124, 252, 0, 0.3);
     border-radius: 4px;
     padding: 0.1rem 0.45rem;
+  }
+  .cancel-challenge-btn {
+    font-size: 0.78rem;
+    color: #e07070;
+    background: rgba(224, 112, 112, 0.1);
+    border: 1px solid rgba(224, 112, 112, 0.3);
+    border-radius: 4px;
+    padding: 0.1rem 0.45rem;
+  }
+  .cancel-challenge-btn:hover {
+    background: rgba(224, 112, 112, 0.22);
+  }
+  .open-lobbies-section {
+    margin-top: 1.25rem;
+  }
+  .lobby-row {
+    justify-content: space-between;
+  }
+  .lobby-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    justify-content: flex-end;
+    margin-right: 0.75rem;
+  }
+  .map-icon {
+    font-size: 0.9rem;
+  }
+  .seed-copy-btn {
+    font-size: 0.75rem;
+    color: #666;
+    background: none;
+    border: 1px solid #3a3a5a;
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+    cursor: pointer;
+    font-family: monospace;
+  }
+  .seed-copy-btn:hover { color: #aaa; border-color: #5a5a7a; }
+  .join-lobby-btn {
+    font-size: 0.78rem;
+    color: #7b8cde;
+    background: rgba(123, 140, 222, 0.1);
+    border: 1px solid rgba(123, 140, 222, 0.35);
+    border-radius: 4px;
+    padding: 0.1rem 0.55rem;
+    flex-shrink: 0;
+  }
+  .join-lobby-btn:hover {
+    background: rgba(123, 140, 222, 0.22);
   }
 </style>

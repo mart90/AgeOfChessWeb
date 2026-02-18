@@ -2,6 +2,7 @@
   import { settings, persistSettings } from './lib/settings.svelte.js';
   import { authState, clearAuth }      from './lib/auth.svelte.js';
   import { navigate }                  from './lib/navigate.js';
+  import { currentGame }               from './lib/currentGame.svelte.js';
 
   let settingsOpen  = $state(false);
   let menuOpen      = $state(false);
@@ -27,6 +28,16 @@
   function toggleCoords() {
     settings.showCoordinates = !settings.showCoordinates;
     persistSettings();
+  }
+
+  let seedCopied = $state(false);
+  let _seedCopiedTimer = null;
+  function copyMapSeed() {
+    if (!currentGame.mapSeed) return;
+    navigator.clipboard.writeText(currentGame.mapSeed).catch(() => {});
+    seedCopied = true;
+    clearTimeout(_seedCopiedTimer);
+    _seedCopiedTimer = setTimeout(() => { seedCopied = false; }, 2000);
   }
 
   function handleLogout() {
@@ -56,16 +67,23 @@
       <div class="mobile-menu">
         <button class="mobile-menu-item" onclick={() => navTo('/')}>Play</button>
         <button class="mobile-menu-item" onclick={() => navTo('/watch')}>Watch</button>
+        <button class="mobile-menu-item" onclick={() => navTo('/sandbox')}>Sandbox</button>
+        <button class="mobile-menu-item" onclick={() => navTo('/tutorial')}>Tutorial</button>
       </div>
     {/if}
   </div>
 
-  <button class="logo-btn" onclick={() => navigate('/')}>Age of Chess</button>
+  <button class="logo-btn" onclick={() => navigate('/')}>
+    <img src="/assets/other/logo.png" alt="" class="logo-img" />
+    <span class="logo-text">Goldrush Gambit</span>
+  </button>
 
   <!-- Desktop nav links: hidden on mobile -->
   <div class="nav-center">
     <button class="nav-link" onclick={() => navigate('/')}>Play</button>
     <button class="nav-link" onclick={() => navigate('/watch')}>Watch</button>
+    <button class="nav-link" onclick={() => navigate('/sandbox')}>Sandbox</button>
+    <button class="nav-link" onclick={() => navigate('/tutorial')}>Tutorial</button>
   </div>
 
   <div class="nav-right">
@@ -77,6 +95,13 @@
             <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
             Show coordinates
           </label>
+          <button
+            class="dropdown-btn dropdown-item"
+            disabled={!currentGame.mapSeed}
+            onclick={copyMapSeed}
+          >
+            {seedCopied ? 'Copied!' : 'Copy map seed'}
+          </button>
         </div>
       {/if}
     </div>
@@ -184,6 +209,9 @@
   .nav-link:hover { background: #2a2a4a; color: #eee; }
 
   .logo-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
     background: none;
     border: none;
     color: #7b8cde;
@@ -195,6 +223,12 @@
     white-space: nowrap;
   }
   .logo-btn:hover { color: #a0b0ff; }
+  .logo-img {
+    width: 28px;
+    height: 28px;
+    image-rendering: pixelated;
+    flex-shrink: 0;
+  }
 
   .nav-right {
     display: flex;
@@ -295,6 +329,9 @@
   .logout-item { color: #e07070 !important; }
   .logout-item:hover { background: #2a1a1a !important; }
 
+  .dropdown-btn:disabled { opacity: 0.4; cursor: default; }
+  .dropdown-btn:disabled:hover { background: none; }
+
   .nav-btn {
     padding: 0.3rem 0.8rem;
     background: #2d2d4a;
@@ -309,5 +346,6 @@
   @media (max-width: 640px) {
     .nav-left    { display: flex; }
     .nav-center  { display: none; }
+    .logo-text   { display: none; }
   }
 </style>

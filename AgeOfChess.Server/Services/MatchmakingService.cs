@@ -17,6 +17,7 @@ public record MatchmakingEntry(
     int BoardSizeMin,
     int BoardSizeMax,
     BiddingPreference BiddingPreference,
+    string MapModePref,             // "m" | "r" | "any"
     DateTime QueuedAt);
 
 /// <summary>
@@ -140,6 +141,9 @@ public class MatchmakingService : IDisposable
         if (a.BiddingPreference == BiddingPreference.Enabled  && b.BiddingPreference == BiddingPreference.Disabled) return false;
         if (a.BiddingPreference == BiddingPreference.Disabled && b.BiddingPreference == BiddingPreference.Enabled)  return false;
 
+        // Map mode: "m"+"r" is incompatible; "any" matches either
+        if (a.MapModePref != "any" && b.MapModePref != "any" && a.MapModePref != b.MapModePref) return false;
+
         // Elo range: ±200 if both waited < 30s; ±500 if either waited ≥ 30s
         var now              = DateTime.UtcNow;
         bool eitherLongWait = (now - a.QueuedAt).TotalSeconds >= 30 ||
@@ -180,6 +184,7 @@ public class MatchmakingService : IDisposable
             StartTimeMinutes     = tcStart,
             TimeIncrementSeconds = tcInc,
             BiddingEnabled       = biddingEnabled,
+            MapMode              = ResolveMapMode(white.MapModePref, black.MapModePref),
         };
 
         using var scope = _scopeFactory.CreateScope();
@@ -233,6 +238,17 @@ public class MatchmakingService : IDisposable
         double average = (minA + maxA + minB + maxB) / 4.0;
         int rounded = (int)(Math.Round(average / 2.0, MidpointRounding.ToEven) * 2);
         return Math.Clamp(rounded, 6, 20);
+    }
+
+    /// <summary>
+    /// "any"+"any" → "m" (default mirrored); "any"+specific → specific; same+same → same.
+    /// </summary>
+    private static string ResolveMapMode(string a, string b)
+    {
+        if (a == b) return a == "any" ? "m" : a;
+        if (a == "any") return b;
+        if (b == "any") return a;
+        return "m"; // fallback
     }
 
     private static async Task<string?> GetDisplayNameAsync(AppDbContext db, int? userId)

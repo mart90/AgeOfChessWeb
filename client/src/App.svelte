@@ -8,6 +8,8 @@
   import SettingsPage    from './SettingsPage.svelte';
   import WatchPage       from './WatchPage.svelte';
   import ProfilePage     from './ProfilePage.svelte';
+  import SandboxPage     from './SandboxPage.svelte';
+  import TutorialPage    from './TutorialPage.svelte';
   import { authState, clearAuth } from './lib/auth.svelte.js';
   import { getMe }       from './lib/api.js';
 
@@ -19,6 +21,17 @@
   const gameId       = $derived(gameMatch ? parseInt(gameMatch[1]) : null);
   const profileMatch = $derived(path.match(/^\/profile\/([^/]+)/));
   const profileUser  = $derived(profileMatch ? decodeURIComponent(profileMatch[1]) : null);
+
+  const NAME = 'Goldrush Gambit';
+
+  $effect(() => {
+    if (gameId !== null) return; // GamePage sets its own title
+    if (path === '/')          document.title = `${NAME} - Play`;
+    else if (path === '/watch')    document.title = `${NAME} - Watch`;
+    else if (path === '/sandbox')  document.title = `${NAME} - Sandbox`;
+    else if (path === '/tutorial') document.title = `${NAME} - Tutorial`;
+    else                           document.title = NAME;
+  });
 
   // Restore user session from stored JWT on first load
   onMount(async () => {
@@ -37,7 +50,9 @@
 <NavBar />
 
 {#if gameId !== null}
-  <GamePage {gameId} />
+  {#key gameId}
+    <GamePage {gameId} />
+  {/key}
 {:else if profileUser !== null}
   {#key profileUser}
     <ProfilePage username={profileUser} />
@@ -50,6 +65,10 @@
   <SettingsPage />
 {:else if path === '/watch'}
   <WatchPage />
+{:else if path === '/sandbox'}
+  <SandboxPage />
+{:else if path === '/tutorial'}
+  <TutorialPage />
 {:else}
   <HomePage />
 {/if}

@@ -40,11 +40,23 @@ namespace AgeOfChess.Server.Migrations
                         .IsRequired()
                         .HasColumnType("varchar(255)");
 
+                    b.Property<int?>("BlackStartingGold")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("BlackTimeMsRemaining")
+                        .HasColumnType("int");
+
                     b.Property<int?>("BlackUserId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BoardSize")
                         .HasColumnType("int");
 
                     b.Property<DateTime?>("EndedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("IsPrivate")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<int?>("LobbyId")
                         .HasColumnType("int");
@@ -52,6 +64,9 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<string>("MapSeed")
                         .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<int>("MoveCount")
+                        .HasColumnType("int");
 
                     b.Property<string>("MovesJson")
                         .IsRequired()
@@ -64,8 +79,17 @@ namespace AgeOfChess.Server.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<int>("StartTimeMinutes")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("TimeControlEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("TimeIncrementSeconds")
+                        .HasColumnType("int");
 
                     b.Property<int?>("WhiteEloAtGame")
                         .HasColumnType("int");
@@ -76,6 +100,9 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<string>("WhitePlayerToken")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
+
+                    b.Property<int?>("WhiteTimeMsRemaining")
+                        .HasColumnType("int");
 
                     b.Property<int?>("WhiteUserId")
                         .HasColumnType("int");

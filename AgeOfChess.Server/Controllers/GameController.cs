@@ -1,7 +1,9 @@
 using System.Security.Claims;
+using System.Text.Json;
 using AgeOfChess.Server.Data;
 using AgeOfChess.Server.Data.Models;
 using AgeOfChess.Server.GameLogic;
+using AgeOfChess.Server.GameLogic.PlaceableObjects.Pieces;
 using AgeOfChess.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -31,7 +33,9 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         int StartTimeMinutes = 10,
         int TimeIncrementSeconds = 5,
         bool BiddingEnabled = false,
-        string? MapSeed = null
+        string? MapSeed = null,
+        string MapMode = "m",
+        bool IsPrivate = false
     );
 
     // POST /api/game
@@ -46,6 +50,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             TimeIncrementSeconds = req.TimeIncrementSeconds,
             BiddingEnabled       = req.BiddingEnabled,
             MapSeed              = req.MapSeed,
+            MapMode              = req.MapMode,
         };
 
         // Resolve creator info if authenticated
@@ -65,10 +70,10 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
                     _                         => creator.EloSlow,
                 };
             }
-            white = new(creatorUserId, elo);
+            white = new(creatorUserId, elo, creator.EffectiveDisplayName);
         }
 
-        var (session, _) = await gameCreation.CreateAsync(settings, white);
+        var (session, _) = await gameCreation.CreateAsync(settings, white, isPrivate: req.IsPrivate);
 
         var baseUrl = $"{Request.Scheme}://{Request.Host}";
         return Ok(new
@@ -163,7 +168,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         if (!int.TryParse(userIdStr, out var userId)) return Unauthorized();
 
         var list = sessions.GetAll()
-            .Where(g => g.WhiteUserId == userId || g.BlackUserId == userId)
+            .Where(g => !g.GameEnded && (g.WhiteUserId == userId || g.BlackUserId == userId))
             .Select(g =>
             {
                 bool isWhite = g.WhiteUserId == userId;
@@ -175,6 +180,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
                     isWhite,
                     opponentName         = opp.PlayedByStr,
                     isMyTurn             = me.IsActive,
+                    waitingForOpponent   = !g.HasGameStarted,
                     timeControlEnabled   = g.TimeControlEnabled,
                     startTimeMinutes     = g.StartTimeMinutes,
                     timeIncrementSeconds = g.TimeIncrementSeconds,
@@ -183,6 +189,109 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             .ToList();
 
         return Ok(list);
+    }
+
+    // GET /api/game/open-lobbies  — public lobbies waiting for an opponent (logged-in users only)
+    [HttpGet("open-lobbies")]
+    [Authorize]
+    public async Task<IActionResult> GetOpenLobbies()
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(userIdStr, out var userId)) return Unauthorized();
+
+        // In-memory games that haven't started yet, created by another logged-in user
+        var waitingGames = sessions.GetAll()
+            .Where(g => !g.HasGameStarted && !g.GameEnded
+                        && g.WhiteUserId.HasValue && g.WhiteUserId != userId)
+            .ToList();
+
+        if (waitingGames.Count == 0) return Ok(Array.Empty<object>());
+
+        // Filter out private lobbies; also fetch SettingsJson to check for custom map seeds
+        var sessionIds = waitingGames.Select(g => g.SessionId).ToList();
+        var dbRows = await db.GameSessions
+            .Where(s => sessionIds.Contains(s.Id) && !s.IsPrivate)
+            .Select(s => new { s.Id, s.SettingsJson })
+            .ToListAsync();
+
+        var publicIds    = dbRows.Select(r => r.Id).ToHashSet();
+        var settingsById = dbRows.ToDictionary(r => r.Id, r => r.SettingsJson);
+
+        var publicGames = waitingGames.Where(g => publicIds.Contains(g.SessionId)).ToList();
+        if (publicGames.Count == 0) return Ok(Array.Empty<object>());
+
+        // Fetch creator user records for Elo lookup
+        var creatorIds = publicGames.Select(g => g.WhiteUserId!.Value).Distinct().ToList();
+        var creators   = (await db.Users.Where(u => creatorIds.Contains(u.Id)).ToListAsync())
+            .ToDictionary(u => u.Id);
+
+        var list = publicGames.Select(g =>
+        {
+            var cat = EloService.GetCategory(new GameSettings
+            {
+                TimeControlEnabled   = g.TimeControlEnabled,
+                StartTimeMinutes     = g.StartTimeMinutes,
+                TimeIncrementSeconds = g.TimeIncrementSeconds,
+            });
+
+            creators.TryGetValue(g.WhiteUserId!.Value, out var creator);
+            int? creatorElo = creator == null ? null : cat switch
+            {
+                TimeControlCategory.Blitz => creator.EloBlitz,
+                TimeControlCategory.Rapid => creator.EloRapid,
+                _                         => creator.EloSlow,
+            };
+
+            var map = g.GetMap();
+
+            // Only expose the seed if the creator explicitly pasted one
+            string? customSeed = null;
+            if (settingsById.TryGetValue(g.SessionId, out var sJson))
+            {
+                var s = JsonSerializer.Deserialize<GameSettings>(sJson);
+                if (s?.MapSeed != null) customSeed = map.Seed;
+            }
+
+            return new
+            {
+                id                   = g.SessionId,
+                creatorName          = g.White.PlayedByStr,
+                creatorElo,
+                timeControlEnabled   = g.TimeControlEnabled,
+                startTimeMinutes     = g.StartTimeMinutes,
+                timeIncrementSeconds = g.TimeIncrementSeconds,
+                boardSize            = g.MapSize,
+                isFullRandom         = !map.IsMirrored,
+                mapSeed              = customSeed,
+            };
+        }).ToList();
+
+        return Ok(list);
+    }
+
+    // DELETE /api/game/{gameId}  — cancel an open challenge that hasn't started yet
+    [HttpDelete("{gameId:int}")]
+    [Authorize]
+    public async Task<IActionResult> CancelChallenge(int gameId)
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(userIdStr, out var userId)) return Unauthorized();
+
+        var game = sessions.GetById(gameId);
+        if (game == null) return NotFound();
+        if (game.HasGameStarted) return Conflict();
+        if (game.WhiteUserId != userId) return Forbid();
+
+        sessions.Remove(gameId);
+
+        var session = await db.GameSessions.FindAsync(gameId);
+        if (session != null)
+        {
+            db.GameSessions.Remove(session);
+            await db.SaveChangesAsync();
+        }
+
+        return Ok();
     }
 
     // GET /api/game/{gameId}/token  — fetch own player token for reconnection on a new device
@@ -220,6 +329,10 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         if (liveGame != null)
             return Ok(GameStateDtoBuilder.Build(liveGame));
 
+        // Game was in progress when the server restarted — in-memory state is lost
+        if (session.Result == GameResult.InProgress)
+            return Ok(new { serverRestarted = true });
+
         // Game is over — return the stored state for replay
         return Ok(new
         {
@@ -230,4 +343,116 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             session.EndedAt
         });
     }
+
+    // GET /api/game/{gameId}/replay  — full board snapshot sequence for replaying a finished game
+    [HttpGet("{gameId:int}/replay")]
+    public async Task<IActionResult> GetReplay(int gameId)
+    {
+        var session = await db.GameSessions
+            .Include(s => s.WhiteUser)
+            .Include(s => s.BlackUser)
+            .FirstOrDefaultAsync(s => s.Id == gameId);
+
+        if (session == null || session.Result == GameResult.InProgress) return NotFound();
+        if (string.IsNullOrEmpty(session.MapSeed)) return NotFound();
+
+        var settings = JsonSerializer.Deserialize<GameSettings>(session.SettingsJson);
+        if (settings == null) return StatusCode(500);
+
+        settings.MapSeed = session.MapSeed;
+        settings.TimeControlEnabled = false;
+
+        string whiteName = session.WhiteUser?.EffectiveDisplayName ?? "Player 1";
+        string blackName = session.BlackUser?.EffectiveDisplayName ?? "Player 2";
+
+        var game = new ServerGame(
+            session.Id, settings,
+            session.WhitePlayerToken, session.BlackPlayerToken,
+            whiteName, blackName);
+
+        if (session.BlackStartingGold.HasValue)
+            game.Black.Gold = session.BlackStartingGold.Value;
+
+        var snapshots = new List<GameStateDto>();
+        snapshots.Add(GameStateDtoBuilder.Build(game));  // state before any moves
+
+        var moveNotations = JsonSerializer.Deserialize<List<string>>(session.MovesJson) ?? [];
+
+        try
+        {
+            foreach (var notation in moveNotations)
+            {
+                var clean = notation.TrimEnd('+', '#');
+                bool applied;
+
+                if (clean.Contains('='))
+                {
+                    var eqIdx = clean.IndexOf('=');
+                    var (toX, toY) = ParseSquare(clean[..eqIdx]);
+                    var pieceType  = PieceTypeFromCode(clean[(eqIdx + 1)..].ToLower());
+                    if (pieceType == null) return StatusCode(500);
+                    applied = game.TryPlacePiece(toX, toY, pieceType, skipGoldCheck: true);
+                }
+                else
+                {
+                    char sep    = clean.Contains('x') ? 'x' : '-';
+                    int  sepIdx = clean.IndexOf(sep);
+                    var (fromX, fromY) = ParseSquare(clean[..sepIdx]);
+                    var (toX,   toY)   = ParseSquare(clean[(sepIdx + 1)..]);
+                    applied = game.TryMovePiece(fromX, fromY, toX, toY);
+                }
+
+                if (!applied)
+                {
+                    Console.Error.WriteLine($"[Replay {gameId}] Failed to apply move '{notation}' (move #{snapshots.Count})");
+                    return StatusCode(500);
+                }
+
+                game.EndTurn();
+                game.StartNewTurn();
+                snapshots.Add(GameStateDtoBuilder.Build(game));
+
+                if (game.GameEnded) break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Replay {gameId}] Exception at move #{snapshots.Count}: {ex}");
+            return StatusCode(500);
+        }
+
+        // For resign/timeout games the result isn't captured in the move list —
+        // force-end the game so the final snapshot has GameEnded = true.
+        if (!game.GameEnded)
+        {
+            var resultStr = session.Result switch
+            {
+                GameResult.WhiteWinResign => "w+r",
+                GameResult.BlackWinResign => "b+r",
+                GameResult.WhiteWinTime   => "w+t",
+                GameResult.BlackWinTime   => "b+t",
+                _ => null
+            };
+            if (resultStr != null)
+            {
+                game.ForceEnd(resultStr);
+                snapshots[^1] = GameStateDtoBuilder.Build(game);
+            }
+        }
+
+        return Ok(new { snapshots });
+    }
+
+    private static (int x, int y) ParseSquare(string sq) =>
+        (sq[0] - 'a', int.Parse(sq[1..]) - 1);
+
+    private static Type? PieceTypeFromCode(string code) => code switch
+    {
+        "q" => typeof(Queen),
+        "r" => typeof(Rook),
+        "b" => typeof(Bishop),
+        "n" => typeof(Knight),
+        "p" => typeof(Pawn),
+        _ => null
+    };
 }

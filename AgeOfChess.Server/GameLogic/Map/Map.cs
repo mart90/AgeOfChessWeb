@@ -9,14 +9,16 @@ public class Map
     public int Width { get; }
     public int Height { get; }
     public string Seed { get; set; } = string.Empty;
+    public bool IsMirrored { get; set; }
 
     private readonly Random _random = new();
 
-    public Map(int width, int height)
+    public Map(int width, int height, bool isMirrored)
     {
         Width = width;
         Height = height;
         Squares = new List<Square>();
+        IsMirrored = isMirrored;
     }
 
     public Square? SelectedSquare => Squares.SingleOrDefault(e => e.IsSelected);
@@ -51,10 +53,13 @@ public class Map
 
     public void SetSeed()
     {
-        string seedString = $"{Width}x{Height}_";
+        string seedString = IsMirrored ? "m" : "r";
+        seedString += $"_{Width}x{Height}_";
         int consecutiveEmptySquares = 0;
 
-        foreach (Square square in Squares.Where(e => e.Id < Width * Height / 2).OrderBy(e => e.Id))
+        var squares = IsMirrored ? Squares.Where(e => e.Id < Width * Height / 2) : Squares;
+
+        foreach (Square square in squares.OrderBy(e => e.Id))
         {
             if (square.Object == null && (square.Type == SquareType.Dirt || square.Type == SquareType.Grass))
             {

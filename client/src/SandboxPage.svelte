@@ -1,0 +1,788 @@
+<script>
+  import { onMount, onDestroy } from 'svelte';
+  import Board from './Board.svelte';
+  import { currentGame } from './lib/currentGame.svelte.js';
+  import { generateSandboxBoard } from './lib/api.js';
+
+  // ── Shop config (no King) ───────────────────────────────────────────────────
+  const SHOP = [
+    { type: 'Queen',  cost: 70 },
+    { type: 'Rook',   cost: 35 },
+    { type: 'Bishop', cost: 26 },
+    { type: 'Knight', cost: 28 },
+    { type: 'Pawn',   cost: 20 },
+  ];
+  const CAPTURE_VALUE = { Queen: 30, Rook: 20, Bishop: 15, Knight: 15, Pawn: 5, King: 0, Treasure: 20, WhiteFlag: 0 };
+
+  function pieceImgSrc(type, isWhite) {
+    if (type === 'Treasure') return '/assets/objects/treasure.png';
+    if (type === 'WhiteFlag' || type === 'BlackFlag') return '/assets/objects/white_flag.png';
+    const n = type.replace(/^(White|Black)/, '').toLowerCase();
+    return `/assets/objects/${isWhite ? 'w' : 'b'}_${n}.png`;
+  }
+
+  // ── Client-side move legality (ported from PathFinder.cs) ─────────────────
+
+  const DIRS = {
+    N:  [ 0, -1], NE: [ 1, -1], E:  [ 1,  0], SE: [ 1,  1],
+    S:  [ 0,  1], SW: [-1,  1], W:  [-1,  0], NW: [-1, -1],
+  };
+  const CARDINAL = ['N', 'E', 'S', 'W'];
+  const DIAGONAL = ['NE', 'SE', 'SW', 'NW'];
+  const ALL8     = [...CARDINAL, ...DIAGONAL];
+
+  function isRocks(type) {
+    return type === 'DirtRocks' || type === 'GrassRocks';
+  }
+  function isResource(type) {
+    return type === 'DirtMine' || type === 'GrassMine' || type === 'DirtTrees' || type === 'GrassTrees';
+  }
+  // A "real piece" is a moveable chess piece — NOT a Treasure or WhiteFlag (GaiaObjects)
+  function isRealPiece(p) {
+    if (!p) return false;
+    const t = p.type;
+    return t !== 'Treasure' && t !== 'WhiteFlag' && t !== 'BlackFlag';
+  }
+  function basePieceType(type) {
+    return type.replace(/^(White|Black)/, '');
+  }
+
+  /**
+   * Port of PathFinder.FindLegalSquaresVector.
+   * Returns SquareDtos that are reachable in this direction.
+   * maxSteps = null → unlimited (sliding piece)
+   */
+  function legalVector(piece, sq, dx, dy, maxSteps, lookup) {
+    const legal = [];
+    let cx = sq.x + dx, cy = sq.y + dy, steps = 0;
+
+    while (maxSteps === null || steps < maxSteps) {
+      const cur = lookup.get(`${cx},${cy}`);
+      if (!cur) break;                  // off board
+
+      if (isRocks(cur.type)) break;     // rocks block everything
+
+      if (isResource(cur.type)) {
+        // Allied real piece on a resource square → stop (don't add)
+        if (isRealPiece(cur.piece) && cur.piece.isWhite === piece.isWhite) break;
+        // Otherwise (empty, treasure, or enemy) → add and stop
+        legal.push(cur);
+        break;
+      }
+
+      if (cur.piece) {
+        if (isRealPiece(cur.piece)) {
+          if (cur.piece.isWhite === piece.isWhite) break; // friendly → stop
+        }
+        // Enemy piece or GaiaObject (Treasure etc.) → add and stop
+        legal.push(cur);
+        break;
+      }
+
+      // Empty passable square
+      legal.push(cur);
+      steps++;
+      cx += dx;
+      cy += dy;
+    }
+    return legal;
+  }
+
+  function computeLegalMoves(sq) {
+    if (!sq?.piece || !isRealPiece(sq.piece)) return [];
+    const piece    = sq.piece;
+    const baseType = basePieceType(piece.type);
+
+    const lookup = new Map();
+    for (const s of squares) lookup.set(`${s.x},${s.y}`, s);
+
+    const legal = [];
+
+    function slide(dirs, maxSteps = null) {
+      for (const dir of dirs) {
+        const [dx, dy] = DIRS[dir];
+        legal.push(...legalVector(piece, sq, dx, dy, maxSteps, lookup));
+      }
+    }
+
+    if (baseType === 'Pawn') {
+      // Orthogonal moves: cannot land on real pieces
+      for (const dir of CARDINAL) {
+        const [dx, dy] = DIRS[dir];
+        const moves = legalVector(piece, sq, dx, dy, 1, lookup);
+        legal.push(...moves.filter(s => !isRealPiece(s.piece)));
+      }
+      // Diagonal captures: enemy real pieces only
+      for (const dir of DIAGONAL) {
+        const [dx, dy] = DIRS[dir];
+        const moves = legalVector(piece, sq, dx, dy, 1, lookup);
+        legal.push(...moves.filter(s => isRealPiece(s.piece) && s.piece.isWhite !== piece.isWhite));
+      }
+    } else if (baseType === 'Knight') {
+      const jumps = [[1,2],[1,-2],[-1,2],[-1,-2],[2,1],[2,-1],[-2,1],[-2,-1]];
+      for (const [dx, dy] of jumps) {
+        const dest = lookup.get(`${sq.x + dx},${sq.y + dy}`);
+        if (!dest) continue;
+        if (isRocks(dest.type)) continue;
+        if (isRealPiece(dest.piece) && dest.piece.isWhite === piece.isWhite) continue;
+        legal.push(dest);
+      }
+    } else if (baseType === 'King') {
+      slide(ALL8, 1);
+    } else if (baseType === 'Rook') {
+      slide(CARDINAL);
+    } else if (baseType === 'Bishop') {
+      slide(DIAGONAL);
+    } else if (baseType === 'Queen') {
+      slide(ALL8);
+    }
+
+    return legal.map(s => ({ x: s.x, y: s.y }));
+  }
+
+  // ── Board state ─────────────────────────────────────────────────────────────
+  let squares       = $state([]);
+  let mapSize       = $state(0);
+  let mapSeed       = $state('');
+  let whiteGold     = $state(0);
+  let blackGold     = $state(5);
+  let whiteIsActive = $state(true);
+  let viewAsWhite   = $state(true);
+
+  // ── Selection / drag ────────────────────────────────────────────────────────
+  let boardCanvas   = null;
+  let selectedSqPos = $state(null);
+  let legalDests    = $state([]);
+  let dragOverSq    = $state(null);
+  let lastMoveFrom  = $state(null);
+  let lastMoveTo    = $state(null);
+
+  /**
+   * dragging = null
+   *          | { type: 'move',  fromX, fromY, imgSrc, ghostX, ghostY }
+   *          | { type: 'place', pieceType, isWhitePiece, imgSrc, ghostX, ghostY }
+   */
+  let dragging = $state(null);
+
+  // ── Undo / redo ─────────────────────────────────────────────────────────────
+  let undoStack = $state([]);
+  let redoStack = $state([]);
+  const canUndo = $derived(undoStack.length > 0);
+  const canRedo = $derived(redoStack.length > 0);
+
+  // ── Map generation controls ─────────────────────────────────────────────────
+  let genSize    = $state(12);
+  let genRandom  = $state(true);
+  let seedInput  = $state('');
+  let generating = $state(false);
+  let genError   = $state('');
+
+  const seedInputError = $derived.by(() => {
+    const s = seedInput.trim();
+    if (!s) return null;
+    if (!s.match(/^[mr]_\d+x\d+_[0-9kmrft]+$/)) return 'Invalid seed format';
+    return null;
+  });
+  const seedInputValid = $derived(!seedInput.trim() || seedInputError === null);
+
+  // ── Live square lookups ─────────────────────────────────────────────────────
+  function sqAt(pos) {
+    if (!pos) return null;
+    return squares.find(s => s.x === pos.x && s.y === pos.y) ?? null;
+  }
+
+  const selectedSquare  = $derived(sqAt(selectedSqPos));
+  const lastMoveSquares = $derived.by(() => {
+    const res = [];
+    const f = sqAt(lastMoveFrom); if (f) res.push(f);
+    const t = sqAt(lastMoveTo);   if (t) res.push(t);
+    return res;
+  });
+
+  // ── NavBar seed integration ─────────────────────────────────────────────────
+  $effect(() => { currentGame.mapSeed = mapSeed || null; });
+  onDestroy(() => { currentGame.mapSeed = null; });
+
+  // ── Snapshot helpers ────────────────────────────────────────────────────────
+  function snapshot() {
+    return {
+      squares: squares.map(s => ({ ...s })),
+      whiteGold, blackGold, whiteIsActive,
+      lastMoveFrom, lastMoveTo,
+    };
+  }
+
+  function pushHistory() {
+    undoStack = [...undoStack, snapshot()];
+    redoStack = [];
+  }
+
+  function clearSelection() {
+    selectedSqPos = null;
+    legalDests    = [];
+    dragOverSq    = null;
+  }
+
+  function restoreSnapshot(snap) {
+    squares       = snap.squares;
+    whiteGold     = snap.whiteGold;
+    blackGold     = snap.blackGold;
+    whiteIsActive = snap.whiteIsActive;
+    lastMoveFrom  = snap.lastMoveFrom;
+    lastMoveTo    = snap.lastMoveTo;
+    clearSelection();
+  }
+
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack = [...redoStack, snapshot()];
+    restoreSnapshot(undoStack[undoStack.length - 1]);
+    undoStack = undoStack.slice(0, -1);
+  }
+
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack = [...undoStack, snapshot()];
+    restoreSnapshot(redoStack[redoStack.length - 1]);
+    redoStack = redoStack.slice(0, -1);
+  }
+
+  // ── Map generation ──────────────────────────────────────────────────────────
+  async function generateMap() {
+    if (!seedInputValid) return;
+    genError = '';
+    generating = true;
+    try {
+      const seed = seedInput.trim() || null;
+      const data = await generateSandboxBoard(genSize, genRandom, seed);
+      squares       = data.squares;
+      mapSize       = data.mapSize;
+      mapSeed       = data.mapSeed;
+      whiteGold     = 0;
+      blackGold     = 5;
+      whiteIsActive = true;
+      lastMoveFrom  = null;
+      lastMoveTo    = null;
+      dragging      = null;
+      undoStack     = [];
+      redoStack     = [];
+      clearSelection();
+    } catch (e) {
+      genError = e.message ?? String(e);
+    } finally {
+      generating = false;
+    }
+  }
+
+  function clearPieces() {
+    if (!squares.length) return;
+    pushHistory();
+    squares = squares.map(s => ({ ...s, piece: null }));
+    clearSelection();
+  }
+
+  // ── Turn management ─────────────────────────────────────────────────────────
+  function passTurn() {
+    pushHistory();
+    const nextWhite = !whiteIsActive;
+    const income = squares
+      .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
+      .length * 5;
+    if (nextWhite) whiteGold = Math.max(0, whiteGold + income);
+    else           blackGold = Math.max(0, blackGold + income);
+    whiteIsActive = nextWhite;
+    clearSelection();
+  }
+
+  // ── Move logic ───────────────────────────────────────────────────────────────
+  function applyMove(fromPos, toPos) {
+    const fromSq = sqAt(fromPos);
+    const toSq   = sqAt(toPos);
+    if (!fromSq?.piece || !isRealPiece(fromSq.piece)) return false;
+
+    pushHistory();
+    const piece = fromSq.piece;
+    let wg = whiteGold, bg = blackGold;
+
+    // Capture: only real pieces yield gold; treasures give nothing and disappear
+    if (toSq?.piece) {
+      const baseT = basePieceType(toSq.piece.type);
+      const val = CAPTURE_VALUE[baseT] ?? 5;
+      if (piece.isWhite) wg += val; else bg += val;
+    }
+
+    const newSquares = squares.map(s => {
+      if (s.x === fromPos.x && s.y === fromPos.y) return { ...s, piece: null };
+      if (s.x === toPos.x   && s.y === toPos.y)   return { ...s, piece };
+      return s;
+    });
+    squares = newSquares;
+
+    // Mine income for newly active player
+    const nextWhite = !piece.isWhite;
+    const income = newSquares
+      .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
+      .length * 5;
+    if (nextWhite) wg += income; else bg += income;
+
+    whiteGold     = wg;
+    blackGold     = bg;
+    whiteIsActive = nextWhite;
+    lastMoveFrom  = fromPos;
+    lastMoveTo    = toPos;
+    return true;
+  }
+
+  function placePieceAt(pos, pieceType, isWhitePiece) {
+    const sq = sqAt(pos);
+    if (!sq || isRocks(sq.type)) return;
+    const cost = SHOP.find(s => s.type === pieceType)?.cost ?? 0;
+    if (isWhitePiece && whiteGold < cost) return;
+    if (!isWhitePiece && blackGold < cost) return;
+
+    pushHistory();
+    if (isWhitePiece) whiteGold -= cost;
+    else              blackGold -= cost;
+
+    squares = squares.map(s => {
+      if (s.x === pos.x && s.y === pos.y) return { ...s, piece: { type: pieceType, isWhite: isWhitePiece } };
+      return s;
+    });
+  }
+
+  function removePieceAt(pos) {
+    const sq = sqAt(pos);
+    if (!sq?.piece || !isRealPiece(sq.piece)) return;
+    pushHistory();
+    squares = squares.map(s => {
+      if (s.x === pos.x && s.y === pos.y) return { ...s, piece: null };
+      return s;
+    });
+  }
+
+  // ── Board coordinate helper (for shop drag hit-testing) ──────────────────
+  function globalCursorToBoard(clientX, clientY) {
+    if (!boardCanvas || !mapSize) return null;
+    const rect   = boardCanvas.getBoundingClientRect();
+    const n      = mapSize;
+    const cellPx = rect.width / n;
+    let cx = Math.floor((clientX - rect.left) / cellPx);
+    let cy = Math.floor((clientY - rect.top)  / cellPx);
+    const bx = viewAsWhite ? cx : n - 1 - cx;
+    const by = viewAsWhite ? n - 1 - cy : cy;
+    if (bx < 0 || bx >= n || by < 0 || by >= n) return null;
+    return { x: bx, y: by };
+  }
+
+  // ── Board callbacks (x, y are separate numbers, matching Board.svelte API) ─
+  function handleSquareClick(x, y) {
+    if (!squares.length) return;
+
+    // Click on selected square → remove the piece
+    if (selectedSqPos && x === selectedSqPos.x && y === selectedSqPos.y) {
+      removePieceAt({ x, y });
+      clearSelection();
+      return;
+    }
+
+    // We have a selection → try to move there
+    if (selectedSqPos) {
+      const isLegal = legalDests.some(d => d.x === x && d.y === y);
+      if (isLegal) {
+        applyMove(selectedSqPos, { x, y });
+        clearSelection();
+        return;
+      }
+      // Not legal — fall through to reselect if there's a piece
+    }
+
+    // Select a piece
+    const sq = sqAt({ x, y });
+    if (sq?.piece && isRealPiece(sq.piece)) {
+      selectedSqPos = { x, y };
+      legalDests    = computeLegalMoves(sq);
+    } else {
+      clearSelection();
+    }
+  }
+
+  function handleGrab(x, y, clientX, clientY) {
+    const sq = sqAt({ x, y });
+    if (!sq?.piece || !isRealPiece(sq.piece)) return;
+    selectedSqPos = { x, y };
+    legalDests    = computeLegalMoves(sq);
+    const imgSrc  = pieceImgSrc(sq.piece.type, sq.piece.isWhite);
+    dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
+  }
+
+  function handleDrop(x, y) {
+    if (!dragging) return;
+    if (dragging.type === 'move') {
+      const isLegal = legalDests.some(d => d.x === x && d.y === y);
+      if (isLegal) applyMove({ x: dragging.fromX, y: dragging.fromY }, { x, y });
+    } else if (dragging.type === 'place') {
+      placePieceAt({ x, y }, dragging.pieceType, dragging.isWhitePiece);
+    }
+    dragging = null;
+    clearSelection();
+  }
+
+  function handleHover(sq) {
+    if (dragging) dragOverSq = sq;
+  }
+
+  // ── Shop drag ─────────────────────────────────────────────────────────────
+  function shopPointerDown(e, pieceType, isWhitePiece) {
+    if (!squares.length) return;
+    const cost = SHOP.find(s => s.type === pieceType)?.cost ?? 0;
+    if (isWhitePiece && whiteGold < cost) return;
+    if (!isWhitePiece && blackGold < cost) return;
+    e.preventDefault();
+    clearSelection();
+    dragging = {
+      type: 'place', pieceType, isWhitePiece,
+      imgSrc: pieceImgSrc(pieceType, isWhitePiece),
+      ghostX: e.clientX, ghostY: e.clientY,
+    };
+  }
+
+  // ── Global pointer tracking ───────────────────────────────────────────────
+  function globalPointerMove(e) {
+    if (!dragging) return;
+    dragging = { ...dragging, ghostX: e.clientX, ghostY: e.clientY };
+    dragOverSq = globalCursorToBoard(e.clientX, e.clientY);
+  }
+
+  function globalPointerUp(e) {
+    if (!dragging) return;
+    if (dragging.type === 'place') {
+      const sq = globalCursorToBoard(e.clientX, e.clientY);
+      if (sq) placePieceAt(sq, dragging.pieceType, dragging.isWhitePiece);
+    }
+    dragging = null;
+    clearSelection();
+  }
+
+  onMount(() => {
+    window.addEventListener('pointermove', globalPointerMove);
+    window.addEventListener('pointerup',   globalPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', globalPointerMove);
+      window.removeEventListener('pointerup',   globalPointerUp);
+    };
+  });
+</script>
+
+<!-- Drag ghost -->
+{#if dragging}
+  <img
+    class="drag-ghost"
+    src={dragging.imgSrc}
+    alt=""
+    style="left:{dragging.ghostX}px; top:{dragging.ghostY}px;"
+    draggable="false"
+  />
+{/if}
+
+<div class="sandbox-wrap">
+  <!-- Left: board -->
+  <div class="board-col">
+    {#if squares.length > 0}
+      <div class="board-wrap">
+        <Board
+          squares={squares}
+          mapSize={mapSize}
+          isWhite={viewAsWhite}
+          selectedSquare={selectedSquare}
+          {legalDests}
+          dragOverSquare={dragOverSq}
+          hoverSquares={[]}
+          lastMoveSquares={lastMoveSquares}
+          onPieceGrabbed={handleGrab}
+          onDropOnBoard={handleDrop}
+          onHoverSquare={handleHover}
+          onSquareClick={handleSquareClick}
+          onCanvasReady={(el) => { boardCanvas = el; }}
+        />
+      </div>
+    {:else}
+      <div class="empty-board">
+        <p>Generate a map to start</p>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Right: controls -->
+  <aside class="side-panel">
+
+    <!-- Player bars -->
+    <div class="players">
+      <div class="player-bar" class:active={whiteIsActive}>
+        <span class="player-name">White</span>
+        <div class="gold-wrap">
+          <input class="gold-input" type="number" min="0" max="9999"
+                 bind:value={whiteGold} />
+          <span class="gold-unit">g</span>
+        </div>
+      </div>
+      <div class="player-bar" class:active={!whiteIsActive}>
+        <span class="player-name">Black</span>
+        <div class="gold-wrap">
+          <input class="gold-input" type="number" min="0" max="9999"
+                 bind:value={blackGold} />
+          <span class="gold-unit">g</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Turn + board controls -->
+    <div class="ctrl-row">
+      <button class="ctrl-btn" onclick={passTurn} disabled={!squares.length}>Pass turn</button>
+      <button class="ctrl-btn" onclick={() => viewAsWhite = !viewAsWhite} disabled={!squares.length}>Flip</button>
+    </div>
+    <div class="ctrl-row">
+      <button class="ctrl-btn" onclick={undo} disabled={!canUndo}>← Undo</button>
+      <button class="ctrl-btn" onclick={redo} disabled={!canRedo}>Redo →</button>
+    </div>
+
+    <!-- Shop: place pieces -->
+    <div class="section">
+      <div class="section-label">Place piece</div>
+      <div class="shop-label">White</div>
+      <div class="shop-row">
+        {#each SHOP as item}
+          {@const canAfford = whiteGold >= item.cost}
+          <button
+            class="shop-piece"
+            class:active={dragging?.type === 'place' && dragging.pieceType === item.type && dragging.isWhitePiece}
+            disabled={!squares.length || !canAfford}
+            title="{item.type} — {item.cost}g"
+            onpointerdown={(e) => shopPointerDown(e, item.type, true)}
+          >
+            <img src={pieceImgSrc(item.type, true)} alt={item.type} width="32" height="32" draggable="false" />
+            <span class="cost" class:dim={!canAfford}>{item.cost}g</span>
+          </button>
+        {/each}
+      </div>
+      <div class="shop-label">Black</div>
+      <div class="shop-row">
+        {#each SHOP as item}
+          {@const canAfford = blackGold >= item.cost}
+          <button
+            class="shop-piece"
+            class:active={dragging?.type === 'place' && dragging.pieceType === item.type && !dragging.isWhitePiece}
+            disabled={!squares.length || !canAfford}
+            title="{item.type} — {item.cost}g"
+            onpointerdown={(e) => shopPointerDown(e, item.type, false)}
+          >
+            <img src={pieceImgSrc(item.type, false)} alt={item.type} width="32" height="32" draggable="false" />
+            <span class="cost" class:dim={!canAfford}>{item.cost}g</span>
+          </button>
+        {/each}
+      </div>
+      <p class="shop-hint">Drag a piece onto the board to place it. Click a piece to select it, then click its square again to remove it.</p>
+    </div>
+
+    <!-- Map generation -->
+    <div class="section">
+      <div class="section-label">Map</div>
+      <div class="option-row">
+        <label>Size: <strong>{genSize}×{genSize}</strong></label>
+        <input type="range" min="6" max="16" step="2" bind:value={genSize} />
+      </div>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={genRandom} />
+        Full random
+      </label>
+      <div class="seed-row">
+        <input
+          class="seed-input"
+          class:seed-invalid={seedInput.trim() && seedInputError}
+          class:seed-ok={seedInput.trim() && !seedInputError}
+          type="text"
+          bind:value={seedInput}
+          placeholder="Paste seed to load a specific map…"
+          spellcheck="false"
+          autocomplete="off"
+        />
+      </div>
+      {#if seedInputError}<p class="error">{seedInputError}</p>{/if}
+      {#if genError}<p class="error">{genError}</p>{/if}
+      <button class="action-btn" onclick={generateMap}
+              disabled={generating || !seedInputValid}>
+        {generating ? 'Generating…' : 'Generate new map'}
+      </button>
+    </div>
+
+  </aside>
+</div>
+
+<style>
+  .drag-ghost {
+    position: fixed;
+    width: 56px; height: 56px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 1000;
+    image-rendering: pixelated;
+    filter: drop-shadow(0 4px 10px rgba(0,0,0,0.7));
+  }
+
+  .sandbox-wrap {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    height: calc(100vh - 46px);
+  }
+
+  /* ── Board column ── */
+  .board-col {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: 0.75rem;
+  }
+
+  /* Constrain board to fit within the column — square, never taller than the viewport */
+  .board-wrap {
+    width: min(100%, calc(100vh - 46px - 1.5rem));
+  }
+
+  .empty-board {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    max-width: 600px;
+    aspect-ratio: 1;
+    border: 2px dashed #2a2a4a;
+    border-radius: 8px;
+    color: #555;
+    font-size: 0.95rem;
+  }
+
+  /* ── Side panel ── */
+  .side-panel {
+    width: 270px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1rem;
+    border-left: 1px solid #2a2a4a;
+    background: #14142a;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  /* ── Player bars ── */
+  .players { display: flex; flex-direction: column; gap: 0.4rem; }
+  .player-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    border: 1px solid #2a2a4a;
+    background: #1e1e38;
+    transition: border-color 0.15s;
+  }
+  .player-bar.active { border-color: #7cfc00; background: rgba(124,252,0,0.06); }
+  .player-name { font-size: 0.9rem; font-weight: 600; color: #ccc; }
+  .gold-wrap { display: flex; align-items: center; gap: 0.25rem; }
+  .gold-input {
+    width: 62px;
+    background: #2d2d4a; border: 1px solid #3a3a5a; border-radius: 4px;
+    color: #f0c040; font-size: 0.9rem; padding: 0.2rem 0.4rem; text-align: right;
+  }
+  .gold-unit { color: #888; font-size: 0.85rem; }
+
+  /* ── Control buttons ── */
+  .ctrl-row { display: flex; gap: 0.4rem; }
+  .ctrl-btn {
+    flex: 1; padding: 0.4rem 0.5rem; font-size: 0.82rem;
+    background: #2d2d4a; border: 1px solid #3a3a5a; color: #ccc; border-radius: 5px;
+  }
+  .ctrl-btn:hover:not(:disabled) { background: #3a3a6a; color: #eee; }
+  .ctrl-btn:disabled { opacity: 0.35; cursor: default; }
+  .ctrl-btn.danger { color: #e07070; border-color: #5a3a3a; }
+  .ctrl-btn.danger:hover:not(:disabled) { background: #3a2a2a; }
+
+  /* ── Sections ── */
+  .section {
+    display: flex; flex-direction: column; gap: 0.5rem;
+    padding-top: 0.6rem; border-top: 1px solid #2a2a4a;
+  }
+  .section-label {
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: #555;
+  }
+
+  /* ── Shop ── */
+  .shop-label { font-size: 0.78rem; color: #888; margin-bottom: -0.2rem; }
+  .shop-row { display: flex; gap: 0.2rem; }
+  .shop-piece {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 0.2rem 0.15rem;
+    background: #2d2d4a; border: 2px solid transparent; border-radius: 7px;
+    gap: 2px; touch-action: none; user-select: none; flex: 1; min-width: 0;
+    transition: border-color 0.1s, background 0.1s;
+  }
+  .shop-piece img { image-rendering: pixelated; }
+  .shop-piece:not(:disabled):hover { border-color: #7b8cde; background: #3a3a60; }
+  .shop-piece.active { border-color: #f5c518; background: #3a3a20; }
+  .shop-piece:disabled { opacity: 0.3; cursor: default; }
+  .cost { font-size: 0.65rem; color: #f5c518; }
+  .cost.dim { color: #666; }
+  .shop-hint { font-size: 0.74rem; color: #666; margin: 0; line-height: 1.4; }
+
+  /* ── Map generation ── */
+  .option-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.5rem; font-size: 0.88rem; color: #ccc;
+  }
+  .option-row input[type="range"] { flex: 1; accent-color: #7b8cde; }
+  .checkbox-label {
+    display: flex; align-items: center; gap: 0.5rem;
+    font-size: 0.88rem; color: #ccc; cursor: pointer;
+  }
+  .seed-row { display: flex; }
+  .seed-input {
+    width: 100%; background: #2d2d4a; border: 1px solid #3a3a5a; border-radius: 5px;
+    color: #eee; font-size: 0.8rem; font-family: monospace; padding: 0.35rem 0.6rem;
+  }
+  .seed-input.seed-invalid { border-color: #c05050; }
+  .seed-input.seed-ok      { border-color: #4a9a4a; }
+
+  .action-btn {
+    padding: 0.65rem; font-size: 0.95rem;
+    background: #4a6fa5; color: #fff; border: none; border-radius: 6px;
+  }
+  .action-btn:disabled { opacity: 0.45; cursor: default; }
+
+  .error { color: #e07070; font-size: 0.8rem; margin: 0; }
+
+  /* ── Mobile: stack vertically ── */
+  @media (max-width: 640px) {
+    .sandbox-wrap {
+      flex-direction: column;
+      height: auto;
+      overflow: visible;
+    }
+    .board-col {
+      min-height: unset;
+      padding: 0.5rem;
+    }
+    /* On mobile the board is constrained by width, not height */
+    .board-wrap { width: 100%; }
+    .side-panel {
+      width: 100%;
+      border-left: none;
+      border-top: 1px solid #2a2a4a;
+      overflow: visible;
+    }
+  }
+</style>

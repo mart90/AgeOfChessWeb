@@ -23,8 +23,8 @@ public abstract class Game
     {
         [typeof(Queen)]  = 70,
         [typeof(Rook)]   = 35,
-        [typeof(Bishop)] = 25,
-        [typeof(Knight)] = 30,
+        [typeof(Bishop)] = 26,
+        [typeof(Knight)] = 28,
         [typeof(Pawn)]   = 20,
     };
 
@@ -58,12 +58,6 @@ public abstract class Game
         previousActiveColor.IsActive = false;
         Colors.Single(e => e != previousActiveColor).IsActive = true;
 
-        foreach (Square square in Map.GetMines())
-        {
-            if (square.Object is Piece piece)
-                GetPieceColor(piece).Gold += 3;
-        }
-
         if (TimeControlEnabled)
         {
             if (LastMoveTimestamp.HasValue)
@@ -94,6 +88,13 @@ public abstract class Game
 
         if (!FirstMoveMade)
             FirstMoveMade = true;
+
+        // Mine income: +5 gold for each mine occupied by the active player
+        foreach (var square in Map.GetMines())
+        {
+            if (square.Object is Piece piece && piece.IsWhite == ActiveColor.IsWhite)
+                ActiveColor.Gold += 5;
+        }
 
         // Time forfeit detected by EndTurn
         if (Result != null && !GameEnded)
@@ -133,16 +134,21 @@ public abstract class Game
 
     /// <summary>
     /// Validates and executes a piece placement. Returns false if the placement is illegal.
+    /// Pass <paramref name="skipGoldCheck"/> = true when replaying recorded games, since mine
+    /// income rules may have changed and the replayed gold totals can diverge from the original.
     /// </summary>
-    public bool TryPlacePiece(int toX, int toY, Type pieceType)
+    public bool TryPlacePiece(int toX, int toY, Type pieceType, bool skipGoldCheck = false)
     {
         if (!PieceCosts.ContainsKey(pieceType)) return false;
 
         var destinationSquare = Map.GetSquareByCoordinates(toX, toY);
         if (destinationSquare == null) return false;
 
-        int cost = PieceCosts[pieceType];
-        if (ActiveColor.Gold < cost) return false;
+        if (!skipGoldCheck)
+        {
+            int cost = PieceCosts[pieceType];
+            if (ActiveColor.Gold < cost) return false;
+        }
 
         var pathFinder = new PathFinder(Map);
         if (!pathFinder.FindLegalDestinationsForPiecePlacement(ActiveColor.IsWhite, pieceType == typeof(Pawn)).Contains(destinationSquare))
@@ -186,7 +192,7 @@ public abstract class Game
 
     private PieceColor? CheckForGoldVictory()
     {
-        var colorsWithWinningGold = Colors.Where(e => e.Gold > 150).ToList();
+        var colorsWithWinningGold = Colors.Where(e => e.Gold >= 150).ToList();
         if (!colorsWithWinningGold.Any()) return null;
 
         PieceColor? winningColor = null;
@@ -216,25 +222,49 @@ public abstract class Game
 
         if (legalCheckSquares.Contains(activeKingSquare))
         {
-            if (!activeKingLegalMoves.Any())
+            // In check — mark the king square red regardless of outcome
+            activeKingSquare.SetTemporaryColor(SquareColor.Red);
+
+            if (activeKingLegalMoves.Any())
             {
-                // Checkmate
-                if (MoveList.Count > 0) MoveList[^1].Suffix = "#";
-                Result = ActiveColor.IsWhite ? "b+c" : "w+c";
-                return true;
-            }
-            else
-            {
-                // In check — mark the king square red for the client
-                activeKingSquare.SetTemporaryColor(SquareColor.Red);
                 if (MoveList.Count > 0) MoveList[^1].Suffix = "+";
                 return false;
             }
+
+            // King can't move — check if any other piece can capture/block
+            bool otherPieceCanMove = Map.Squares
+                .Where(s => s != activeKingSquare && s.Object is Piece p && p.IsWhite == ActiveColor.IsWhite)
+                .Any(s => pathFinder.FindLegalDestinationSquares((Piece)s.Object!, s).Any());
+
+            if (otherPieceCanMove)
+            {
+                if (MoveList.Count > 0) MoveList[^1].Suffix = "+";
+                return false;
+            }
+
+            // Check if any affordable piece placement can block/capture
+            bool placementCanFixCheck = PieceCosts.Keys.Any(pieceType =>
+            {
+                if (ActiveColor.Gold < PieceCosts[pieceType]) return false;
+                bool isPawn = pieceType == typeof(Pawn);
+                return pathFinder.FindLegalDestinationsForPiecePlacement(ActiveColor.IsWhite, isPawn).Any();
+            });
+
+            if (placementCanFixCheck)
+            {
+                if (MoveList.Count > 0) MoveList[^1].Suffix = "+";
+                return false;
+            }
+
+            // Checkmate
+            if (MoveList.Count > 0) MoveList[^1].Suffix = "#";
+            Result = ActiveColor.IsWhite ? "b+c" : "w+c";
+            return true;
         }
 
         // Stalemate: only king remains AND opponent has < 15 gold
         int activePieceCount = Map.Squares.Count(e => e.Object is Piece piece && piece.IsWhite == ActiveColor.IsWhite);
-        if (!activeKingLegalMoves.Any() && activePieceCount == 1 && InActiveColor.Gold < 15)
+        if (!activeKingLegalMoves.Any() && activePieceCount == 1 && ActiveColor.Gold < GetPieceCost(typeof(Pawn)))
         {
             if (MoveList.Count > 0) MoveList[^1].Suffix = "#";
             Result = ActiveColor.IsWhite ? "b+s" : "w+s";

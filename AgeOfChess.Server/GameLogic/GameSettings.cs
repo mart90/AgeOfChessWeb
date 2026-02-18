@@ -8,4 +8,5 @@ public class GameSettings
     public int TimeIncrementSeconds { get; set; } = 5;
     public bool BiddingEnabled { get; set; } = false;
     public string? MapSeed { get; set; }
+    public string MapMode { get; set; } = "m";
 }

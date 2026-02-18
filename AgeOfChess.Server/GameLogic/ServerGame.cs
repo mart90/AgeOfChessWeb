@@ -1,4 +1,5 @@
 using AgeOfChess.Server.GameLogic.Map;
+using AgeOfChess.Server.Services;
 
 namespace AgeOfChess.Server.GameLogic;
 
@@ -10,6 +11,7 @@ public class ServerGame : Game
 {
     public int SessionId { get; }
     public bool BiddingEnabled { get; }
+    public bool IsSlowGame { get; }
     public string WhitePlayerToken { get; private set; }
     public string BlackPlayerToken { get; private set; }
 
@@ -32,6 +34,44 @@ public class ServerGame : Game
     /// <summary>True once the initial GameStarted broadcast has been sent to both players.</summary>
     public bool HasGameStarted { get; set; }
 
+    /// <summary>When this ServerGame was constructed — used by the cleanup service to evict stale sessions.</summary>
+    public DateTime CreatedAt { get; } = DateTime.UtcNow;
+
+    /// <summary>Original game settings — stored so a rematch can be created with the same config.</summary>
+    public GameSettings Settings { get; private set; } = null!;
+
+    /// <summary>In-memory chat history (not persisted, wiped on server restart).</summary>
+    public List<ChatMessageDto> ChatMessages { get; } = new();
+
+    // ── Rematch tracking ──────────────────────────────────────────────────
+
+    private readonly Lock _rematchLock = new();
+    public bool RematchRequestedByWhite { get; private set; }
+    public bool RematchRequestedByBlack { get; private set; }
+    private bool _rematchCreated;
+
+    /// <summary>
+    /// Marks the given player as requesting a rematch.
+    /// Returns true exactly once — when both players have requested — signalling
+    /// that the caller should create the rematch game (race-condition safe).
+    /// </summary>
+    public bool RequestRematch(bool isWhite)
+    {
+        lock (_rematchLock)
+        {
+            if (_rematchCreated) return false;
+            if (isWhite) RematchRequestedByWhite = true;
+            else         RematchRequestedByBlack = true;
+
+            if (RematchRequestedByWhite && RematchRequestedByBlack)
+            {
+                _rematchCreated = true;
+                return true;
+            }
+            return false;
+        }
+    }
+
     public string GroupName => $"game-{SessionId}";
 
     // ── Bidding ────────────────────────────────────────────────────────────
@@ -45,7 +85,9 @@ public class ServerGame : Game
     public ServerGame(int sessionId, GameSettings settings, string whitePlayerToken, string blackPlayerToken, string whitePlayerName, string blackPlayerName)
     {
         SessionId = sessionId;
+        Settings = settings;
         BiddingEnabled = settings.BiddingEnabled;
+        IsSlowGame = Services.EloService.GetCategory(settings) == Services.TimeControlCategory.Slow;
         WhitePlayerToken = whitePlayerToken;
         BlackPlayerToken = blackPlayerToken;
         _startTimeMinutes = settings.StartTimeMinutes;
@@ -79,7 +121,9 @@ public class ServerGame : Game
         var generator = new MapGenerator();
         Map = settings.MapSeed != null
             ? generator.GenerateFromSeed(settings.MapSeed)
-            : generator.GenerateRandom(settings.BoardSize, settings.BoardSize);
+            : settings.MapMode == "r"
+                ? generator.GenerateFullRandom(settings.BoardSize, settings.BoardSize)
+                : generator.GenerateMirrored(settings.BoardSize, settings.BoardSize);
     }
 
     // ── Bidding methods ───────────────────────────────────────────────────
@@ -110,7 +154,6 @@ public class ServerGame : Game
     public bool SubmitBid(string playerToken, int amount)
     {
         if (Bidding == null) return false;
-        if (amount < 0) return false;
 
         bool isCreator = playerToken == WhitePlayerToken;  // creator holds white token initially
         bool isJoiner  = playerToken == BlackPlayerToken;

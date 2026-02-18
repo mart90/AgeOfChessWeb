@@ -23,16 +23,22 @@ public class GameCreationService(AppDbContext db, GameSessionManager sessions)
     public async Task<(GameSession Session, ServerGame Game)> CreateAsync(
         GameSettings settings,
         PlayerInfo? white = null,
-        PlayerInfo? black = null)
+        PlayerInfo? black = null,
+        bool isPrivate = false)
     {
         white ??= new PlayerInfo();
         black ??= new PlayerInfo();
 
         var session = new GameSession
         {
-            SettingsJson = JsonSerializer.Serialize(settings),
-            WhiteUserId  = white.UserId,
-            BlackUserId  = black.UserId,
+            SettingsJson         = JsonSerializer.Serialize(settings),
+            WhiteUserId          = white.UserId,
+            BlackUserId          = black.UserId,
+            BoardSize            = settings.BoardSize,
+            TimeControlEnabled   = settings.TimeControlEnabled,
+            StartTimeMinutes     = settings.StartTimeMinutes,
+            TimeIncrementSeconds = settings.TimeIncrementSeconds,
+            IsPrivate            = isPrivate,
         };
         db.GameSessions.Add(session);
         await db.SaveChangesAsync();   // get session.Id

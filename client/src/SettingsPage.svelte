@@ -12,8 +12,15 @@
 
   onMount(() => {
     if (!authState.token) { navigate('/login'); return; }
+  });
+
+  // authState.user is loaded asynchronously in App.svelte — use $effect so the
+  // form initialises correctly even if the fetch completes after onMount runs.
+  let _formInitialized = false;
+  $effect(() => {
     const u = authState.user;
-    if (u) {
+    if (u && !_formInitialized) {
+      _formInitialized = true;
       sameAsUsername = u.displayName == null;
       displayName    = u.displayName ?? '';
     }
@@ -33,9 +40,6 @@
     }
   }
 
-  function ratingLabel(elo, games) {
-    return games === 0 ? `${elo} (unrated)` : `${elo} (${games} game${games === 1 ? '' : 's'})`;
-  }
 </script>
 
 <main>
@@ -75,20 +79,6 @@
         </button>
       </form>
     </section>
-
-    {#if authState.user}
-      <section class="card">
-        <h2>Ratings</h2>
-        <div class="ratings-grid">
-          <span class="cat">Blitz</span>
-          <span class="elo">{ratingLabel(authState.user.eloBlitz, authState.user.blitzGamesPlayed)}</span>
-          <span class="cat">Rapid</span>
-          <span class="elo">{ratingLabel(authState.user.eloRapid, authState.user.rapidGamesPlayed)}</span>
-          <span class="cat">Slow</span>
-          <span class="elo">{ratingLabel(authState.user.eloSlow, authState.user.slowGamesPlayed)}</span>
-        </div>
-      </section>
-    {/if}
 
   {/if}
 </main>
@@ -173,12 +163,4 @@
   .success { color: #7cfc00; font-size: 0.85rem; margin: 0; }
   .muted   { color: #666; }
 
-  .ratings-grid {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.4rem 1rem;
-    font-size: 0.92rem;
-  }
-  .cat  { color: #aaa; }
-  .elo  { color: #eee; font-variant-numeric: tabular-nums; }
 </style>

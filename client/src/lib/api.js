@@ -30,6 +30,33 @@ export async function getMyGames() {
   return res.json();
 }
 
+export async function generateSandboxBoard(size, isRandom, seed = null) {
+  const res = await fetch('/api/sandbox/board', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ size, isRandom, seed }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json(); // { mapSeed, mapSize, squares }
+}
+
+export async function getOpenLobbies() {
+  const res = await authFetch('/api/game/open-lobbies');
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function joinLobby(gameId) {
+  const res = await authFetch(`/api/game/${gameId}/join`, { method: 'POST' });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json(); // { gameId, blackPlayerToken }
+}
+
+export async function cancelChallenge(gameId) {
+  const res = await authFetch(`/api/game/${gameId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 export async function getGameToken(gameId) {
   const res = await authFetch(`/api/game/${gameId}/token`);
   if (!res.ok) throw new Error(await res.text());
@@ -42,10 +69,11 @@ export async function getGame(gameId) {
   return res.json();
 }
 
-export async function getProfile(username) {
-  const res = await fetch(`/api/user/${encodeURIComponent(username)}`);
+export async function getProfile(username, startIndex = 0, sortCol = 'endedAt', sortDir = 'desc', category = 'all') {
+  const params = new URLSearchParams({ startIndex, sortCol, sortDir, category });
+  const res = await fetch(`/api/user/${encodeURIComponent(username)}?${params}`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json(); // { username, displayName, stats, games }
+  return res.json(); // { username, displayName, stats, games, totalGames }
 }
 
 // ── Auth API ─────────────────────────────────────────────────────────────────
