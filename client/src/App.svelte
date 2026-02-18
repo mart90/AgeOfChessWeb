@@ -29,7 +29,7 @@
     if (path === '/')          document.title = `${NAME} - Play`;
     else if (path === '/watch')    document.title = `${NAME} - Watch`;
     else if (path === '/sandbox')  document.title = `${NAME} - Sandbox`;
-    else if (path === '/tutorial') document.title = `${NAME} - Tutorial`;
+    else if (path === '/tutorial') document.title = `${NAME} - Rules`;
     else                           document.title = NAME;
   });
 

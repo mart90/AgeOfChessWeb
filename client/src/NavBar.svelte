@@ -68,7 +68,7 @@
         <button class="mobile-menu-item" onclick={() => navTo('/')}>Play</button>
         <button class="mobile-menu-item" onclick={() => navTo('/watch')}>Watch</button>
         <button class="mobile-menu-item" onclick={() => navTo('/sandbox')}>Sandbox</button>
-        <button class="mobile-menu-item" onclick={() => navTo('/tutorial')}>Tutorial</button>
+        <button class="mobile-menu-item" onclick={() => navTo('/tutorial')}>Rules</button>
       </div>
     {/if}
   </div>
@@ -83,7 +83,7 @@
     <button class="nav-link" onclick={() => navigate('/')}>Play</button>
     <button class="nav-link" onclick={() => navigate('/watch')}>Watch</button>
     <button class="nav-link" onclick={() => navigate('/sandbox')}>Sandbox</button>
-    <button class="nav-link" onclick={() => navigate('/tutorial')}>Tutorial</button>
+    <button class="nav-link" onclick={() => navigate('/tutorial')}>Rules</button>
   </div>
 
   <div class="nav-right">
