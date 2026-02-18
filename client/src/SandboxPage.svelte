@@ -106,17 +106,17 @@
     }
 
     if (baseType === 'Pawn') {
-      // Orthogonal moves: cannot land on real pieces
+      // Orthogonal moves: only empty squares (no captures, not even treasures)
       for (const dir of CARDINAL) {
         const [dx, dy] = DIRS[dir];
         const moves = legalVector(piece, sq, dx, dy, 1, lookup);
-        legal.push(...moves.filter(s => !isRealPiece(s.piece)));
+        legal.push(...moves.filter(s => !s.piece));
       }
-      // Diagonal captures: enemy real pieces only
+      // Diagonal captures: enemy real pieces or GaiaObjects (treasures/flags)
       for (const dir of DIAGONAL) {
         const [dx, dy] = DIRS[dir];
         const moves = legalVector(piece, sq, dx, dy, 1, lookup);
-        legal.push(...moves.filter(s => isRealPiece(s.piece) && s.piece.isWhite !== piece.isWhite));
+        legal.push(...moves.filter(s => s.piece && !(isRealPiece(s.piece) && s.piece.isWhite === piece.isWhite)));
       }
     } else if (baseType === 'Knight') {
       const jumps = [[1,2],[1,-2],[-1,2],[-1,-2],[2,1],[2,-1],[-2,1],[-2,-1]];

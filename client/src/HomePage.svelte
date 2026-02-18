@@ -40,8 +40,8 @@
   let boardSize     = $state(_lb.boardSize ?? 10);
   let boardSizeMin  = $state(_ap.boardSizeMin ?? 8);
   let boardSizeMax  = $state(_ap.boardSizeMax ?? 12);
-  let mapMode       = $state(_lb.mapMode ?? 'm');      // 'm' | 'r'
-  let mapModePref   = $state(_ap.mapModePref ?? 'm');  // 'm' | 'r' | 'any'
+  let mapMode       = $state(_lb.mapMode ?? 'r');      // 'm' | 'r'
+  let mapModePref   = $state(_ap.mapModePref ?? 'r');  // 'm' | 'r' | 'any'
 
   const trackGradient = $derived.by(() => {
     const pct = (v) => ((v - 6) / 10) * 100;

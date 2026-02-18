@@ -30,7 +30,8 @@ public class PathFinder
             legalSquares.AddRange(FindLegalSquaresVector(piece, Direction.South, sourceSquare, checkingForChecks, 1));
             legalSquares.AddRange(FindLegalSquaresVector(piece, Direction.West, sourceSquare, checkingForChecks, 1));
 
-            legalSquares.RemoveAll(e => e.Object != null && e.Object is Piece);
+            // Orthogonal: only empty squares (no captures, not even treasures)
+            legalSquares.RemoveAll(e => e.Object != null);
 
             var legalCaptures = new List<Square>();
             legalCaptures.AddRange(FindLegalSquaresVector(piece, Direction.NorthEast, sourceSquare, checkingForChecks, 1));
@@ -38,7 +39,8 @@ public class PathFinder
             legalCaptures.AddRange(FindLegalSquaresVector(piece, Direction.SouthWest, sourceSquare, checkingForChecks, 1));
             legalCaptures.AddRange(FindLegalSquaresVector(piece, Direction.NorthWest, sourceSquare, checkingForChecks, 1));
 
-            legalCaptures.RemoveAll(e => e.Object == null || !(e.Object is Piece occupyingPiece && occupyingPiece.IsWhite != piece.IsWhite));
+            // Diagonal: enemy pieces or GaiaObjects (treasures/flags) — but not empty, not allied pieces
+            legalCaptures.RemoveAll(e => e.Object == null || (e.Object is Piece occupyingPiece && occupyingPiece.IsWhite == piece.IsWhite));
 
             legalSquares.AddRange(legalCaptures);
         }
