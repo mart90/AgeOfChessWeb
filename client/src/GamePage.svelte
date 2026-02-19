@@ -6,6 +6,7 @@
   import MoveList from './MoveList.svelte';
   import { settings } from './lib/settings.svelte.js';
   import { currentGame } from './lib/currentGame.svelte.js';
+  import { playSound } from './lib/sound.js';
 
   const { gameId } = $props();
 
@@ -286,8 +287,10 @@
     if (!dragging) return;
     if (dragging.type === 'move') {
       hub?.invoke('MakeMove', playerToken, dragging.fromX, dragging.fromY, toX, toY);
+      playSound('move');
     } else if (dragging.type === 'place') {
       hub?.invoke('PlacePiece', playerToken, toX, toY, dragging.code);
+      playSound('move');
     }
     clearDrag();
   }
@@ -306,7 +309,8 @@
         fetchLegalMoves(x, y).then(d => { legalDests = d; });
         return;
       }
-      hub?.invoke('MakeMove', playerToken, selectedSquare.x, selectedSquare.y, x, y);
+      hub?.invoke('MakeMove', playerToken, selectedSquare.x, selectedSquare.y, x, y);      
+      playSound('move');
       selectedSquare = null; legalDests = [];
     } else {
       if (sq?.piece?.isWhite === isWhite) {
@@ -353,6 +357,7 @@
     if (dragging.type === 'place') {
       const sq = globalCursorToBoard(e.clientX, e.clientY);
       if (sq) hub?.invoke('PlacePiece', playerToken, sq.x, sq.y, dragging.code);
+      playSound('move');
     }
     // Board piece drops are handled by onDropOnBoard; this catches drops outside the canvas
     clearDrag();
@@ -463,6 +468,9 @@
 
     hub.on('GameStarted', (state) => {
       // If bidding just resolved and we're the winner, capture the opponent's bid for acknowledgement
+      if (biddingState == null) {
+        playSound('game_started')
+      }
       if (biddingState?.revealedCreatorBid != null && isWhite) {
         const opponentBid = wasCreator
           ? biddingState.revealedJoinerBid
@@ -495,7 +503,13 @@
     hub.on('ChatHistory', (msgs) => {
       chatMessages = msgs;
     });
-    hub.on('BiddingStarted', (b) => { biddingState = b; bidSubmitted = isWhite ? b.creatorBidPlaced : b.joinerBidPlaced; wasCreator = isWhite; statusMsg = ''; inviteUrl = ''; });
+    hub.on('BiddingStarted', (b) => { 
+      biddingState = b; 
+      bidSubmitted = isWhite ? b.creatorBidPlaced : b.joinerBidPlaced; 
+      wasCreator = isWhite; 
+      statusMsg = ''; inviteUrl = '';
+      playSound('game_started') 
+    });
     hub.on('BidPlaced',      (b) => { biddingState = b; });
     hub.on('ColorAssigned',  (white) => {
       isWhite = white;

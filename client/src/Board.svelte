@@ -39,7 +39,6 @@
   // ── Sprite helpers ──────────────────────────────────────────────────────
 
   function getPieceSprite(piece) {
-    if (piece.type === 'WhiteFlag' || piece.type === 'BlackFlag') return '/assets/objects/white_flag.png';
     if (piece.type === 'Treasure') return '/assets/objects/treasure.png';
     const c = piece.isWhite ? 'w' : 'b';
     const n = piece.type.replace(/^(White|Black)/, '').toLowerCase();

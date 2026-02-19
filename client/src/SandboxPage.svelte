@@ -3,6 +3,7 @@
   import Board from './Board.svelte';
   import { currentGame } from './lib/currentGame.svelte.js';
   import { generateSandboxBoard } from './lib/api.js';
+  import { playSound } from './lib/sound.js';
 
   // ── Shop config (no King) ───────────────────────────────────────────────────
   const SHOP = [
@@ -318,6 +319,8 @@
     });
     squares = newSquares;
 
+    playSound('move');
+
     // Mine income for newly active player
     const nextWhite = !piece.isWhite;
     const income = newSquares
@@ -347,7 +350,9 @@
     squares = squares.map(s => {
       if (s.x === pos.x && s.y === pos.y) return { ...s, piece: { type: pieceType, isWhite: isWhitePiece } };
       return s;
-    });
+    });    
+    
+    playSound('move');
   }
 
   function removePieceAt(pos) {

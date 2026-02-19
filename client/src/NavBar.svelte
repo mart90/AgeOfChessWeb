@@ -3,6 +3,7 @@
   import { authState, clearAuth }      from './lib/auth.svelte.js';
   import { navigate }                  from './lib/navigate.js';
   import { currentGame }               from './lib/currentGame.svelte.js';
+  import { setVolume }               from './lib/sound.js';
 
   let settingsOpen  = $state(false);
   let menuOpen      = $state(false);
@@ -27,6 +28,18 @@
 
   function toggleCoords() {
     settings.showCoordinates = !settings.showCoordinates;
+    persistSettings();
+  }
+
+  function toggleMute() {
+    settings.muteSounds = !settings.muteSounds;
+    if (settings.muteSounds)
+    {
+      setVolume(0);
+    }
+    else {
+      setVolume(1);
+    }
     persistSettings();
   }
 
@@ -94,6 +107,10 @@
           <label class="dropdown-item">
             <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
             Show coordinates
+          </label>
+          <label class="dropdown-item">
+            <input type="checkbox" checked={settings.muteSounds} onchange={toggleMute} />
+            Mute sounds
           </label>
           <button
             class="dropdown-btn dropdown-item"
