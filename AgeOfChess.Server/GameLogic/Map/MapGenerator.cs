@@ -57,21 +57,46 @@ public class MapGenerator
 
         MakeBaseSquares();
 
-        AddRandomlyGeneratedSquares(SquareType.DirtRocks, 0.02, false);
-        AddRandomlyGeneratedSquares(SquareType.GrassRocks, 0.02, false);
-        AddRandomlyGeneratedSquares(SquareType.DirtTrees, 0.02, false);
-        AddRandomlyGeneratedSquares(SquareType.GrassTrees, 0.02, false);
-        AddRandomlyGeneratedSquares(SquareType.DirtMine, 0.02, false);
-        AddRandomlyGeneratedSquares(SquareType.GrassMine, 0.02, false);
+        int density = 1;
 
-        if (width == 12 || width == 10)
+        if (width == 8)
         {
-            AddRandomlyGeneratedSquares(SquareType.GrassMine, 0.00001, false);
-            AddRandomlyGeneratedSquares(SquareType.GrassRocks, 0.00001, false);
-            AddRandomlyGeneratedSquares(SquareType.GrassTrees, 0.00001, false);
+            density = 1;
+        }
+        else if (width == 10)
+        {
+            density = 2;
+        }
+        else if (width == 12)
+        {
+            density = 3;
+        }
+        else if (width == 14)
+        {
+            density = 4;
+        }
+        else if (width == 16)
+        {
+            density = 5;
         }
 
-        AddRandomlyGeneratedGaiaObjects<Treasure>(0.02, false);
+        AddRandomlyGeneratedSquares(SquareType.DirtRocks, density, false);
+        AddRandomlyGeneratedSquares(SquareType.GrassRocks, density, false);
+        AddRandomlyGeneratedSquares(SquareType.DirtTrees, density, false);
+        AddRandomlyGeneratedSquares(SquareType.GrassTrees, density, false);
+        AddRandomlyGeneratedSquares(SquareType.DirtMine, density - (width == 16 ? 1 : 0), false);
+        AddRandomlyGeneratedSquares(SquareType.GrassMine, density - (width == 16 ? 1 : 0), false);
+        
+        bool addOne = width == 8 || width == 10 || width == 16;
+
+        if (addOne)
+        {
+            AddRandomlyGeneratedSquares(SquareType.GrassRocks, 1, false);
+            AddRandomlyGeneratedSquares(SquareType.GrassTrees, 1, false);
+            AddRandomlyGeneratedSquares(SquareType.GrassMine, 1, false);
+        }
+
+        AddRandomlyGeneratedGaiaObjects<Treasure>(density * 2 + (addOne ? 1 : 0), false);
 
         SpawnKings(false);
 
@@ -202,7 +227,46 @@ public class MapGenerator
     {
         var emptySquares = _map.GetSquaresByType(SquareType.Dirt).Concat(_map.GetSquaresByType(SquareType.Grass));
         int amountToAdd = (int)Math.Round(fractionOfEmptySquares * emptySquares.Count() * (isMirrored ? 1 : 2));
+
         if (amountToAdd < 2) amountToAdd = 2;
+
+        for (int i = 0; i < amountToAdd; i++)
+        {
+            if (isMirrored)
+            {
+                _map.GetRandomEmptySquare(0, _map.Height * _map.Width / 2 - 1).SetObject(new T());             
+            }
+            else // Full random
+            {
+                _map.GetRandomEmptySquare(0, _map.Height * _map.Width - 1).SetObject(new T());
+            }
+        }
+    }
+
+    public void AddRandomlyGeneratedSquares(SquareType squareType, int amount, bool isMirrored = true)
+    {
+        int amountToAdd = (int)Math.Round(amount * (isMirrored ? 0.5 : 1));
+
+        var unoccupiedType = squareType is SquareType.DirtRocks or SquareType.DirtMine or SquareType.DirtTrees
+            ? SquareType.Dirt
+            : SquareType.Grass;
+
+        for (int i = 0; i < amountToAdd; i++)
+        {
+            if (isMirrored)
+            {
+                _map.GetRandomSquareOfType(unoccupiedType, 0, _map.Height * _map.Width / 2 - 1).SetType(squareType);                
+            }
+            else // Full random
+            {
+                _map.GetRandomSquareOfType(unoccupiedType, 0, _map.Height * _map.Width - 1).SetType(squareType); 
+            }
+        }
+    }
+
+    public void AddRandomlyGeneratedGaiaObjects<T>(int amount, bool isMirrored = true) where T : GaiaObject, new()
+    {
+        int amountToAdd = (int)Math.Round(amount * (isMirrored ? 0.5 : 1));
 
         for (int i = 0; i < amountToAdd; i++)
         {

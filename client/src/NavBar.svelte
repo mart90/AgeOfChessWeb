@@ -75,7 +75,7 @@
 
   <button class="logo-btn" onclick={() => navigate('/')}>
     <img src="/assets/other/logo.png" alt="" class="logo-img" />
-    <span class="logo-text">Goldrush Gambit</span>
+    <span class="logo-text"><span class="logo-gold">Gold</span>rushGambit</span>
   </button>
 
   <!-- Desktop nav links: hidden on mobile -->
@@ -214,15 +214,24 @@
     gap: 0.45rem;
     background: none;
     border: none;
-    color: #7b8cde;
-    font-size: 1.1rem;
+    color: #9aaae8;
+    font-size: 1rem;
     font-weight: 700;
-    letter-spacing: 0.02em;
     padding: 0;
     cursor: pointer;
     white-space: nowrap;
   }
-  .logo-btn:hover { color: #a0b0ff; }
+  .logo-btn:hover { color: #b8c5ff; }
+  .logo-text {
+    font-family: 'Cinzel Decorative', serif;
+    letter-spacing: 0.01em;
+  }
+  .logo-gold {
+    color: #d4a017;
+  }
+  .logo-btn:hover .logo-gold {
+    color: #e8b820;
+  }
   .logo-img {
     width: 28px;
     height: 28px;
