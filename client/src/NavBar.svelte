@@ -3,7 +3,7 @@
   import { authState, clearAuth }      from './lib/auth.svelte.js';
   import { navigate }                  from './lib/navigate.js';
   import { currentGame }               from './lib/currentGame.svelte.js';
-  import { setVolume }               from './lib/sound.js';
+  import { setVolume }                 from './lib/sound.js';
 
   let settingsOpen  = $state(false);
   let menuOpen      = $state(false);
@@ -88,7 +88,7 @@
 
   <button class="logo-btn" onclick={() => navigate('/')}>
     <img src="/assets/other/logo.png" alt="" class="logo-img" />
-    <span class="logo-text"><span class="logo-gold">Gold</span>rushGambit</span>
+    <span class="logo-text"><span class="logo-gold">Gold</span>rush Gambit</span>
   </button>
 
   <!-- Desktop nav links: hidden on mobile -->
