@@ -482,6 +482,10 @@
     });
     hub.on('StateUpdated', (state) => {
       stateHistory = [...stateHistory, state];
+      if (gameState.moves.length < state.moves.length && !isMyTurn) {
+        // Opponent played a move
+        playSound('move');
+      }
       gameState = state; syncLocalTimes(state); clearDrag(); resignPending = false;
       // Return to live mode so the player can interact (their turn may have come up)
       if (replayIndex !== null) replayIndex = null;
