@@ -322,18 +322,20 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
     public async Task<IActionResult> GetGame(int gameId)
     {
         var session = await db.GameSessions.FindAsync(gameId);
-        if (session == null) return NotFound();
+        if (session == null) return NotFound();        
 
-        // If the game is still live, return current in-memory state
-        var liveGame = sessions.GetById(gameId);
-        if (liveGame != null)
-            return Ok(GameStateDtoBuilder.Build(liveGame));
+        if (session.EndedAt == null) {
+            // If the game is still live, return current in-memory state
+            var liveGame = sessions.GetById(gameId);
+            if (liveGame != null)
+                return Ok(GameStateDtoBuilder.Build(liveGame));
 
-        // Game was in progress when the server restarted — in-memory state is lost
-        if (session.Result == GameResult.InProgress)
-            return Ok(new { serverRestarted = true });
+            // Game was in progress when the server restarted — in-memory state is lost
+            if (session.Result == GameResult.InProgress)
+                return Ok(new { serverRestarted = true });
+        }
 
-        // Game is over — return the stored state for replay
+        // Game is over
         return Ok(new
         {
             session.MapSeed,

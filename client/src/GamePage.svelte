@@ -467,10 +467,10 @@
     });
 
     hub.on('GameStarted', (state) => {
-      // If bidding just resolved and we're the winner, capture the opponent's bid for acknowledgement
       if (biddingState == null) {
         playSound('game_started')
       }
+      // If bidding just resolved and we're the winner, capture the opponent's bid for acknowledgement
       if (biddingState?.revealedCreatorBid != null && isWhite) {
         const opponentBid = wasCreator
           ? biddingState.revealedJoinerBid
