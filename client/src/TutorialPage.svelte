@@ -19,7 +19,7 @@
           on them.</li>
       <li><strong>Trees</strong> block movement along files and diagonals but pieces can stand
           on them.</li>
-      <li><strong>Mines</strong> (rocks with gold in them) work the same as trees.</li>
+      <li><strong>Mines</strong> (rocks with gold in them) block movement along diagonals, but can be occupied.</li>
       <li>New pieces can be bought for gold.</li>
       <li>New pieces can only be placed around your king, with the exception of pawns which can
           be placed around any major piece. Pieces can't be placed on top of enemy pieces.</li>
@@ -28,14 +28,15 @@
     <h3>Additional win conditions</h3>
     <p>Two additional win conditions compared to regular Chess:</p>
     <ul>
-      <li>If a player gets to 150 gold, they win the game.</li>
+      <li>If a player reaches 150 gold, they win the game.</li>
       <li>Stalemate wins the game instead of drawing it.</li>
     </ul>
 
     <h3>Economy</h3>
     <ul>
+      <li>Players get 1 gold at the start of each turn.</li>
       <li>Treasures give 20 gold once.</li>
-      <li>Mines occupied by your pieces give 5 gold each at the start of your turn.</li>
+      <li>Mines occupied by a player's piece give 5 gold each at the start of their turn.</li>
     </ul>
 
     <h3>Bidding</h3>

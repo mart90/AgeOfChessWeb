@@ -4,141 +4,15 @@
   import { currentGame } from './lib/currentGame.svelte.js';
   import { generateSandboxBoard } from './lib/api.js';
   import { playSound } from './lib/sound.js';
-
-  // ── Shop config (no King) ───────────────────────────────────────────────────
-  const SHOP = [
-    { type: 'Queen',  cost: 70 },
-    { type: 'Rook',   cost: 35 },
-    { type: 'Bishop', cost: 26 },
-    { type: 'Knight', cost: 28 },
-    { type: 'Pawn',   cost: 20 },
-  ];
-  const CAPTURE_VALUE = { Queen: 30, Rook: 20, Bishop: 15, Knight: 15, Pawn: 5, King: 0, Treasure: 20, WhiteFlag: 0 };
+  import { computeLegalMoves, isRealPiece, basePieceType, isRocks } from './lib/pathFinder.js';
+  import { findMoves } from './lib/analysis.js'
+  import { SHOP } from './lib/shop.js'
 
   function pieceImgSrc(type, isWhite) {
     if (type === 'Treasure') return '/assets/objects/treasure.png';
     if (type === 'WhiteFlag' || type === 'BlackFlag') return '/assets/objects/white_flag.png';
     const n = type.replace(/^(White|Black)/, '').toLowerCase();
     return `/assets/objects/${isWhite ? 'w' : 'b'}_${n}.png`;
-  }
-
-  // ── Client-side move legality (ported from PathFinder.cs) ─────────────────
-
-  const DIRS = {
-    N:  [ 0, -1], NE: [ 1, -1], E:  [ 1,  0], SE: [ 1,  1],
-    S:  [ 0,  1], SW: [-1,  1], W:  [-1,  0], NW: [-1, -1],
-  };
-  const CARDINAL = ['N', 'E', 'S', 'W'];
-  const DIAGONAL = ['NE', 'SE', 'SW', 'NW'];
-  const ALL8     = [...CARDINAL, ...DIAGONAL];
-
-  function isRocks(type) {
-    return type === 'DirtRocks' || type === 'GrassRocks';
-  }
-  function isResource(type) {
-    return type === 'DirtMine' || type === 'GrassMine' || type === 'DirtTrees' || type === 'GrassTrees';
-  }
-  // A "real piece" is a moveable chess piece — NOT a Treasure or WhiteFlag (GaiaObjects)
-  function isRealPiece(p) {
-    if (!p) return false;
-    const t = p.type;
-    return t !== 'Treasure' && t !== 'WhiteFlag' && t !== 'BlackFlag';
-  }
-  function basePieceType(type) {
-    return type.replace(/^(White|Black)/, '');
-  }
-
-  /**
-   * Port of PathFinder.FindLegalSquaresVector.
-   * Returns SquareDtos that are reachable in this direction.
-   * maxSteps = null → unlimited (sliding piece)
-   */
-  function legalVector(piece, sq, dx, dy, maxSteps, lookup) {
-    const legal = [];
-    let cx = sq.x + dx, cy = sq.y + dy, steps = 0;
-
-    while (maxSteps === null || steps < maxSteps) {
-      const cur = lookup.get(`${cx},${cy}`);
-      if (!cur) break;                  // off board
-
-      if (isRocks(cur.type)) break;     // rocks block everything
-
-      if (isResource(cur.type)) {
-        // Allied real piece on a resource square → stop (don't add)
-        if (isRealPiece(cur.piece) && cur.piece.isWhite === piece.isWhite) break;
-        // Otherwise (empty, treasure, or enemy) → add and stop
-        legal.push(cur);
-        break;
-      }
-
-      if (cur.piece) {
-        if (isRealPiece(cur.piece)) {
-          if (cur.piece.isWhite === piece.isWhite) break; // friendly → stop
-        }
-        // Enemy piece or GaiaObject (Treasure etc.) → add and stop
-        legal.push(cur);
-        break;
-      }
-
-      // Empty passable square
-      legal.push(cur);
-      steps++;
-      cx += dx;
-      cy += dy;
-    }
-    return legal;
-  }
-
-  function computeLegalMoves(sq) {
-    if (!sq?.piece || !isRealPiece(sq.piece)) return [];
-    const piece    = sq.piece;
-    const baseType = basePieceType(piece.type);
-
-    const lookup = new Map();
-    for (const s of squares) lookup.set(`${s.x},${s.y}`, s);
-
-    const legal = [];
-
-    function slide(dirs, maxSteps = null) {
-      for (const dir of dirs) {
-        const [dx, dy] = DIRS[dir];
-        legal.push(...legalVector(piece, sq, dx, dy, maxSteps, lookup));
-      }
-    }
-
-    if (baseType === 'Pawn') {
-      // Orthogonal moves: only empty squares (no captures, not even treasures)
-      for (const dir of CARDINAL) {
-        const [dx, dy] = DIRS[dir];
-        const moves = legalVector(piece, sq, dx, dy, 1, lookup);
-        legal.push(...moves.filter(s => !s.piece));
-      }
-      // Diagonal captures: enemy real pieces or GaiaObjects (treasures/flags)
-      for (const dir of DIAGONAL) {
-        const [dx, dy] = DIRS[dir];
-        const moves = legalVector(piece, sq, dx, dy, 1, lookup);
-        legal.push(...moves.filter(s => s.piece && !(isRealPiece(s.piece) && s.piece.isWhite === piece.isWhite)));
-      }
-    } else if (baseType === 'Knight') {
-      const jumps = [[1,2],[1,-2],[-1,2],[-1,-2],[2,1],[2,-1],[-2,1],[-2,-1]];
-      for (const [dx, dy] of jumps) {
-        const dest = lookup.get(`${sq.x + dx},${sq.y + dy}`);
-        if (!dest) continue;
-        if (isRocks(dest.type)) continue;
-        if (isRealPiece(dest.piece) && dest.piece.isWhite === piece.isWhite) continue;
-        legal.push(dest);
-      }
-    } else if (baseType === 'King') {
-      slide(ALL8, 1);
-    } else if (baseType === 'Rook') {
-      slide(CARDINAL);
-    } else if (baseType === 'Bishop') {
-      slide(DIAGONAL);
-    } else if (baseType === 'Queen') {
-      slide(ALL8);
-    }
-
-    return legal.map(s => ({ x: s.x, y: s.y }));
   }
 
   // ── Board state ─────────────────────────────────────────────────────────────
@@ -275,6 +149,16 @@
     }
   }
 
+  async function analyzePosition() {
+    let bestMove = findMoves(squares, whiteGold, blackGold, whiteIsActive);
+    if (bestMove.type == "m") {
+      applyMove(bestMove.fromPos, bestMove.toPos);
+    }
+    else {
+      placePieceAt(bestMove.toPos, bestMove.pieceType, whiteIsActive);
+    }
+  }
+
   function clearPieces() {
     if (!squares.length) return;
     pushHistory();
@@ -305,11 +189,10 @@
     const piece = fromSq.piece;
     let wg = whiteGold, bg = blackGold;
 
-    // Capture: only real pieces yield gold; treasures give nothing and disappear
     if (toSq?.piece) {
-      const baseT = basePieceType(toSq.piece.type);
-      const val = CAPTURE_VALUE[baseT] ?? 5;
-      if (piece.isWhite) wg += val; else bg += val;
+      if (toSq.piece.type == "Treasure") {
+        if (piece.isWhite) wg += 20; else bg += 20;
+      }
     }
 
     const newSquares = squares.map(s => {
@@ -327,6 +210,8 @@
       .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
       .length * 5;
     if (nextWhite) wg += income; else bg += income;
+
+    if (nextWhite) wg++; else bg++;
 
     whiteGold     = wg;
     blackGold     = bg;
@@ -353,6 +238,17 @@
     });    
     
     playSound('move');
+
+    // Mine income for newly active player
+    const nextWhite = !isWhitePiece;
+    const income = squares
+      .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
+      .length * 5;
+    if (nextWhite) whiteGold += income; else blackGold += income;
+    
+    if (nextWhite) whiteGold++; else blackGold++;
+
+    whiteIsActive = nextWhite;
   }
 
   function removePieceAt(pos) {
@@ -405,7 +301,7 @@
     const sq = sqAt({ x, y });
     if (sq?.piece && isRealPiece(sq.piece)) {
       selectedSqPos = { x, y };
-      legalDests    = computeLegalMoves(sq);
+      legalDests    = computeLegalMoves(sq, squares);
     } else {
       clearSelection();
     }
@@ -415,7 +311,7 @@
     const sq = sqAt({ x, y });
     if (!sq?.piece || !isRealPiece(sq.piece)) return;
     selectedSqPos = { x, y };
-    legalDests    = computeLegalMoves(sq);
+    legalDests    = computeLegalMoves(sq, squares);
     const imgSrc  = pieceImgSrc(sq.piece.type, sq.piece.isWhite);
     dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
   }
@@ -616,6 +512,9 @@
       <button class="action-btn" onclick={generateMap}
               disabled={generating || !seedInputValid}>
         {generating ? 'Generating…' : 'Generate new map'}
+      </button>
+      <button class="action-btn" onclick={analyzePosition}>
+        Analyze
       </button>
     </div>
 

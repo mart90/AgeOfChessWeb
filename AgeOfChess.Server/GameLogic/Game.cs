@@ -21,11 +21,11 @@ public abstract class Game
 
     private static readonly Dictionary<Type, int> PieceCosts = new()
     {
-        [typeof(Queen)]  = 70,
-        [typeof(Rook)]   = 35,
-        [typeof(Bishop)] = 26,
-        [typeof(Knight)] = 28,
-        [typeof(Pawn)]   = 20,
+        [typeof(Queen)]  = 78,
+        [typeof(Rook)]   = 40,
+        [typeof(Bishop)] = 30,
+        [typeof(Knight)] = 33,
+        [typeof(Pawn)]   = 28,
     };
 
     public int MapSize => Map.Width;
@@ -88,6 +88,8 @@ public abstract class Game
 
         if (!FirstMoveMade)
             FirstMoveMade = true;
+
+        ActiveColor.Gold++;
 
         // Mine income: +5 gold for each mine occupied by the active player
         foreach (var square in Map.GetMines())
