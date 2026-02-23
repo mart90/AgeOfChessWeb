@@ -24,3 +24,10 @@ export function setVolume(volume) {
     sound.volume = volume; // 0.0 - 1.0
   });
 }
+
+export function stopClockSound() {
+  if (sounds.clock) {
+    sounds.clock.pause();
+    sounds.clock.currentTime = 0;
+  }
+}

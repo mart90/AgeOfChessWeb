@@ -1,30 +1,42 @@
+<script>
+  import { SHOP } from './lib/shop.js';
+
+  const costs = SHOP.map(s => s.cost);
+  const minCost = Math.min(...costs);
+  const maxCost = Math.max(...costs);
+  const cheapest = SHOP.find(s => s.cost === minCost)?.type.toLowerCase();
+  const mostExpensive = SHOP.find(s => s.cost === maxCost)?.type.toLowerCase();
+</script>
+
 <div class="page">
   <div class="content">
-
-    <p class="lead">
-      Goldrush Gambit is a variant of Chess with randomly generated obstacles on the board, and where you start with a lonely king and will need to
-      hire pieces for gold. You earn gold by collecting treasures and occupying mines
-      with any piece.
-    </p>
-
-    <hr />
-
-    <h2>Full rules</h2>
-
-    <h3>Piece movement &amp; placement</h3>
+    <h3>Economy</h3>
     <ul>
-      <li>The pieces move like in Chess with one exception: Pawns can move any direction in a
-          straight line, and capture any direction diagonally.</li>
-      <li><strong>Rocks</strong> block movement along files and diagonals and nothing can stand
-          on them.</li>
-      <li><strong>Trees</strong> block movement along files and diagonals but pieces can stand
-          on them.</li>
-      <li><strong>Mines</strong> (rocks with gold in them) block movement along diagonals, but can be occupied.</li>
-      <li>New pieces can be bought for gold.</li>
-      <li>New pieces can only be placed around your king, with the exception of pawns which can
-          be placed around any major piece. Pieces can't be placed on top of enemy pieces.</li>
+      <li>Players get 1 gold at the start of each turn.</li>
+      <li>Capturing a treasure earns 20 gold.</li>
+      <li>Mines owned by a player earn 5 gold each at the start of their turn.</li>
+      <li>When a piece moves onto a mine, the mine becomes owned by that player.</li>
+      <li>New pieces cost gold, ranging from {minCost} gold for a {cheapest} to {maxCost} gold for a {mostExpensive}.</li>
     </ul>
 
+    <h3>Piece movement</h3>
+    <ul>
+      <li>Major pieces move as in Chess.</li>
+      <li>Pawns can move any direction in a straight line, and capture any direction diagonally.</li>
+      <li><strong>Rocks</strong> block movement along files and diagonals and nothing can stand
+          on them.</li>
+      <li><strong>Forests</strong> block movement along files and diagonals, but can be occupied.</li>
+      <li><strong>Mines</strong> (rocks with gold in them) affect movement the same way forests do.</li>
+    </ul>
+
+    <h3>Piece placement</h3>
+    <ul>
+      <li>Instead of moving a piece, a new piece can be placed on the board.</li>
+      <li>New major pieces can only be placed around the king.</li>
+      <li>Pawns can be placed around any major piece.</li> 
+      <li>Pieces can't be placed on top of enemy pieces or treasures.</li>
+    </ul>
+    
     <h3>Additional win conditions</h3>
     <p>Two additional win conditions compared to regular Chess:</p>
     <ul>
@@ -32,20 +44,13 @@
       <li>Stalemate wins the game instead of drawing it.</li>
     </ul>
 
-    <h3>Economy</h3>
-    <ul>
-      <li>Players get 1 gold at the start of each turn.</li>
-      <li>Treasures give 20 gold once.</li>
-      <li>Mines occupied by a player's piece give 5 gold each at the start of their turn.</li>
-    </ul>
-
     <h3>Bidding</h3>
     <p>
       With bidding enabled, both players secretly bid gold for the right to play White. The higher
-      bidder wins White and their bid is added to Black's starting gold.
+      bidder wins White and their bid becomes Black's starting gold.
     </p>
     <p>
-      Bids can be negative when Black is better, which can happen on full random maps. In that
+      Bids can be negative when Black is better, which can happen on full random boards. In that
       case, Black starts with negative gold.
     </p>
     <p class="example">

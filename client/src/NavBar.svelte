@@ -31,17 +31,16 @@
     persistSettings();
   }
 
-  function toggleMute() {
-    settings.muteSounds = !settings.muteSounds;
-    if (settings.muteSounds)
-    {
-      setVolume(0);
-    }
-    else {
-      setVolume(1);
-    }
+  function handleVolumeChange(e) {
+    settings.volume = parseInt(e.target.value, 10);
+    setVolume(settings.volume / 100);  // Convert 0-100 to 0.0-1.0
     persistSettings();
   }
+
+  // Initialize volume on load
+  $effect(() => {
+    setVolume(settings.volume / 100);
+  });
 
   let seedCopied = $state(false);
   let _seedCopiedTimer = null;
@@ -95,8 +94,9 @@
   <div class="nav-center">
     <button class="nav-link" onclick={() => navigate('/')}>Play</button>
     <button class="nav-link" onclick={() => navigate('/watch')}>Watch</button>
-    <button class="nav-link" onclick={() => navigate('/sandbox')}>Sandbox</button>
-    <button class="nav-link" onclick={() => navigate('/tutorial')}>Rules</button>
+    <button class="nav-link" onclick={() => navigate('/analyze')}>Analyze</button>
+    <button class="nav-link" onclick={() => navigate('/rules')}>Rules</button>
+    <button class="nav-link" onclick={() => navigate('/about')}>About</button>
   </div>
 
   <div class="nav-right">
@@ -108,16 +108,25 @@
             <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
             Show coordinates
           </label>
-          <label class="dropdown-item">
-            <input type="checkbox" checked={settings.muteSounds} onchange={toggleMute} />
-            Mute sounds
-          </label>
+          <div class="dropdown-item volume-item">
+            <div class="volume-label">
+              Volume
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={settings.volume}
+              oninput={handleVolumeChange}
+              class="volume-slider"
+            />
+          </div>
           <button
             class="dropdown-btn dropdown-item"
             disabled={!currentGame.mapSeed}
             onclick={copyMapSeed}
           >
-            {seedCopied ? 'Copied!' : 'Copy map seed'}
+            {seedCopied ? 'Copied!' : 'Copy board seed'}
           </button>
         </div>
       {/if}
@@ -300,6 +309,56 @@
     user-select: none;
   }
   .dropdown-item:hover { background: #2a2a4a; }
+
+  .volume-item {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.7rem;
+    cursor: default;
+  }
+  .volume-item:hover { background: none; }
+
+  .volume-label {
+    font-size: 0.88rem;
+    color: #ddd;
+  }
+
+  .volume-slider {
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: #3a3a5a;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  .volume-slider::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #9aaae8;
+    cursor: pointer;
+  }
+
+  .volume-slider::-webkit-slider-thumb:hover {
+    background: #b8c5ff;
+  }
+
+  .volume-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-radius: 50%;
+    background: #9aaae8;
+    cursor: pointer;
+  }
+
+  .volume-slider::-moz-range-thumb:hover {
+    background: #b8c5ff;
+  }
 
   .dropdown-btn {
     width: 100%;

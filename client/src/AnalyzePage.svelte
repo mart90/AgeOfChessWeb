@@ -5,8 +5,10 @@
   import { generateSandboxBoard } from './lib/api.js';
   import { playSound } from './lib/sound.js';
   import { computeLegalMoves, isRealPiece, basePieceType, isRocks } from './lib/pathFinder.js';
-  import { findMoves } from './lib/analysis.js'
+  import { getBestMove } from './lib/analysis.js'
   import { SHOP } from './lib/shop.js'
+  import AnalysisWorker from './lib/analysisWorker.js?worker';
+  import { settings, persistSettings } from './lib/settings.svelte.js';
 
   function pieceImgSrc(type, isWhite) {
     if (type === 'Treasure') return '/assets/objects/treasure.png';
@@ -31,6 +33,7 @@
   let dragOverSq    = $state(null);
   let lastMoveFrom  = $state(null);
   let lastMoveTo    = $state(null);
+  let hoverSquares  = $state([]);
 
   /**
    * dragging = null
@@ -46,19 +49,193 @@
   const canRedo = $derived(redoStack.length > 0);
 
   // ── Map generation controls ─────────────────────────────────────────────────
-  let genSize    = $state(12);
-  let genRandom  = $state(true);
+  let genSize    = $state(settings.analyzeMapSize);
+  let genRandom  = $state(settings.analyzeFullRandom);
   let seedInput  = $state('');
   let generating = $state(false);
   let genError   = $state('');
 
+  // Persist map settings when changed
+  $effect(() => {
+    settings.analyzeMapSize = genSize;
+    settings.analyzeFullRandom = genRandom;
+    persistSettings();
+  });
+
   const seedInputError = $derived.by(() => {
-    const s = seedInput.trim();
+  const s = seedInput.trim();
     if (!s) return null;
     if (!s.match(/^[mr]_\d+x\d+_[0-9kmrft]+$/)) return 'Invalid seed format';
     return null;
   });
   const seedInputValid = $derived(!seedInput.trim() || seedInputError === null);
+
+  // ── Analysis ────────────────────────────────────────────────────────────────
+  let analyzing      = $state(false);
+  let thinking       = $state(false);
+  let analysisWorker = $state(null);
+  let analysisResults = $state([]);
+  let analysisDepth = $state(0);
+  // let depthTimings = $state([]);
+
+  function startWorker() {
+    if (!analysisWorker) {
+      analysisWorker = new AnalysisWorker();
+
+      analysisWorker.onmessage = (event) => {
+        const { type, depth, topMoves /*, timeMs*/ } = event.data;
+
+        if (type === 'depth-result') {
+          analysisDepth = depth;
+          analysisResults = topMoves;
+          // depthTimings = [...depthTimings, { depth, timeMs }];
+        }
+      };
+    }
+
+    // depthTimings = [];
+    analysisWorker.postMessage({
+      type: 'start',
+      payload: getCurrentPosition()
+    });
+  }
+
+  function getCurrentPosition() {
+    return {
+      squares: squares.map(s => ({
+        x: s.x,
+        y: s.y,
+        type: s.type,
+        piece: s.piece
+          ? { type: s.piece.type, isWhite: s.piece.isWhite }
+          : null,
+        mineOwner: s.mineOwner || null
+      })),
+      whiteGold,
+      blackGold,
+      whiteIsActive
+    };
+  }
+
+  function toggleAnalysis() {
+    analyzing = !analyzing;
+
+    if (analyzing) {
+      continuousAnalysis();
+    } else {
+      stopAnalysis();
+    }
+  }
+
+  function continuousAnalysis() {
+    startWorker();
+  }
+
+  function stopAnalysis() {
+    analysisWorker?.postMessage({ type: 'stop' });
+  }
+
+  async function botMove() {
+    thinking = true;
+    try {
+      let maxPlayouts = 3_000_000;
+      maxPlayouts = maxPlayouts / (squares.length * 1/64); // Stays the same on 8x8 boards. 
+
+      let bestMove = getBestMove(squares, whiteGold, blackGold, whiteIsActive, maxPlayouts);
+      if (bestMove.type == "m") {
+        applyMove(bestMove.fromPos, bestMove.toPos);
+      }
+      else {
+        placePieceAt(bestMove.toPos, bestMove.pieceType, whiteIsActive);
+      }
+    } catch (e) {
+      genError = e.message ?? String(e);
+    } finally {
+      thinking = false;
+    }
+  }
+
+  function toNotation(rawMove) {
+    const move = JSON.parse(JSON.stringify(rawMove)).move;
+
+    function xToLetter(x) {
+      return String.fromCharCode(97 + x); // 0 -> 'a'
+    }
+
+    // Piece placement
+    if (move.type === "p") {
+      const pieceMap = {
+        Pawn: "p",
+        Queen: "Q",
+        Rook: "R",
+        Bishop: "B",
+        Knight: "N",
+        // Add more if needed
+      };
+
+      const pieceDisplay = pieceMap[move.pieceType] || move.pieceType[0].toUpperCase();
+      const file = xToLetter(move.toPos.x);
+      const rank = move.toPos.y + 1;
+
+      return `${file}${rank}=${pieceDisplay}`;
+    }
+
+    // Normal move
+    if (move.type === "m") {
+      const fromFile = xToLetter(move.fromPos.x);
+      const fromRank = move.fromPos.y + 1;
+      const toFile = xToLetter(move.toPos.x);
+      const toRank = move.toPos.y + 1;
+
+      return `${fromFile}${fromRank}-${toFile}${toRank}`;
+    }
+
+    throw new Error("Invalid move type");
+  }
+
+  function parseNotation(notation) {
+    function letterToX(c) {
+      return c.charCodeAt(0) - 97; // 'a' -> 0
+    }
+
+    // Placement: "a1=Q"
+    const place = notation.match(/^([a-z])(\d+)=/);
+    if (place) {
+      return {
+        to: { x: letterToX(place[1]), y: parseInt(place[2]) - 1 }
+      };
+    }
+
+    // Move: "a1-b2"
+    const move = notation.match(/^([a-z])(\d+)-([a-z])(\d+)$/);
+    if (move) {
+      return {
+        from: { x: letterToX(move[1]), y: parseInt(move[2]) - 1 },
+        to: { x: letterToX(move[3]), y: parseInt(move[4]) - 1 }
+      };
+    }
+
+    return null;
+  }
+
+  function handleAnalysisMoveHover(move) {
+    if (!move) {
+      hoverSquares = [];
+      return;
+    }
+
+    const notation = toNotation(move);
+    const parsed = parseNotation(notation);
+    if (!parsed) {
+      hoverSquares = [];
+      return;
+    }
+
+    const result = [];
+    if (parsed.from) result.push(sqAt(parsed.from));
+    if (parsed.to) result.push(sqAt(parsed.to));
+    hoverSquares = result.filter(Boolean);
+  }
 
   // ── Live square lookups ─────────────────────────────────────────────────────
   function sqAt(pos) {
@@ -113,6 +290,15 @@
     redoStack = [...redoStack, snapshot()];
     restoreSnapshot(undoStack[undoStack.length - 1]);
     undoStack = undoStack.slice(0, -1);
+
+    if (analyzing && analysisWorker) {
+      analysisResults = [];  // Clear old results
+      // depthTimings = [];
+      analysisWorker.postMessage({
+        type: 'update',
+        payload: getCurrentPosition()
+      });
+    }
   }
 
   function redo() {
@@ -120,6 +306,15 @@
     undoStack = [...undoStack, snapshot()];
     restoreSnapshot(redoStack[redoStack.length - 1]);
     redoStack = redoStack.slice(0, -1);
+
+    if (analyzing && analysisWorker) {
+      analysisResults = [];  // Clear old results
+      // depthTimings = [];
+      analysisWorker.postMessage({
+        type: 'update',
+        payload: getCurrentPosition()
+      });
+    }
   }
 
   // ── Map generation ──────────────────────────────────────────────────────────
@@ -130,7 +325,7 @@
     try {
       const seed = seedInput.trim() || null;
       const data = await generateSandboxBoard(genSize, genRandom, seed);
-      squares       = data.squares;
+      squares       = data.squares.map(s => ({ ...s, mineOwner: null }));
       mapSize       = data.mapSize;
       mapSeed       = data.mapSeed;
       whiteGold     = 0;
@@ -142,20 +337,17 @@
       undoStack     = [];
       redoStack     = [];
       clearSelection();
+
+      if (analyzing && analysisWorker) {
+        analysisWorker.postMessage({
+          type: 'update',
+          payload: getCurrentPosition()
+        });
+      }
     } catch (e) {
       genError = e.message ?? String(e);
     } finally {
       generating = false;
-    }
-  }
-
-  async function analyzePosition() {
-    let bestMove = findMoves(squares, whiteGold, blackGold, whiteIsActive);
-    if (bestMove.type == "m") {
-      applyMove(bestMove.fromPos, bestMove.toPos);
-    }
-    else {
-      placePieceAt(bestMove.toPos, bestMove.pieceType, whiteIsActive);
     }
   }
 
@@ -164,6 +356,13 @@
     pushHistory();
     squares = squares.map(s => ({ ...s, piece: null }));
     clearSelection();
+
+    if (analyzing && analysisWorker) {
+      analysisWorker.postMessage({
+        type: 'update',
+        payload: getCurrentPosition()
+      });
+    }
   }
 
   // ── Turn management ─────────────────────────────────────────────────────────
@@ -171,12 +370,19 @@
     pushHistory();
     const nextWhite = !whiteIsActive;
     const income = squares
-      .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
+      .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
       .length * 5;
     if (nextWhite) whiteGold = Math.max(0, whiteGold + income);
     else           blackGold = Math.max(0, blackGold + income);
     whiteIsActive = nextWhite;
     clearSelection();
+
+    if (analyzing && analysisWorker) {
+      analysisWorker.postMessage({
+        type: 'update',
+        payload: getCurrentPosition()
+      });
+    }
   }
 
   // ── Move logic ───────────────────────────────────────────────────────────────
@@ -189,6 +395,8 @@
     const piece = fromSq.piece;
     let wg = whiteGold, bg = blackGold;
 
+    const isSameSquare = fromPos.x === toPos.x && fromPos.y === toPos.y;
+    let isCapture = toSq?.piece != null && !isSameSquare;
     if (toSq?.piece) {
       if (toSq.piece.type == "Treasure") {
         if (piece.isWhite) wg += 20; else bg += 20;
@@ -197,17 +405,25 @@
 
     const newSquares = squares.map(s => {
       if (s.x === fromPos.x && s.y === fromPos.y) return { ...s, piece: null };
-      if (s.x === toPos.x   && s.y === toPos.y)   return { ...s, piece };
+      if (s.x === toPos.x   && s.y === toPos.y) {
+        // Capture mine if moving onto one
+        const capturedMine = s.type?.includes('Mine');
+        return {
+          ...s,
+          piece,
+          mineOwner: capturedMine ? (piece.isWhite ? 'white' : 'black') : s.mineOwner
+        };
+      }
       return s;
     });
     squares = newSquares;
 
-    playSound('move');
+    playSound(isCapture ? 'capture' : 'move');
 
-    // Mine income for newly active player
+    // Mine income for newly active player (based on ownership)
     const nextWhite = !piece.isWhite;
     const income = newSquares
-      .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
+      .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
       .length * 5;
     if (nextWhite) wg += income; else bg += income;
 
@@ -218,6 +434,16 @@
     whiteIsActive = nextWhite;
     lastMoveFrom  = fromPos;
     lastMoveTo    = toPos;
+
+    if (analyzing && analysisWorker) {
+      analysisResults = [];  // Clear old results
+      // depthTimings = [];
+      analysisWorker.postMessage({
+        type: 'update',
+        payload: getCurrentPosition()
+      });
+    }
+
     return true;
   }
 
@@ -233,22 +459,39 @@
     else              blackGold -= cost;
 
     squares = squares.map(s => {
-      if (s.x === pos.x && s.y === pos.y) return { ...s, piece: { type: pieceType, isWhite: isWhitePiece } };
+      if (s.x === pos.x && s.y === pos.y) {
+        // Capture mine if placing on one
+        const capturedMine = s.type?.includes('Mine');
+        return {
+          ...s,
+          piece: { type: pieceType, isWhite: isWhitePiece },
+          mineOwner: capturedMine ? (isWhitePiece ? 'white' : 'black') : s.mineOwner
+        };
+      }
       return s;
-    });    
-    
+    });
+
     playSound('move');
 
-    // Mine income for newly active player
+    // Mine income for newly active player (based on ownership)
     const nextWhite = !isWhitePiece;
     const income = squares
-      .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
+      .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
       .length * 5;
     if (nextWhite) whiteGold += income; else blackGold += income;
-    
+
     if (nextWhite) whiteGold++; else blackGold++;
 
     whiteIsActive = nextWhite;
+    lastMoveFrom  = null;
+    lastMoveTo    = pos;
+
+    if (analyzing && analysisWorker) {
+      analysisWorker.postMessage({
+        type: 'update',
+        payload: getCurrentPosition()
+      });
+    }
   }
 
   function removePieceAt(pos) {
@@ -259,6 +502,13 @@
       if (s.x === pos.x && s.y === pos.y) return { ...s, piece: null };
       return s;
     });
+
+    if (analyzing && analysisWorker) {
+      analysisWorker.postMessage({
+        type: 'update',
+        payload: getCurrentPosition()
+      });
+    }
   }
 
   // ── Board coordinate helper (for shop drag hit-testing) ──────────────────
@@ -397,7 +647,7 @@
           selectedSquare={selectedSquare}
           {legalDests}
           dragOverSquare={dragOverSq}
-          hoverSquares={[]}
+          {hoverSquares}
           lastMoveSquares={lastMoveSquares}
           onPieceGrabbed={handleGrab}
           onDropOnBoard={handleDrop}
@@ -408,7 +658,7 @@
       </div>
     {:else}
       <div class="empty-board">
-        <p>Generate a map to start</p>
+        <p>Generate a board to start</p>
       </div>
     {/if}
   </div>
@@ -502,7 +752,7 @@
           class:seed-ok={seedInput.trim() && !seedInputError}
           type="text"
           bind:value={seedInput}
-          placeholder="Paste seed to load a specific map…"
+          placeholder="Paste seed to load a specific board..."
           spellcheck="false"
           autocomplete="off"
         />
@@ -511,11 +761,43 @@
       {#if genError}<p class="error">{genError}</p>{/if}
       <button class="action-btn" onclick={generateMap}
               disabled={generating || !seedInputValid}>
-        {generating ? 'Generating…' : 'Generate new map'}
+        {generating ? 'Generating…' : 'Generate new board'}
       </button>
-      <button class="action-btn" onclick={analyzePosition}>
-        Analyze
+    </div>
+
+    <div class="section">
+      <div class="section-label">Analysis</div>
+      <!-- <button class="action-btn" onclick={botMove}
+              disabled={thinking || analyzing}>
+        {thinking ? "Thinking..." : "Bot move"}
+      </button> -->
+      <button class="action-btn" onclick={toggleAnalysis} disabled={!mapSize}>
+        {analyzing ? "Stop" : "Analyze"}
       </button>
+      {#if analysisResults.length > 0}
+        <div class="analysis-info">
+          <div class="analysis-depth">Depth: {analysisDepth}</div>
+          <div class="analysis-moves">
+            {#each analysisResults as move}
+              <button
+                class="analysis-move"
+                onmouseenter={() => handleAnalysisMoveHover(move)}
+                onmouseleave={() => handleAnalysisMoveHover(null)}
+              >
+                <span class="move-notation">{toNotation(move)}</span>
+                <span class="move-score">{move.score.toFixed(2)}</span>
+              </button>
+            {/each}
+          </div>
+          <!-- {#if depthTimings.length > 0}
+            <div class="depth-timings">
+              {#each depthTimings as { depth, timeMs }}
+                <div>Depth {depth}: {timeMs.toFixed(0)}ms</div>
+              {/each}
+            </div>
+          {/if} -->
+        </div>
+      {/if}
     </div>
 
   </aside>
@@ -668,6 +950,52 @@
   .action-btn:disabled { opacity: 0.45; cursor: default; }
 
   .error { color: #e07070; font-size: 0.8rem; margin: 0; }
+
+  /* ── Analysis ── */
+  .analysis-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.3rem;
+  }
+  .analysis-depth {
+    font-size: 0.82rem;
+    color: #888;
+    padding: 0 0.2rem;
+  }
+  .analysis-moves {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .analysis-move {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.3rem 0.5rem;
+    background: #2d2d4a;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 0.85rem;
+    font-family: 'Courier New', monospace;
+    cursor: default;
+    transition: background 0.1s, border-color 0.1s;
+    width: 100%;
+    text-align: left;
+  }
+  .analysis-move:hover {
+    background: rgba(123, 140, 222, 0.25);
+    border-color: #7b8cde;
+    color: #fff;
+  }
+  .move-notation {
+    flex: 1;
+  }
+  .move-score {
+    color: #f5c518;
+    font-weight: 600;
+  }
 
   /* ── Mobile: stack vertically ── */
   @media (max-width: 640px) {

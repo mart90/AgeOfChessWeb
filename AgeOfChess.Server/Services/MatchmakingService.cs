@@ -241,14 +241,14 @@ public class MatchmakingService : IDisposable
     }
 
     /// <summary>
-    /// "any"+"any" → "r" (full random); "any"+specific → specific; same+same → same.
+    /// "any"+"any" → "m" (mirrored); "any"+specific → specific; same+same → same.
     /// </summary>
     private static string ResolveMapMode(string a, string b)
     {
-        if (a == b) return a == "any" ? "r" : a;
+        if (a == b) return a == "any" ? "m" : a;
         if (a == "any") return b;
         if (b == "any") return a;
-        return "r"; // fallback
+        return "m"; // fallback
     }
 
     private static async Task<string?> GetDisplayNameAsync(AppDbContext db, int? userId)

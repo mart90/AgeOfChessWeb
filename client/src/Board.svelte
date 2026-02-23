@@ -178,18 +178,14 @@
         }
       }
 
-      // Occupied-mine badge: ⚙+5 in top-right corner, drawn over the piece
-      if (sq.type.endsWith('Mine') && sq.piece) {
-        const sz = Math.max(7 * dpr, Math.round(Math.min(cw, ch) * 0.19));
+      // Mine income: +5 in top-right corner (colored by owner)
+      if (sq.type.endsWith('Mine') && sq.mineOwner) {
+        const sz = Math.max(7 * dpr, Math.round(Math.min(cw, ch) * 0.18));
         ctx.font = `bold ${sz}px sans-serif`;
-        ctx.textAlign    = 'right';
+        ctx.textAlign = 'right';
         ctx.textBaseline = 'top';
-        const bx = px + cw - Math.round(2 * dpr);
-        const by = py + Math.round(2 * dpr);
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillText('+5', bx + 1, by + 1);
-        ctx.fillStyle = '#f5c518';
-        ctx.fillText('+5', bx, by);
+        ctx.fillStyle = sq.mineOwner === 'white' ? '#fff' : '#000';
+        ctx.fillText('+5', px + cw - Math.round(3 * dpr), py + Math.round(3 * dpr));
       }
     }
 

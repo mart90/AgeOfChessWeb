@@ -40,8 +40,8 @@
   let boardSize     = $state(_lb.boardSize ?? 10);
   let boardSizeMin  = $state(_ap.boardSizeMin ?? 8);
   let boardSizeMax  = $state(_ap.boardSizeMax ?? 12);
-  let mapMode       = $state(_lb.mapMode ?? 'r');      // 'm' | 'r'
-  let mapModePref   = $state(_ap.mapModePref ?? 'r');  // 'm' | 'r' | 'any'
+  let mapMode       = $state(_lb.mapMode ?? 'm');      // 'm' | 'r'
+  let mapModePref   = $state(_ap.mapModePref ?? 'm');  // 'm' | 'r' | 'any'
 
   const trackGradient = $derived.by(() => {
     const pct = (v) => ((v - 6) / 10) * 100;
@@ -103,7 +103,7 @@
   ];
   // autopair: either a mode index (number) for a specific TC, or a TC_PREFS value (string)
   let autoTimeSel   = $state(_ap.autoTimeSel ?? 'any');
-  let biddingPref   = $state(_ap.biddingPref ?? 'Any');
+  let biddingPref   = $state(_ap.biddingPref ?? 'Disabled');
 
   $effect(() => {
     localStorage.setItem('autopair_settings', JSON.stringify({ autoTimeSel, biddingPref, boardSizeMin, boardSizeMax, mapModePref }));
@@ -352,19 +352,19 @@
     <!-- Map layout -->
     {#if tab === 'lobby'}
       <div class="option-row">
-        <label for="map-mode">Map layout</label>
+        <label for="map-mode">Board generation</label>
         <select id="map-mode" bind:value={mapMode} disabled={seedActive && seedValid}>
           <option value="m">Mirrored</option>
           <option value="r">Full random</option>
         </select>
       </div>
       <div class="option-row seed-row">
-        <label for="map-seed">Map seed</label>
+        <label for="map-seed">Board seed</label>
         <input
           id="map-seed"
           type="text"
           bind:value={mapSeed}
-          placeholder="Paste a seed to replay a map…"
+          placeholder="Paste a seed to replay a generated board"
           spellcheck="false"
           autocomplete="off"
           class:seed-invalid={seedActive && seedError}
@@ -374,7 +374,7 @@
       {#if seedError}<p class="error seed-error">{seedError}</p>{/if}
     {:else}
       <div class="option-row">
-        <label for="map-mode-pref">Map layout</label>
+        <label for="map-mode-pref">Board generation</label>
         <select id="map-mode-pref" bind:value={mapModePref}>
           <option value="m">Mirrored</option>
           <option value="r">Full random</option>

@@ -11,6 +11,7 @@ public class Square
     public bool IsSelected { get; set; }
     public PlaceableObject? Object { get; private set; }
     public SquareColor TemporaryColor { get; private set; }
+    public string? MineOwner { get; private set; } // "white" or "black" or null
 
     public Square(int x, int y, int id)
     {
@@ -42,5 +43,10 @@ public class Square
     public void ClearTemporaryColor()
     {
         TemporaryColor = SquareColor.None;
+    }
+
+    public void SetMineOwner(string? owner)
+    {
+        MineOwner = owner;
     }
 }

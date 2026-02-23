@@ -21,10 +21,10 @@ public abstract class Game
 
     private static readonly Dictionary<Type, int> PieceCosts = new()
     {
-        [typeof(Queen)]  = 78,
+        [typeof(Queen)]  = 76,
         [typeof(Rook)]   = 40,
-        [typeof(Bishop)] = 30,
-        [typeof(Knight)] = 33,
+        [typeof(Bishop)] = 32,
+        [typeof(Knight)] = 32,
         [typeof(Pawn)]   = 28,
     };
 
@@ -91,10 +91,11 @@ public abstract class Game
 
         ActiveColor.Gold++;
 
-        // Mine income: +5 gold for each mine occupied by the active player
+        // Mine income: +5 gold for each mine owned by the active player
         foreach (var square in Map.GetMines())
         {
-            if (square.Object is Piece piece && piece.IsWhite == ActiveColor.IsWhite)
+            var ownerColor = square.MineOwner;
+            if ((ownerColor == "white" && ActiveColor.IsWhite) || (ownerColor == "black" && !ActiveColor.IsWhite))
                 ActiveColor.Gold += 5;
         }
 
@@ -172,6 +173,12 @@ public abstract class Game
             GetPieceColor(piece).Gold += 20;
 
         destinationSquare.SetObject(piece);
+
+        // Capture mine if moving onto one
+        if (destinationSquare.Type == SquareType.GrassMine || destinationSquare.Type == SquareType.DirtMine)
+        {
+            destinationSquare.SetMineOwner(GetPieceColor(piece).IsWhite ? "white" : "black");
+        }
     }
 
     protected void PlacePiece(Square destinationSquare, Type pieceType)
@@ -190,6 +197,12 @@ public abstract class Game
 
         destinationSquare.SetObject(newPiece);
         ActiveColor.Gold -= PieceCosts[pieceType];
+
+        // Capture mine if placing on one
+        if (destinationSquare.Type == SquareType.GrassMine || destinationSquare.Type == SquareType.DirtMine)
+        {
+            destinationSquare.SetMineOwner(ActiveColor.IsWhite ? "white" : "black");
+        }
     }
 
     private PieceColor? CheckForGoldVictory()

@@ -6,19 +6,18 @@
   import MoveList from './MoveList.svelte';
   import { settings } from './lib/settings.svelte.js';
   import { currentGame } from './lib/currentGame.svelte.js';
-  import { playSound } from './lib/sound.js';
+  import { playSound, stopClockSound } from './lib/sound.js';
+  import { SHOP as SHOP_BASE } from './lib/shop.js';
 
   const { gameId } = $props();
 
   // ── Shop pieces ─────────────────────────────────────────────────────────
 
-  const SHOP = [
-    { code: 'q', name: 'Queen',  cost: 70 },
-    { code: 'r', name: 'Rook',   cost: 35 },
-    { code: 'b', name: 'Bishop', cost: 26 },
-    { code: 'n', name: 'Knight', cost: 28 },
-    { code: 'p', name: 'Pawn',   cost: 20 },
-  ];
+  const SHOP = SHOP_BASE.map((item, i) => ({
+    code: ['q', 'r', 'b', 'n', 'p'][i],
+    name: item.type,
+    cost: item.cost
+  }));
 
   // ── Core state ───────────────────────────────────────────────────────────
 
@@ -47,6 +46,7 @@
   let localBlackMs   = $state(0);
   let turnStartedAt  = 0;      // Unix ms when the current turn began (from server)
   let timeoutClaimed = false;  // prevent invoking ClaimTimeout twice per timeout
+  let clockSoundPlayed = false;  // prevent playing clock sound multiple times per turn
 
   // ── Bidding state ─────────────────────────────────────────────────────────
 
@@ -93,10 +93,12 @@
 
   function syncLocalTimes(state) {
     if (!state) return;
+    stopClockSound();  // Stop clock sound when turn changes
     localWhiteMs  = state.white.timeMsRemaining;
     localBlackMs  = state.black.timeMsRemaining;
     turnStartedAt = state.turnStartedAt ?? 0;
     timeoutClaimed = false;
+    clockSoundPlayed = false;
   }
 
   function tickClocks() {
@@ -117,11 +119,21 @@
         timeoutClaimed = true;
         if (!isSpectator) hub?.invoke('ClaimTimeout', playerToken);
       }
+      // Play clock sound if it's our turn and we're below 10 seconds
+      if (!clockSoundPlayed && isWhite && isMyTurn && localWhiteMs > 0 && localWhiteMs <= 10000) {
+        clockSoundPlayed = true;
+        playSound('clock');
+      }
     } else {
       localBlackMs = Math.max(0, gameState.black.timeMsRemaining - elapsed);
       if (localBlackMs === 0 && !timeoutClaimed) {
         timeoutClaimed = true;
         if (!isSpectator) hub?.invoke('ClaimTimeout', playerToken);
+      }
+      // Play clock sound if it's our turn and we're below 10 seconds
+      if (!clockSoundPlayed && !isWhite && isMyTurn && localBlackMs > 0 && localBlackMs <= 10000) {
+        clockSoundPlayed = true;
+        playSound('clock');
       }
     }
   }
@@ -286,8 +298,11 @@
   function onDropOnBoard(toX, toY) {
     if (!dragging) return;
     if (dragging.type === 'move') {
+      const isSameSquare = toX === dragging.fromX && toY === dragging.fromY;
+      const destSq = gameState.squares.find(s => s.x === toX && s.y === toY);
+      const isCapture = destSq?.piece != null && !isSameSquare;
       hub?.invoke('MakeMove', playerToken, dragging.fromX, dragging.fromY, toX, toY);
-      playSound('move');
+      playSound(isCapture ? 'capture' : 'move');
     } else if (dragging.type === 'place') {
       hub?.invoke('PlacePiece', playerToken, toX, toY, dragging.code);
       playSound('move');
@@ -309,8 +324,9 @@
         fetchLegalMoves(x, y).then(d => { legalDests = d; });
         return;
       }
-      hub?.invoke('MakeMove', playerToken, selectedSquare.x, selectedSquare.y, x, y);      
-      playSound('move');
+      const isCapture = sq?.piece != null;
+      hub?.invoke('MakeMove', playerToken, selectedSquare.x, selectedSquare.y, x, y);
+      playSound(isCapture ? 'capture' : 'move');
       selectedSquare = null; legalDests = [];
     } else {
       if (sq?.piece?.isWhite === isWhite) {
@@ -483,8 +499,11 @@
     hub.on('StateUpdated', (state) => {
       stateHistory = [...stateHistory, state];
       if (gameState.moves.length < state.moves.length && !isMyTurn) {
-        // Opponent played a move
-        playSound('move');
+        // Opponent played a move - check if it was a capture by comparing piece counts
+        const oldPieceCount = gameState.squares.filter(s => s.piece).length;
+        const newPieceCount = state.squares.filter(s => s.piece).length;
+        const isCapture = newPieceCount < oldPieceCount;
+        playSound(isCapture ? 'capture' : 'move');
       }
       gameState = state; syncLocalTimes(state); clearDrag(); resignPending = false;
       // Return to live mode so the player can interact (their turn may have come up)

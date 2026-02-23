@@ -8,8 +8,9 @@
   import SettingsPage    from './SettingsPage.svelte';
   import WatchPage       from './WatchPage.svelte';
   import ProfilePage     from './ProfilePage.svelte';
-  import SandboxPage     from './SandboxPage.svelte';
-  import TutorialPage    from './TutorialPage.svelte';
+  import AnalyzePage     from './AnalyzePage.svelte';
+  import RulesPage       from './RulesPage.svelte';
+  import AboutPage       from './AboutPage.svelte';
   import { authState, clearAuth } from './lib/auth.svelte.js';
   import { getMe }       from './lib/api.js';
 
@@ -28,8 +29,9 @@
     if (gameId !== null) return; // GamePage sets its own title
     if (path === '/')          document.title = `${NAME} - Play`;
     else if (path === '/watch')    document.title = `${NAME} - Watch`;
-    else if (path === '/sandbox')  document.title = `${NAME} - Sandbox`;
-    else if (path === '/tutorial') document.title = `${NAME} - Rules`;
+    else if (path === '/analyze')  document.title = `${NAME} - Analyze`;
+    else if (path === '/rules') document.title = `${NAME} - Rules`;
+    else if (path === '/about') document.title = `${NAME} - About`;
     else                           document.title = NAME;
   });
 
@@ -65,10 +67,12 @@
   <SettingsPage />
 {:else if path === '/watch'}
   <WatchPage />
-{:else if path === '/sandbox'}
-  <SandboxPage />
-{:else if path === '/tutorial'}
-  <TutorialPage />
+{:else if path === '/analyze'}
+  <AnalyzePage />
+{:else if path === '/rules'}
+  <RulesPage />
+{:else if path === '/about'}
+  <AboutPage />
 {:else}
   <HomePage />
 {/if}

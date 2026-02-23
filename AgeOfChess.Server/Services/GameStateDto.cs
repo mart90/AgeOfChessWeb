@@ -32,7 +32,8 @@ public record SquareDto(
     int Id,
     string Type,
     string Highlight,
-    PieceDto? Piece
+    PieceDto? Piece,
+    string? MineOwner
 );
 
 public record PieceDto(string Type, bool IsWhite);
@@ -59,7 +60,8 @@ public static class GameStateDtoBuilder
                     ? new PieceDto(s.Object.GetType().Name, p.IsWhite)
                     : s.Object != null
                         ? new PieceDto(s.Object.GetType().Name, false)
-                        : null
+                        : null,
+                s.MineOwner
             )).ToList(),
             new PlayerDto(game.White.PlayedByStr, game.White.Gold, game.White.TimeMiliseconds, game.White.IsActive, game.WhiteElo),
             new PlayerDto(game.Black.PlayedByStr, game.Black.Gold, game.Black.TimeMiliseconds, game.Black.IsActive, game.BlackElo),

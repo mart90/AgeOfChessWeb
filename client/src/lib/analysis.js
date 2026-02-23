@@ -2,7 +2,7 @@ import { computeLegalMoves } from "./pathFinder";
 import { SHOP } from './shop'
 
 const MAX_DEPTH = 10;
-const MAX_PLAYOUTS = 3 * Math.pow(10, 6);
+let i = 0;
 
 // position:
 // [
@@ -23,9 +23,129 @@ const MAX_PLAYOUTS = 3 * Math.pow(10, 6);
 //     },
 //     ...
 // ]
-export function findMoves(position, whiteGold, blackGold, whiteIsActive) {
-    let bestChild = getBestImmediateMove(position, whiteGold, blackGold, whiteIsActive)
-    return bestChild;
+export let stopRequested = false;
+let nodeCount = 0;
+const YIELD_INTERVAL = 1000; // Yield every 1000 nodes
+
+// Transposition table for caching evaluated positions
+const transpositionTable = new Map();
+const MAX_TT_SIZE = 500000; // Limit table size to prevent memory issues
+
+export function requestStop() {
+    stopRequested = true;
+}
+
+export function resetStop() {
+    stopRequested = false;
+    nodeCount = 0;
+}
+
+export function clearTranspositionTable() {
+    transpositionTable.clear();
+}
+
+// Create a hash key for a position (simple string-based for now)
+function hashPosition(position, whiteGold, blackGold, whiteIsActive) {
+    // Sort squares by position to ensure consistent hashing regardless of array order
+    const sortedSquares = [...position].sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
+
+    const parts = sortedSquares.map(s => {
+        if (!s.piece) return `${s.x},${s.y}:`;
+        return `${s.x},${s.y}:${s.piece.type},${s.mineOwner || ''}`;
+    });
+
+    return `${parts.join('|')}|${whiteGold}|${blackGold}|${whiteIsActive ? 'w' : 'b'}`;
+}
+
+export async function getTopMoves(position, whiteGold, blackGold, whiteIsActive, depth, amountOfMoves)
+{
+    const legalMoves = getAllLegalMoves(position, whiteGold, blackGold, whiteIsActive);
+
+    if (legalMoves.length === 0)
+        return null;
+
+    let results = [];
+
+    for (let move of legalMoves)
+    {
+        if (stopRequested) {
+            break;
+        }
+
+        const { newPosition, newWhiteGold, newBlackGold } = applyMove(position, whiteGold, blackGold, whiteIsActive, move);
+
+        const score = -(await negamax(
+            newPosition,
+            newWhiteGold,
+            newBlackGold,
+            !whiteIsActive,
+            depth - 1,
+            -Infinity,
+            Infinity
+        ));
+
+        results.push({
+            move,
+            score: whiteIsActive ? score : -score
+        });
+
+        // Yield control so worker can process messages
+        await new Promise(r => setTimeout(r, 0));
+    }
+
+    if (whiteIsActive) return results
+        .sort((a, b) => b.score - a.score)
+        .slice(0, amountOfMoves)
+    else return results
+        .sort((a, b) => a.score - b.score)
+        .slice(0, amountOfMoves)
+}
+
+export async function getBestMove(position, whiteGold, blackGold, whiteIsActive, maxPlayouts) 
+{
+    const legalMoves = getAllLegalMoves(position, whiteGold, blackGold, whiteIsActive);
+
+    if (legalMoves.length === 0) 
+        return null; 
+
+    const legalMovesOpponent = getAllLegalMoves(position, whiteGold, blackGold, !whiteIsActive);
+    let branchingBase = (legalMoves.length + legalMovesOpponent.length) / 2;
+    branchingBase = branchingBase > 8 ? branchingBase : 8;
+
+    let depth = MAX_DEPTH + 1;
+    let estimatedPlayouts = Infinity;
+
+    while (estimatedPlayouts > maxPlayouts) {
+        depth--;
+        estimatedPlayouts = Math.pow(branchingBase, depth);
+    }
+
+    let bestMove = null; 
+    let bestScore = -Infinity; 
+    
+    for (let move of legalMoves) 
+    { 
+        const { newPosition, newWhiteGold, newBlackGold } = applyMove(position, whiteGold, blackGold, whiteIsActive, move);
+
+        const score = -(await negamax(
+            newPosition,
+            newWhiteGold,
+            newBlackGold,
+            !whiteIsActive,
+            depth - 1,
+            -Infinity,
+            Infinity
+        ));
+        
+        if (score > bestScore) { 
+            bestScore = score; 
+            bestMove = move; 
+        }
+
+        await Promise.resolve();
+    }
+
+    return bestMove; 
 }
 
 function createNode(position, whiteGold, blackGold, whiteIsActive, parent, move) {
@@ -43,27 +163,24 @@ function createNode(position, whiteGold, blackGold, whiteIsActive, parent, move)
     };
 }
 
+const MAJOR_PIECES = new Set([
+    'WhiteQueen', 'BlackQueen',
+    'WhiteRook', 'BlackRook',
+    'WhiteBishop', 'BlackBishop',
+    'WhiteKnight', 'BlackKnight'
+]);
+
 function isMajorPiece(pieceType) {
-    return (
-        pieceType.includes("Queen") ||
-        pieceType.includes("Rook") ||
-        pieceType.includes("Bishop") ||
-        pieceType.includes("Knight")
-    );
+    return MAJOR_PIECES.has(pieceType);
 }
 
+const VALID_PLACEMENT_TYPES = new Set([
+    'Grass', 'GrassTrees', 'GrassMine',
+    'Dirt', 'DirtTrees', 'DirtMine'
+]);
+
 function isValidPlacementSquare(square) {
-    return (
-        square.piece == null &&
-        (
-            square.type === "Grass" ||
-            square.type === "GrassTrees" ||
-            square.type === "GrassMine" ||
-            square.type === "Dirt" ||
-            square.type === "DirtTrees" ||
-            square.type === "DirtMine"
-        )
-    );
+    return square.piece == null && VALID_PLACEMENT_TYPES.has(square.type);
 }
 
 function getAdjacentSquares(position, x, y) {
@@ -196,17 +313,10 @@ function getAllLegalMoves(position, whiteGold, blackGold, whiteIsActive) {
     return moves;
 }
 
-function clonePosition(position) {
-    return position.map(square => ({
-        ...square,
-        piece: square.piece ? { ...square.piece } : null
-    }));
-}
-
 function applyMove(position, whiteGold, blackGold, whiteIsActive, move) {
-    let newPosition = clonePosition(position);
+    let newPosition;
 
-    if (move.type == "m") { 
+    if (move.type == "m") {
         // Move
         const piece = position.find(s => s.x === move.fromPos.x && s.y === move.fromPos.y).piece;
         const toSq = position.find(s => s.x === move.toPos.x && s.y === move.toPos.y);
@@ -217,13 +327,21 @@ function applyMove(position, whiteGold, blackGold, whiteIsActive, move) {
             }
         }
 
-        newPosition = newPosition.map(s => {
+        newPosition = position.map(s => {
             if (s.x === move.fromPos.x && s.y === move.fromPos.y) return { ...s, piece: null };
-            if (s.x === move.toPos.x   && s.y === move.toPos.y)   return { ...s, piece };
+            if (s.x === move.toPos.x   && s.y === move.toPos.y) {
+                // Capture mine if moving onto one
+                const capturedMine = s.type?.includes('Mine');
+                return {
+                    ...s,
+                    piece,
+                    mineOwner: capturedMine ? (piece.isWhite ? 'white' : 'black') : s.mineOwner
+                };
+            }
             return s;
         });
     }
-    else { 
+    else {
         // New piece placement
 
         let pieceType;
@@ -242,16 +360,24 @@ function applyMove(position, whiteGold, blackGold, whiteIsActive, move) {
             isWhite: whiteIsActive
         }
 
-        newPosition = newPosition.map(s => {
-            if (s.x === move.toPos.x   && s.y === move.toPos.y) return { ...s, piece };
+        newPosition = position.map(s => {
+            if (s.x === move.toPos.x   && s.y === move.toPos.y) {
+                // Capture mine if placing on one
+                const capturedMine = s.type?.includes('Mine');
+                return {
+                    ...s,
+                    piece,
+                    mineOwner: capturedMine ? (whiteIsActive ? 'white' : 'black') : s.mineOwner
+                };
+            }
             return s;
         });
     }
 
-    // Mine income for newly active player
+    // Mine income for newly active player (based on ownership, not occupancy)
     const nextWhite = !whiteIsActive;
     const income = newPosition
-        .filter(s => s.type?.includes('Mine') && s.piece?.isWhite === nextWhite)
+        .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
         .length * 5;
     if (nextWhite) whiteGold += income; else blackGold += income;
 
@@ -265,121 +391,35 @@ function applyMove(position, whiteGold, blackGold, whiteIsActive, move) {
     };
 }
 
+const PIECE_VALUES = {
+    'WhiteQueen': 90, 'BlackQueen': 90,
+    'WhiteRook': 52, 'BlackRook': 52,
+    'WhiteBishop': 42, 'BlackBishop': 42,
+    'WhiteKnight': 42, 'BlackKnight': 42,
+    'WhitePawn': 35, 'BlackPawn': 35
+};
+
 function pieceValue(pieceType) {
-    if (pieceType.includes("Queen")) {
-        return 95;
-    }
-    if (pieceType.includes("Rook")) {
-        return 52;
-    }
-    if (pieceType.includes("Bishop")) {
-        return 40;
-    }
-    if (pieceType.includes("Knight")) {
-        return 45;
-    }
-    if (pieceType.includes("Pawn")) {
-        return 35;
-    }
-
-    return 0;
+    return PIECE_VALUES[pieceType] || 0;
 }
 
-function makeMove(position, move) {
-    if (move.type === "m") {
-        const from = position.find(s => s.x === move.fromPos.x && s.y === move.fromPos.y);
-        const to   = position.find(s => s.x === move.toPos.x && s.y === move.toPos.y);
-
-        const movedPiece = from.piece;
-        const capturedPiece = to.piece;
-
-        // Apply move
-        to.piece = movedPiece;
-        from.piece = null;
-
-        return {
-            type: "m",
-            from,
-            to,
-            capturedPiece
-        };
+async function negamax(position, whiteGold, blackGold, whiteIsActive, depth, alpha, beta) {
+    if (stopRequested) {
+        return 0;
     }
 
-    if (move.type === "p") {
-        const square = position.find(s => s.x === move.pos.x && s.y === move.pos.y);
-
-        square.piece = {
-            type: move.pieceType,
-            isWhite: move.isWhite
-        };
-
-        return {
-            type: "p",
-            square
-        };
-    }
-}
-
-function undoMove(position, undo) {
-    if (undo.type === "m") {
-        undo.from.piece = undo.to.piece;
-        undo.to.piece = undo.capturedPiece;
+    // Yield periodically to allow worker to process messages
+    nodeCount++;
+    if (nodeCount % YIELD_INTERVAL === 0) {
+        await new Promise(r => setTimeout(r, 0));
     }
 
-    if (undo.type === "p") {
-        undo.square.piece = null;
+    // Check transposition table
+    const posHash = hashPosition(position, whiteGold, blackGold, whiteIsActive);
+    const ttEntry = transpositionTable.get(posHash);
+    if (ttEntry && ttEntry.depth >= depth) {
+        return ttEntry.score;
     }
-}
-
-function getBestImmediateMove(position, whiteGold, blackGold, whiteIsActive) 
-{
-    const legalMoves = getAllLegalMoves(position, whiteGold, blackGold, whiteIsActive);
-
-    if (legalMoves.length === 0) 
-        return null; 
-
-    const legalMovesOpponent = getAllLegalMoves(position, whiteGold, blackGold, !whiteIsActive);
-    let branchingBase = (legalMoves.length + legalMovesOpponent.length) / 2;
-    branchingBase = branchingBase > 8 ? branchingBase : 8;
-
-    let depth = MAX_DEPTH + 1;
-    let estimatedPlayouts = Infinity;
-
-    while (estimatedPlayouts > MAX_PLAYOUTS) {
-        depth--;
-        estimatedPlayouts = Math.pow(branchingBase, depth);
-    }
-
-    console.log("Searching with depth " + depth);
-    
-    let bestMove = null; 
-    let bestScore = -Infinity; 
-    
-    for (let move of legalMoves) 
-    { 
-        const { newPosition, newWhiteGold, newBlackGold } = applyMove(position, whiteGold, blackGold, whiteIsActive, move);
-
-        const score = -negamax(
-            newPosition,
-            newWhiteGold,
-            newBlackGold,
-            !whiteIsActive,
-            depth - 1,
-            -Infinity,
-            Infinity
-        );
-        
-        if (score > bestScore) { 
-            bestScore = score; 
-            bestMove = move; 
-        } 
-    } 
-    
-    console.log("Position score: " + (whiteIsActive ? bestScore : -bestScore));
-    return bestMove; 
-}
-
-function negamax(position, whiteGold, blackGold, whiteIsActive, depth, alpha, beta) {
 
     const evalScore = evaluate(position, whiteGold, blackGold);
 
@@ -394,49 +434,59 @@ function negamax(position, whiteGold, blackGold, whiteIsActive, depth, alpha, be
         return whiteIsActive ? evalScore : -evalScore;
     }
 
-    // legalMoves.sort((a, b) => {
-    //     const A = applyMove(position, whiteGold, blackGold, whiteIsActive, a);
-    //     const B = applyMove(position, whiteGold, blackGold, whiteIsActive, b);
-
-    //     const scoreA = evaluate(A.newPosition, A.newWhiteGold, A.newBlackGold);
-    //     const scoreB = evaluate(B.newPosition, B.newWhiteGold, B.newBlackGold);
-
-    //     // Sort best moves first
-    //     return whiteIsActive ? scoreB - scoreA : scoreA - scoreB;
-    // });
-
     let bestScore = -Infinity;
+    const FULL_DEPTH_MOVES = 4; // Search first 4 moves at full depth
+    const REDUCTION_LIMIT = 3;  // Don't reduce if depth <= 3
 
-    for (let move of legalMoves) {
+    for (let i = 0; i < legalMoves.length; i++) {
+        const move = legalMoves[i];
+        if (stopRequested) return bestScore || 0;
+
         const {
             newPosition,
             newWhiteGold,
             newBlackGold
         } = applyMove(position, whiteGold, blackGold, whiteIsActive, move);
 
-        const score = -negamax(
-            newPosition,
-            newWhiteGold,
-            newBlackGold,
-            !whiteIsActive,
-            depth - 1,
-            -beta,
-            -alpha
-        );
+        let score;
 
-        // const undo = makeMove(position, move);
+        // Late Move Reductions: search later moves at reduced depth
+        if (i >= FULL_DEPTH_MOVES && depth > REDUCTION_LIMIT) {
+            // Search at reduced depth first
+            score = -(await negamax(
+                newPosition,
+                newWhiteGold,
+                newBlackGold,
+                !whiteIsActive,
+                depth - 2,  // Reduce by 1 extra ply
+                -beta,
+                -alpha
+            ));
 
-        // const score = -negamax(
-        //     position,
-        //     depth - 1,
-        //     -beta,
-        //     -alpha,
-        //     !whiteIsActive,
-        //     whiteGold,
-        //     blackGold
-        // );
-
-        // undoMove(position, undo);
+            // If the reduced search found something good, re-search at full depth
+            if (score > alpha) {
+                score = -(await negamax(
+                    newPosition,
+                    newWhiteGold,
+                    newBlackGold,
+                    !whiteIsActive,
+                    depth - 1,
+                    -beta,
+                    -alpha
+                ));
+            }
+        } else {
+            // First few moves or shallow depth: search at full depth
+            score = -(await negamax(
+                newPosition,
+                newWhiteGold,
+                newBlackGold,
+                !whiteIsActive,
+                depth - 1,
+                -beta,
+                -alpha
+            ));
+        }
 
         if (score > bestScore) {
             bestScore = score;
@@ -451,6 +501,11 @@ function negamax(position, whiteGold, blackGold, whiteIsActive, depth, alpha, be
         }
     }
 
+    // Store in transposition table (limit size to prevent memory issues)
+    if (transpositionTable.size < MAX_TT_SIZE) {
+        transpositionTable.set(posHash, { score: bestScore, depth });
+    }
+
     return bestScore;
 }
 
@@ -459,6 +514,8 @@ function evaluate(position, whiteGold, blackGold) {
 
     let whiteMaterialValue = 0
     let blackMaterialValue = 0
+    let whiteMines = 0;
+    let blackMines = 0;
 
     let whiteHasKing = false;
     let blackHasKing = false;
@@ -480,6 +537,12 @@ function evaluate(position, whiteGold, blackGold) {
                 blackMaterialValue += pieceValue(square.piece.type) * 1.2;
             }
         }
+
+        // Count mines based on ownership, not occupancy
+        if (square.type.includes("Mine")) {
+            if (square.mineOwner === 'white') whiteMines++;
+            else if (square.mineOwner === 'black') blackMines++;
+        }
     }
 
     if (!whiteHasKing) {
@@ -489,11 +552,11 @@ function evaluate(position, whiteGold, blackGold) {
         score += 999;
     }
 
-    score += (whiteMaterialValue + whiteGold) / 10;
-    score -= (blackMaterialValue + blackGold) / 10;
+    score += (whiteMaterialValue + whiteGold) / 5;
+    score -= (blackMaterialValue + blackGold) / 5;
 
-    score += position.filter(s => s.type.includes("Mine") && s.piece != null && s.piece.isWhite).length;
-    score -= position.filter(s => s.type.includes("Mine") && s.piece != null && !s.piece.isWhite).length;
+    score += whiteMines * 2.5;
+    score -= blackMines * 2.5;
 
     return score;
 }
