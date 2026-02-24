@@ -91,12 +91,12 @@ public abstract class Game
 
         ActiveColor.Gold++;
 
-        // Mine income: +5 gold for each mine owned by the active player
+        // Mine income: +4 gold for each mine owned by the active player
         foreach (var square in Map.GetMines())
         {
             var ownerColor = square.MineOwner;
             if ((ownerColor == "white" && ActiveColor.IsWhite) || (ownerColor == "black" && !ActiveColor.IsWhite))
-                ActiveColor.Gold += 5;
+                ActiveColor.Gold += 4;
         }
 
         // Time forfeit detected by EndTurn

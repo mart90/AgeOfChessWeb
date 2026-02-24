@@ -6,7 +6,7 @@
   import { playSound } from './lib/sound.js';
   import { computeLegalMoves, isRealPiece, basePieceType, isRocks } from './lib/pathFinder.js';
   import { getBestMove } from './lib/analysis.js'
-  import { SHOP } from './lib/shop.js'
+  import { SHOP, MINE_INCOME } from './lib/constants.js'
   import AnalysisWorker from './lib/analysisWorker.js?worker';
   import { settings, persistSettings } from './lib/settings.svelte.js';
 
@@ -371,7 +371,7 @@
     const nextWhite = !whiteIsActive;
     const income = squares
       .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
-      .length * 5;
+      .length * MINE_INCOME;
     if (nextWhite) whiteGold = Math.max(0, whiteGold + income);
     else           blackGold = Math.max(0, blackGold + income);
     whiteIsActive = nextWhite;
@@ -424,7 +424,7 @@
     const nextWhite = !piece.isWhite;
     const income = newSquares
       .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
-      .length * 5;
+      .length * MINE_INCOME;
     if (nextWhite) wg += income; else bg += income;
 
     if (nextWhite) wg++; else bg++;
@@ -477,7 +477,7 @@
     const nextWhite = !isWhitePiece;
     const income = squares
       .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
-      .length * 5;
+      .length * MINE_INCOME;
     if (nextWhite) whiteGold += income; else blackGold += income;
 
     if (nextWhite) whiteGold++; else blackGold++;

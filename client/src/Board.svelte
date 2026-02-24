@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { MINE_INCOME } from './lib/constants.js';
 
   /**
    * Props:
@@ -178,14 +179,14 @@
         }
       }
 
-      // Mine income: +5 in top-right corner (colored by owner)
+      // Mine income in top-right corner (colored by owner)
       if (sq.type.endsWith('Mine') && sq.mineOwner) {
         const sz = Math.max(7 * dpr, Math.round(Math.min(cw, ch) * 0.18));
         ctx.font = `bold ${sz}px sans-serif`;
         ctx.textAlign = 'right';
         ctx.textBaseline = 'top';
         ctx.fillStyle = sq.mineOwner === 'white' ? '#fff' : '#000';
-        ctx.fillText('+5', px + cw - Math.round(3 * dpr), py + Math.round(3 * dpr));
+        ctx.fillText(`+${MINE_INCOME}`, px + cw - Math.round(3 * dpr), py + Math.round(3 * dpr));
       }
     }
 

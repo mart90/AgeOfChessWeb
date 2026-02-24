@@ -1,5 +1,5 @@
 import { computeLegalMoves } from "./pathFinder";
-import { SHOP } from './shop'
+import { SHOP, MINE_INCOME } from './constants'
 
 const MAX_DEPTH = 10;
 let i = 0;
@@ -43,6 +43,14 @@ export function resetStop() {
 export function clearTranspositionTable() {
     transpositionTable.clear();
 }
+
+const PIECE_VALUES = {
+    'WhiteQueen': 90, 'BlackQueen': 90,
+    'WhiteRook': 52, 'BlackRook': 52,
+    'WhiteBishop': 42, 'BlackBishop': 42,
+    'WhiteKnight': 42, 'BlackKnight': 42,
+    'WhitePawn': 25, 'BlackPawn': 25
+};
 
 // Create a hash key for a position (simple string-based for now)
 function hashPosition(position, whiteGold, blackGold, whiteIsActive) {
@@ -378,7 +386,7 @@ function applyMove(position, whiteGold, blackGold, whiteIsActive, move) {
     const nextWhite = !whiteIsActive;
     const income = newPosition
         .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
-        .length * 5;
+        .length * MINE_INCOME;
     if (nextWhite) whiteGold += income; else blackGold += income;
 
     // 1 gold per turn
@@ -390,14 +398,6 @@ function applyMove(position, whiteGold, blackGold, whiteIsActive, move) {
         newBlackGold: blackGold
     };
 }
-
-const PIECE_VALUES = {
-    'WhiteQueen': 90, 'BlackQueen': 90,
-    'WhiteRook': 52, 'BlackRook': 52,
-    'WhiteBishop': 42, 'BlackBishop': 42,
-    'WhiteKnight': 42, 'BlackKnight': 42,
-    'WhitePawn': 35, 'BlackPawn': 35
-};
 
 function pieceValue(pieceType) {
     return PIECE_VALUES[pieceType] || 0;
@@ -555,8 +555,8 @@ function evaluate(position, whiteGold, blackGold) {
     score += (whiteMaterialValue + whiteGold) / 5;
     score -= (blackMaterialValue + blackGold) / 5;
 
-    score += whiteMines * 2.5;
-    score -= blackMines * 2.5;
+    score += whiteMines * (MINE_INCOME / 2);
+    score -= blackMines * (MINE_INCOME / 2);
 
     return score;
 }

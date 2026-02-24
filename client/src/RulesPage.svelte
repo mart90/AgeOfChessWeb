@@ -1,5 +1,5 @@
 <script>
-  import { SHOP } from './lib/shop.js';
+  import { SHOP, MINE_INCOME } from './lib/constants.js';
 
   const costs = SHOP.map(s => s.cost);
   const minCost = Math.min(...costs);
@@ -14,7 +14,7 @@
     <ul>
       <li>Players get 1 gold at the start of each turn.</li>
       <li>Capturing a treasure earns 20 gold.</li>
-      <li>Mines owned by a player earn 5 gold each at the start of their turn.</li>
+      <li>Mines owned by a player earn {MINE_INCOME} gold each at the start of their turn.</li>
       <li>When a piece moves onto a mine, the mine becomes owned by that player.</li>
       <li>New pieces cost gold, ranging from {minCost} gold for a {cheapest} to {maxCost} gold for a {mostExpensive}.</li>
     </ul>

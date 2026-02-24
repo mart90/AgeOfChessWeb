@@ -7,7 +7,7 @@
   import { settings } from './lib/settings.svelte.js';
   import { currentGame } from './lib/currentGame.svelte.js';
   import { playSound, stopClockSound } from './lib/sound.js';
-  import { SHOP as SHOP_BASE } from './lib/shop.js';
+  import { SHOP as SHOP_BASE } from './lib/constants.js';
 
   const { gameId } = $props();
 
