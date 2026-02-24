@@ -18,14 +18,16 @@ public class User
     public string? GoogleId { get; set; }
 
     // ── Per-category Elo ratings ─────────────────────────────────────────────
-    public int EloBlitz { get; set; } = 1200;
-    public int EloRapid { get; set; } = 1200;
-    public int EloSlow  { get; set; } = 1200;
+    public int EloBullet { get; set; } = 1200;
+    public int EloBlitz  { get; set; } = 1200;
+    public int EloRapid  { get; set; } = 1200;
+    public int EloSlow   { get; set; } = 1200;
 
     // ── Per-category games played (used for K-factor decay) ──────────────────
-    public int BlitzGamesPlayed { get; set; } = 0;
-    public int RapidGamesPlayed { get; set; } = 0;
-    public int SlowGamesPlayed  { get; set; } = 0;
+    public int BulletGamesPlayed { get; set; } = 0;
+    public int BlitzGamesPlayed  { get; set; } = 0;
+    public int RapidGamesPlayed  { get; set; } = 0;
+    public int SlowGamesPlayed   { get; set; } = 0;
 
     /// <summary>Total games across all categories.</summary>
     public int GamesPlayed { get; set; } = 0;

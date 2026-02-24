@@ -65,9 +65,10 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
                 var cat = EloService.GetCategory(settings);
                 elo = cat switch
                 {
-                    TimeControlCategory.Blitz => creator.EloBlitz,
-                    TimeControlCategory.Rapid => creator.EloRapid,
-                    _                         => creator.EloSlow,
+                    TimeControlCategory.Bullet => creator.EloBullet,
+                    TimeControlCategory.Blitz  => creator.EloBlitz,
+                    TimeControlCategory.Rapid  => creator.EloRapid,
+                    _                          => creator.EloSlow,
                 };
             }
             white = new(creatorUserId, elo, creator.EffectiveDisplayName);
@@ -126,9 +127,10 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             if (!userId.HasValue || !users.TryGetValue(userId.Value, out var u)) return null;
             return cat switch
             {
-                TimeControlCategory.Blitz => u.EloBlitz,
-                TimeControlCategory.Rapid => u.EloRapid,
-                _                         => u.EloSlow,
+                TimeControlCategory.Bullet => u.EloBullet,
+                TimeControlCategory.Blitz  => u.EloBlitz,
+                TimeControlCategory.Rapid  => u.EloRapid,
+                _                          => u.EloSlow,
             };
         }
 
@@ -321,28 +323,43 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
     [HttpGet("{gameId:int}")]
     public async Task<IActionResult> GetGame(int gameId)
     {
+        // Try GameSessions first (for live or recently ended games)
         var session = await db.GameSessions.FindAsync(gameId);
-        if (session == null) return NotFound();        
+        if (session != null)
+        {
+            if (session.EndedAt == null) {
+                // If the game is still live, return current in-memory state
+                var liveGame = sessions.GetById(gameId);
+                if (liveGame != null)
+                    return Ok(GameStateDtoBuilder.Build(liveGame));
 
-        if (session.EndedAt == null) {
-            // If the game is still live, return current in-memory state
-            var liveGame = sessions.GetById(gameId);
-            if (liveGame != null)
-                return Ok(GameStateDtoBuilder.Build(liveGame));
+                // Game was in progress when the server restarted — in-memory state is lost
+                if (session.Result == GameResult.InProgress)
+                    return Ok(new { serverRestarted = true });
+            }
 
-            // Game was in progress when the server restarted — in-memory state is lost
-            if (session.Result == GameResult.InProgress)
-                return Ok(new { serverRestarted = true });
+            // Game is over
+            return Ok(new
+            {
+                session.MapSeed,
+                session.MovesJson,
+                Result = session.Result.ToString(),
+                session.StartedAt,
+                session.EndedAt
+            });
         }
 
-        // Game is over
+        // Try HistoricGames (for finished games)
+        var historicGame = await db.HistoricGames.FindAsync(gameId);
+        if (historicGame == null) return NotFound();
+
         return Ok(new
         {
-            session.MapSeed,
-            session.MovesJson,
-            session.Result,
-            session.StartedAt,
-            session.EndedAt
+            historicGame.MapSeed,
+            historicGame.MovesJson,
+            historicGame.Result,
+            StartedAt = historicGame.CreatedAt,
+            historicGame.EndedAt
         });
     }
 
@@ -350,35 +367,89 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
     [HttpGet("{gameId:int}/replay")]
     public async Task<IActionResult> GetReplay(int gameId)
     {
+        // Try GameSessions first
         var session = await db.GameSessions
             .Include(s => s.WhiteUser)
             .Include(s => s.BlackUser)
             .FirstOrDefaultAsync(s => s.Id == gameId);
 
-        if (session == null || session.Result == GameResult.InProgress) return NotFound();
-        if (string.IsNullOrEmpty(session.MapSeed)) return NotFound();
+        string mapSeed;
+        string settingsJson;
+        string movesJson;
+        string? result;
+        string whiteName;
+        string blackName;
+        int? blackStartingGold;
+        string whitePlayerToken;
+        string blackPlayerToken;
 
-        var settings = JsonSerializer.Deserialize<GameSettings>(session.SettingsJson);
+        if (session != null)
+        {
+            if (session.Result == GameResult.InProgress) return NotFound();
+            if (string.IsNullOrEmpty(session.MapSeed)) return NotFound();
+
+            mapSeed = session.MapSeed;
+            settingsJson = session.SettingsJson;
+            movesJson = session.MovesJson;
+            result = session.Result.ToString();
+            whiteName = session.WhiteUser?.EffectiveDisplayName ?? "Player 1";
+            blackName = session.BlackUser?.EffectiveDisplayName ?? "Player 2";
+            blackStartingGold = session.BlackStartingGold;
+            whitePlayerToken = session.WhitePlayerToken;
+            blackPlayerToken = session.BlackPlayerToken;
+        }
+        else
+        {
+            // Try HistoricGames
+            var historicGame = await db.HistoricGames.FindAsync(gameId);
+            if (historicGame == null) return NotFound();
+            if (string.IsNullOrEmpty(historicGame.MapSeed)) return NotFound();
+
+            mapSeed = historicGame.MapSeed;
+            settingsJson = historicGame.SettingsJson;
+            movesJson = historicGame.MovesJson;
+            result = historicGame.Result;
+
+            // Load user names manually
+            User? whiteUser = historicGame.WhitePlayerId.HasValue
+                ? await db.Users.FindAsync(historicGame.WhitePlayerId.Value)
+                : null;
+            User? blackUser = historicGame.BlackPlayerId.HasValue
+                ? await db.Users.FindAsync(historicGame.BlackPlayerId.Value)
+                : null;
+
+            whiteName = whiteUser?.EffectiveDisplayName ?? "Player 1";
+            blackName = blackUser?.EffectiveDisplayName ?? "Player 2";
+
+            // Calculate BlackStartingGold from bids (winning bid goes to Black)
+            if (historicGame.WhiteBid.HasValue && historicGame.BlackBid.HasValue)
+                blackStartingGold = Math.Max(historicGame.WhiteBid.Value, historicGame.BlackBid.Value);
+            else
+                blackStartingGold = null;
+
+            // HistoricGames don't store player tokens, generate dummy ones for replay
+            whitePlayerToken = Guid.NewGuid().ToString("N");
+            blackPlayerToken = Guid.NewGuid().ToString("N");
+        }
+
+        var settings = JsonSerializer.Deserialize<GameSettings>(settingsJson);
         if (settings == null) return StatusCode(500);
 
-        settings.MapSeed = session.MapSeed;
+        settings.MapSeed = mapSeed;
         settings.TimeControlEnabled = false;
 
-        string whiteName = session.WhiteUser?.EffectiveDisplayName ?? "Player 1";
-        string blackName = session.BlackUser?.EffectiveDisplayName ?? "Player 2";
-
         var game = new ServerGame(
-            session.Id, settings,
-            session.WhitePlayerToken, session.BlackPlayerToken,
+            gameId, settings,
+            whitePlayerToken, blackPlayerToken,
             whiteName, blackName);
 
-        if (session.BlackStartingGold.HasValue)
-            game.Black.Gold = session.BlackStartingGold.Value;
+        if (blackStartingGold.HasValue)
+            game.Black.Gold = blackStartingGold.Value;
 
         var snapshots = new List<GameStateDto>();
         snapshots.Add(GameStateDtoBuilder.Build(game));  // state before any moves
 
-        var moveNotations = JsonSerializer.Deserialize<List<string>>(session.MovesJson) ?? [];
+        var moveNotations = JsonSerializer.Deserialize<List<string>>(movesJson) ?? [];
 
         try
         {
@@ -425,14 +496,15 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
 
         // For resign/timeout games the result isn't captured in the move list —
         // force-end the game so the final snapshot has GameEnded = true.
-        if (!game.GameEnded)
+        if (!game.GameEnded && result != null)
         {
-            var resultStr = session.Result switch
+            var resultStr = result switch
             {
-                GameResult.WhiteWinResign => "w+r",
-                GameResult.BlackWinResign => "b+r",
-                GameResult.WhiteWinTime   => "w+t",
-                GameResult.BlackWinTime   => "b+t",
+                "WhiteWinResign" => "w+r",
+                "BlackWinResign" => "b+r",
+                "WhiteWinTime"   => "w+t",
+                "BlackWinTime"   => "b+t",
+                _ when result.StartsWith("w+") || result.StartsWith("b+") => result,
                 _ => null
             };
             if (resultStr != null)

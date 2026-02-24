@@ -8,6 +8,9 @@
   // ── Shared settings ───────────────────────────────────────────────────────
 
   const MODES = [
+    // Bullet
+    { label: '1+0',     settings: { timeControlEnabled: true,  startTimeMinutes: 1,  timeIncrementSeconds: 0  } },
+    { label: '1+1',     settings: { timeControlEnabled: true,  startTimeMinutes: 1,  timeIncrementSeconds: 1  } },
     // Blitz
     { label: '3+0',     settings: { timeControlEnabled: true,  startTimeMinutes: 3,  timeIncrementSeconds: 0  } },
     { label: '3+2',     settings: { timeControlEnabled: true,  startTimeMinutes: 3,  timeIncrementSeconds: 2  } },
@@ -23,9 +26,10 @@
   ];
 
   const MODE_GROUPS = [
-    { label: 'Blitz', indices: [0, 1, 2, 3] },
-    { label: 'Rapid', indices: [4, 5] },
-    { label: 'Slow',  indices: [6, 7, 8] },
+    { label: 'Bullet', indices: [0, 1] },
+    { label: 'Blitz',  indices: [2, 3, 4, 5] },
+    { label: 'Rapid',  indices: [6, 7] },
+    { label: 'Slow',   indices: [8, 9, 10] },
   ];
 
   // ── Settings persistence ─────────────────────────────────────────────────
@@ -36,7 +40,7 @@
   const _lb = getStored('lobby_settings', {});
 
   let tab           = $state(authState.token ? 'autopair' : 'lobby');  // 'autopair' | 'lobby'
-  let selectedMode  = $state(_lb.selectedMode ?? 3);
+  let selectedMode  = $state(_lb.selectedMode ?? 5);
   let boardSize     = $state(_lb.boardSize ?? 10);
   let boardSizeMin  = $state(_ap.boardSizeMin ?? 8);
   let boardSizeMax  = $state(_ap.boardSizeMax ?? 12);
@@ -96,10 +100,11 @@
 
   const BIDDING_OPTIONS = ['Disabled', 'Enabled', 'Any'];
   const TC_PREFS = [
-    { value: 'blitz', label: 'Any blitz' },
-    { value: 'rapid', label: 'Any rapid' },
-    { value: 'slow',  label: 'Any slow'  },
-    { value: 'any',   label: 'Any'       },
+    { value: 'bullet', label: 'Any bullet' },
+    { value: 'blitz',  label: 'Any blitz'  },
+    { value: 'rapid',  label: 'Any rapid'  },
+    { value: 'slow',   label: 'Any slow'   },
+    { value: 'any',    label: 'Any'        },
   ];
   // autopair: either a mode index (number) for a specific TC, or a TC_PREFS value (string)
   let autoTimeSel   = $state(_ap.autoTimeSel ?? 'any');

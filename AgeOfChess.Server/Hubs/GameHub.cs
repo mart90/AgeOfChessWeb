@@ -92,9 +92,10 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
                 var cat = EloService.GetCategory(game.Settings);
                 int elo = cat switch
                 {
-                    TimeControlCategory.Blitz => user.EloBlitz,
-                    TimeControlCategory.Rapid => user.EloRapid,
-                    _                         => user.EloSlow,
+                    TimeControlCategory.Bullet => user.EloBullet,
+                    TimeControlCategory.Blitz  => user.EloBlitz,
+                    TimeControlCategory.Rapid  => user.EloRapid,
+                    _                          => user.EloSlow,
                 };
                 if (isWhite) { game.White.PlayedByStr = user.EffectiveDisplayName; game.WhiteElo = elo; }
                 else         { game.Black.PlayedByStr = user.EffectiveDisplayName; game.BlackElo = elo; }
@@ -398,24 +399,45 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
     /// <summary>
     /// Called by a player after the game ends to request a rematch.
-    /// When both players request, a new game is created with the same settings on a fresh map.
+    /// When both players request, a new game is created with the same settings.
     /// If bidding is disabled, colors are swapped for the rematch.
+    /// If both players request the same map seed, the seed is preserved.
     /// </summary>
-    public async Task RequestRematch(string playerToken)
+    public async Task RequestRematch(string playerToken, bool sameSeed)
     {
         var game = sessions.GetByPlayerToken(playerToken);
         if (game == null || !game.GameEnded) return;
         if (!IsAuthorizedPlayer(game, playerToken)) return;
 
         bool isWhite = game.IsWhitePlayer(playerToken);
-        bool shouldCreate = game.RequestRematch(isWhite);
+        bool shouldCreate = game.RequestRematch(isWhite, sameSeed);
 
         // Notify both players that someone requested a rematch
-        await Clients.Group(game.GroupName).SendAsync("RematchRequested", isWhite);
+        await Clients.Group(game.GroupName).SendAsync("RematchRequested", isWhite, sameSeed);
 
         if (!shouldCreate) return;
 
-        // Build new settings: same config, fresh map (no seed)
+        // Get the actual map seed from the database if both players want same board
+        string? actualMapSeed = null;
+        if (game.BothWantSameSeed)
+        {
+            using var dbScope = scopeFactory.CreateScope();
+            var db = dbScope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            // Try HistoricGames first (game likely ended and was moved there)
+            var historic = await db.HistoricGames.FindAsync(game.SessionId);
+            if (historic != null)
+                actualMapSeed = historic.MapSeed;
+            else
+            {
+                // Fallback to GameSessions if still there
+                var session = await db.GameSessions.FindAsync(game.SessionId);
+                if (session != null)
+                    actualMapSeed = session.MapSeed;
+            }
+        }
+
+        // Build new settings: same config, optionally same seed
         var rematchSettings = new GameSettings
         {
             BoardSize          = game.Settings.BoardSize,
@@ -424,7 +446,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             TimeIncrementSeconds = game.Settings.TimeIncrementSeconds,
             BiddingEnabled     = game.Settings.BiddingEnabled,
             MapMode            = game.Settings.MapMode,
-            MapSeed            = null,
+            MapSeed            = actualMapSeed,
         };
 
         // Without bidding: swap colors. With bidding: same initial assignment (bidding will resolve).
@@ -512,14 +534,50 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         var session = await db.GameSessions.FindAsync(game.SessionId);
         if (session == null) return;
 
-        session.Result    = ParseResult(game.Result);
-        session.MovesJson = JsonSerializer.Serialize(game.MoveList.Select(m => m.ToNotation()));
-        session.MoveCount = game.MoveList.Count;
-        session.EndedAt   = DateTime.UtcNow;
+        // Extract bid information if bidding was enabled
+        int? whiteBid = null;
+        int? blackBid = null;
+        if (game.Bidding?.BothBid == true)
+        {
+            // Determine which bid belongs to which color
+            // If joiner bid higher, they became White after the swap
+            bool joinerWonBidding = game.Bidding.JoinerBid!.Value > game.Bidding.CreatorBid!.Value;
+            whiteBid = joinerWonBidding ? game.Bidding.JoinerBid.Value : game.Bidding.CreatorBid.Value;
+            blackBid = joinerWonBidding ? game.Bidding.CreatorBid.Value : game.Bidding.JoinerBid.Value;
+        }
 
         // Update Elo for both players if they were both authenticated
+        // This sets WhiteEloAtGame, BlackEloAtGame, WhiteEloDelta, BlackEloDelta on session
         await ApplyEloUpdates(db, game, session);
 
+        // Create HistoricGame entry with all game data (preserve the same Id)
+        var historicGame = new HistoricGame
+        {
+            Id = session.Id,
+            WhitePlayerId = game.WhiteUserId,
+            BlackPlayerId = game.BlackUserId,
+            WhiteEloAtGame = session.WhiteEloAtGame,
+            BlackEloAtGame = session.BlackEloAtGame,
+            WhiteEloDelta = session.WhiteEloDelta,
+            BlackEloDelta = session.BlackEloDelta,
+            WhiteBid = whiteBid,
+            BlackBid = blackBid,
+            MapSeed = session.MapSeed,
+            SettingsJson = session.SettingsJson,
+            BoardSize = session.BoardSize,
+            TimeControlEnabled = session.TimeControlEnabled,
+            StartTimeMinutes = session.StartTimeMinutes,
+            TimeIncrementSeconds = session.TimeIncrementSeconds,
+            MovesJson = JsonSerializer.Serialize(game.MoveList.Select(m => m.ToNotation())),
+            MoveCount = game.MoveList.Count,
+            Result = game.Result,
+            CreatedAt = session.StartedAt,
+            EndedAt = DateTime.UtcNow
+        };
+
+        // Save historic game and delete session
+        db.HistoricGames.Add(historicGame);
+        db.GameSessions.Remove(session);
         await db.SaveChangesAsync();
     }
 
@@ -547,16 +605,18 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         var (wElo, bElo) = category switch
         {
-            TimeControlCategory.Blitz => (whiteUser.EloBlitz, blackUser.EloBlitz),
-            TimeControlCategory.Rapid => (whiteUser.EloRapid, blackUser.EloRapid),
-            _                         => (whiteUser.EloSlow,  blackUser.EloSlow),
+            TimeControlCategory.Bullet => (whiteUser.EloBullet, blackUser.EloBullet),
+            TimeControlCategory.Blitz  => (whiteUser.EloBlitz,  blackUser.EloBlitz),
+            TimeControlCategory.Rapid  => (whiteUser.EloRapid,  blackUser.EloRapid),
+            _                          => (whiteUser.EloSlow,   blackUser.EloSlow),
         };
 
         var (wGames, bGames) = category switch
         {
-            TimeControlCategory.Blitz => (whiteUser.BlitzGamesPlayed, blackUser.BlitzGamesPlayed),
-            TimeControlCategory.Rapid => (whiteUser.RapidGamesPlayed, blackUser.RapidGamesPlayed),
-            _                         => (whiteUser.SlowGamesPlayed,  blackUser.SlowGamesPlayed),
+            TimeControlCategory.Bullet => (whiteUser.BulletGamesPlayed, blackUser.BulletGamesPlayed),
+            TimeControlCategory.Blitz  => (whiteUser.BlitzGamesPlayed,  blackUser.BlitzGamesPlayed),
+            TimeControlCategory.Rapid  => (whiteUser.RapidGamesPlayed,  blackUser.RapidGamesPlayed),
+            _                          => (whiteUser.SlowGamesPlayed,   blackUser.SlowGamesPlayed),
         };
 
         var (newWhite, newBlack) = EloService.Calculate(wElo, bElo, wGames, bGames, whiteWon.Value);
@@ -569,6 +629,10 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         switch (category)
         {
+            case TimeControlCategory.Bullet:
+                whiteUser.EloBullet = newWhite; whiteUser.BulletGamesPlayed++;
+                blackUser.EloBullet = newBlack; blackUser.BulletGamesPlayed++;
+                break;
             case TimeControlCategory.Blitz:
                 whiteUser.EloBlitz = newWhite; whiteUser.BlitzGamesPlayed++;
                 blackUser.EloBlitz = newBlack; blackUser.BlitzGamesPlayed++;

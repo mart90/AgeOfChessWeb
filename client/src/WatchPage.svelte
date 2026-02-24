@@ -24,7 +24,7 @@
   // Mirrors MapGenerator.GenerateFromSeed + MirrorGeneratedHalf logic.
 
   function parseSeed(seed) {
-    const [dims, encoded] = seed.split('_');
+    const [mirrorFlag, dims, encoded] = seed.split('_');
     const [W, H] = dims.split('x').map(Number);
     const total  = W * H;
 

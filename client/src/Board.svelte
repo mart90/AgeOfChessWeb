@@ -74,7 +74,7 @@
   // ── Highlights ──────────────────────────────────────────────────────────
 
   const SERVER_HIGHLIGHTS = {
-    Red:    'rgba(220,  50,  50, 0.60)',
+    Red:    'rgba(220,  50,  50, 0.85)',
     Green:  'rgba( 50, 200,  50, 0.50)',
     Blue:   'rgba( 50, 100, 255, 0.45)',
     Purple: 'rgba(160,  50, 220, 0.50)',
@@ -128,7 +128,14 @@
       }
 
       // Server highlight (check, etc.)
-      const sc = SERVER_HIGHLIGHTS[sq.highlight];
+      let sc = SERVER_HIGHLIGHTS[sq.highlight];
+      if (sc && sq.highlight === 'Red') {
+        const isDirt = sq.type.includes('Dirt');
+        if (isDirt) {
+          // Less intense red on dirt squares
+          sc = 'rgba(220, 50, 50, 0.55)';
+        }
+      }
       if (sc) { ctx.fillStyle = sc; ctx.fillRect(px, py, cw, ch); }
 
       // Legal destination hint (green dot)

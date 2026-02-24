@@ -48,10 +48,10 @@ public class UserController(AppDbContext db) : ControllerBase
 
         int userId = user.Id;
 
-        // Base filter — SQL level
-        var baseQuery = db.GameSessions
-            .Where(g => (g.WhiteUserId == userId || g.BlackUserId == userId)
-                        && g.Result != GameResult.InProgress);
+        // Base filter — SQL level (query HistoricGames instead of GameSessions)
+        var baseQuery = db.HistoricGames
+            .Where(g => (g.WhitePlayerId == userId || g.BlackPlayerId == userId)
+                        && g.Result != null);
 
         // Category filter — SQL level using denormalized columns
         if (category != "all")
@@ -64,29 +64,29 @@ public class UserController(AppDbContext db) : ControllerBase
 
         bool asc = sortDir == "asc";
         int totalGames;
-        List<GameSession> sessions;
+        List<HistoricGame> games;
         Dictionary<int, User> opponents;
 
         if (sortCol == "opponent")
         {
             // Opponent name requires knowing both sides — sort in memory after loading all
-            var allSessions = await baseQuery.ToListAsync();
-            totalGames = allSessions.Count;
+            var allGames = await baseQuery.ToListAsync();
+            totalGames = allGames.Count;
 
-            var allOppIds = allSessions
-                .Select(g => g.WhiteUserId == userId ? g.BlackUserId : g.WhiteUserId)
+            var allOppIds = allGames
+                .Select(g => g.WhitePlayerId == userId ? g.BlackPlayerId : g.WhitePlayerId)
                 .Where(id => id.HasValue).Select(id => id!.Value).Distinct().ToList();
             opponents = (await db.Users.Where(u => allOppIds.Contains(u.Id)).ToListAsync())
                 .ToDictionary(u => u.Id);
 
-            string OppName(GameSession g)
+            string OppName(HistoricGame g)
             {
-                int? oppId = g.WhiteUserId == userId ? g.BlackUserId : g.WhiteUserId;
+                int? oppId = g.WhitePlayerId == userId ? g.BlackPlayerId : g.WhitePlayerId;
                 return oppId.HasValue && opponents.TryGetValue(oppId.Value, out var o)
                     ? o.EffectiveDisplayName : "Anonymous";
             }
 
-            sessions = (asc ? allSessions.OrderBy(OppName) : allSessions.OrderByDescending(OppName))
+            games = (asc ? allGames.OrderBy(OppName) : allGames.OrderByDescending(OppName))
                 .Skip(startIndex).Take(50).ToList();
         }
         else
@@ -98,8 +98,8 @@ public class UserController(AppDbContext db) : ControllerBase
             {
                 "result"  => asc ? baseQuery.OrderBy(g => g.Result)    : baseQuery.OrderByDescending(g => g.Result),
                 "eloDelta" => asc
-                    ? baseQuery.OrderBy(g => g.WhiteUserId == userId ? g.WhiteEloDelta : g.BlackEloDelta)
-                    : baseQuery.OrderByDescending(g => g.WhiteUserId == userId ? g.WhiteEloDelta : g.BlackEloDelta),
+                    ? baseQuery.OrderBy(g => g.WhitePlayerId == userId ? g.WhiteEloDelta : g.BlackEloDelta)
+                    : baseQuery.OrderByDescending(g => g.WhitePlayerId == userId ? g.WhiteEloDelta : g.BlackEloDelta),
                 "timeControl" => asc
                     ? baseQuery.OrderBy(g => g.TimeControlEnabled ? g.StartTimeMinutes * 60 + g.TimeIncrementSeconds : int.MaxValue)
                     : baseQuery.OrderByDescending(g => g.TimeControlEnabled ? g.StartTimeMinutes * 60 + g.TimeIncrementSeconds : int.MaxValue),
@@ -108,21 +108,21 @@ public class UserController(AppDbContext db) : ControllerBase
                 _           => asc ? baseQuery.OrderBy(g => g.EndedAt)    : baseQuery.OrderByDescending(g => g.EndedAt),
             };
 
-            sessions = await sortedQuery.Skip(startIndex).Take(50).ToListAsync();
+            games = await sortedQuery.Skip(startIndex).Take(50).ToListAsync();
 
-            var oppIds = sessions
-                .Select(g => g.WhiteUserId == userId ? g.BlackUserId : g.WhiteUserId)
+            var oppIds = games
+                .Select(g => g.WhitePlayerId == userId ? g.BlackPlayerId : g.WhitePlayerId)
                 .Where(id => id.HasValue).Select(id => id!.Value).Distinct().ToList();
             opponents = (await db.Users.Where(u => oppIds.Contains(u.Id)).ToListAsync())
                 .ToDictionary(u => u.Id);
         }
 
-        // Map the 10 sessions to response DTOs
-        var games = sessions.Select(g =>
+        // Map the historic games to response DTOs
+        var gamesResponse = games.Select(g =>
         {
-            bool isWhite = g.WhiteUserId == userId;
+            bool isWhite = g.WhitePlayerId == userId;
 
-            int? opponentId = isWhite ? g.BlackUserId : g.WhiteUserId;
+            int? opponentId = isWhite ? g.BlackPlayerId : g.WhitePlayerId;
             User? opp = opponentId.HasValue && opponents.TryGetValue(opponentId.Value, out var o) ? o : null;
             string  opponentName     = opp?.EffectiveDisplayName ?? "Anonymous";
             string? opponentUsername = opp?.Username;
@@ -131,30 +131,26 @@ public class UserController(AppDbContext db) : ControllerBase
             int? myEloDelta   = isWhite ? g.WhiteEloDelta  : g.BlackEloDelta;
             int? oppEloAtGame = isWhite ? g.BlackEloAtGame : g.WhiteEloAtGame;
 
-            string result = g.Result switch
-            {
-                GameResult.WhiteWinMate or GameResult.WhiteWinGold or
-                GameResult.WhiteWinStalemate or GameResult.WhiteWinTime or
-                GameResult.WhiteWinResign   => isWhite ? "win"  : "loss",
-                GameResult.BlackWinMate or GameResult.BlackWinGold or
-                GameResult.BlackWinStalemate or GameResult.BlackWinTime or
-                GameResult.BlackWinResign   => isWhite ? "loss" : "win",
-                _                          => "draw",
-            };
+            // HistoricGame.Result is a string like "w+c", "b+g", etc.
+            bool whiteWon = g.Result?.StartsWith("w+") ?? false;
+            bool blackWon = g.Result?.StartsWith("b+") ?? false;
+            string result = whiteWon ? (isWhite ? "win" : "loss")
+                          : blackWon ? (isWhite ? "loss" : "win")
+                          : "draw";
 
             string resultDetail = g.Result switch
             {
-                GameResult.WhiteWinMate      => "W+#",
-                GameResult.WhiteWinGold      => "W+G",
-                GameResult.WhiteWinStalemate => "W+S",
-                GameResult.WhiteWinTime      => "W+T",
-                GameResult.WhiteWinResign    => "W+R",
-                GameResult.BlackWinMate      => "B+#",
-                GameResult.BlackWinGold      => "B+G",
-                GameResult.BlackWinStalemate => "B+S",
-                GameResult.BlackWinTime      => "B+T",
-                GameResult.BlackWinResign    => "B+R",
-                _                           => "—",
+                "w+c" => "W+#",
+                "w+g" => "W+G",
+                "w+s" => "W+S",
+                "w+t" => "W+T",
+                "w+r" => "W+R",
+                "b+c" => "B+#",
+                "b+g" => "B+G",
+                "b+s" => "B+S",
+                "b+t" => "B+T",
+                "b+r" => "B+R",
+                _     => "—",
             };
 
             // Derive category from denormalized columns (no JSON parse needed)
@@ -199,11 +195,12 @@ public class UserController(AppDbContext db) : ControllerBase
             displayName = user.EffectiveDisplayName,
             stats = new
             {
-                blitz = new { elo = user.EloBlitz, gamesPlayed = user.BlitzGamesPlayed },
-                rapid = new { elo = user.EloRapid, gamesPlayed = user.RapidGamesPlayed },
-                slow  = new { elo = user.EloSlow,  gamesPlayed = user.SlowGamesPlayed  },
+                bullet = new { elo = user.EloBullet, gamesPlayed = user.BulletGamesPlayed },
+                blitz  = new { elo = user.EloBlitz,  gamesPlayed = user.BlitzGamesPlayed  },
+                rapid  = new { elo = user.EloRapid,  gamesPlayed = user.RapidGamesPlayed  },
+                slow   = new { elo = user.EloSlow,   gamesPlayed = user.SlowGamesPlayed   },
             },
-            games,
+            games = gamesResponse,
             totalGames,
         });
     }

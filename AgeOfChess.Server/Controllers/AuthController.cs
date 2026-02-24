@@ -137,9 +137,11 @@ public class AuthController(AppDbContext db, IConfiguration config) : Controller
         user.Id,
         user.Username,
         displayName       = user.DisplayName,   // null → client falls back to username
+        user.EloBullet,
         user.EloBlitz,
         user.EloRapid,
         user.EloSlow,
+        user.BulletGamesPlayed,
         user.BlitzGamesPlayed,
         user.RapidGamesPlayed,
         user.SlowGamesPlayed,

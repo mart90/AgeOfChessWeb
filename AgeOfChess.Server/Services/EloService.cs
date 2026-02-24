@@ -2,7 +2,7 @@ using AgeOfChess.Server.GameLogic;
 
 namespace AgeOfChess.Server.Services;
 
-public enum TimeControlCategory { Blitz, Rapid, Slow }
+public enum TimeControlCategory { Bullet, Blitz, Rapid, Slow }
 
 public static class EloService
 {
@@ -14,16 +14,18 @@ public static class EloService
         => Math.Max(32, 100 - gamesPlayedInCategory * 5);
 
     /// <summary>
-    /// Maps game settings to one of the three rating categories:
-    ///   Slow   — no time control, or ≥ 30 minutes starting time  (30+15, 60+30, no timer)
-    ///   Rapid  — 10 or 15 minutes starting time                   (10+5, 15+10)
-    ///   Blitz  — time-controlled with &lt; 10 minutes starting time
+    /// Maps game settings to one of the four rating categories:
+    ///   Slow   — no time control, or ≥ 30 minutes starting time   (30+15, 60+30, no timer)
+    ///   Rapid  — 10 or 15 minutes starting time                    (10+5, 15+10)
+    ///   Blitz  — 3 to 9 minutes starting time                      (3+0, 3+2, 5+0, 5+3)
+    ///   Bullet — &lt; 3 minutes starting time                          (1+0, 1+1)
     /// </summary>
     public static TimeControlCategory GetCategory(GameSettings s) =>
-        !s.TimeControlEnabled       ? TimeControlCategory.Slow  :
-        s.StartTimeMinutes >= 30    ? TimeControlCategory.Slow  :
-        s.StartTimeMinutes >= 10    ? TimeControlCategory.Rapid :
-                                      TimeControlCategory.Blitz;
+        !s.TimeControlEnabled       ? TimeControlCategory.Slow   :
+        s.StartTimeMinutes >= 30    ? TimeControlCategory.Slow   :
+        s.StartTimeMinutes >= 10    ? TimeControlCategory.Rapid  :
+        s.StartTimeMinutes >= 3     ? TimeControlCategory.Blitz  :
+                                      TimeControlCategory.Bullet;
 
     /// <summary>
     /// Returns updated (whiteElo, blackElo) after a decisive result.

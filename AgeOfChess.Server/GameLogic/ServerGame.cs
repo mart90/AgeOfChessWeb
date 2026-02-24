@@ -48,6 +48,8 @@ public class ServerGame : Game
     private readonly Lock _rematchLock = new();
     public bool RematchRequestedByWhite { get; private set; }
     public bool RematchRequestedByBlack { get; private set; }
+    public bool WhiteWantsSameSeed { get; private set; }
+    public bool BlackWantsSameSeed { get; private set; }
     private bool _rematchCreated;
 
     /// <summary>
@@ -55,13 +57,21 @@ public class ServerGame : Game
     /// Returns true exactly once — when both players have requested — signalling
     /// that the caller should create the rematch game (race-condition safe).
     /// </summary>
-    public bool RequestRematch(bool isWhite)
+    public bool RequestRematch(bool isWhite, bool sameSeed)
     {
         lock (_rematchLock)
         {
             if (_rematchCreated) return false;
-            if (isWhite) RematchRequestedByWhite = true;
-            else         RematchRequestedByBlack = true;
+            if (isWhite)
+            {
+                RematchRequestedByWhite = true;
+                WhiteWantsSameSeed = sameSeed;
+            }
+            else
+            {
+                RematchRequestedByBlack = true;
+                BlackWantsSameSeed = sameSeed;
+            }
 
             if (RematchRequestedByWhite && RematchRequestedByBlack)
             {
@@ -71,6 +81,11 @@ public class ServerGame : Game
             return false;
         }
     }
+
+    /// <summary>
+    /// Returns true if both players want to use the same map seed for the rematch.
+    /// </summary>
+    public bool BothWantSameSeed => WhiteWantsSameSeed && BlackWantsSameSeed;
 
     public string GroupName => $"game-{SessionId}";
 

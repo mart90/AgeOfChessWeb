@@ -100,9 +100,10 @@ public class MatchmakingHub(MatchmakingService matchmaking, IServiceScopeFactory
         if (user == null) return 1200;
         return EloService.GetCategory(settings) switch
         {
-            TimeControlCategory.Blitz => user.EloBlitz,
-            TimeControlCategory.Rapid => user.EloRapid,
-            _                         => user.EloSlow,
+            TimeControlCategory.Bullet => user.EloBullet,
+            TimeControlCategory.Blitz  => user.EloBlitz,
+            TimeControlCategory.Rapid  => user.EloRapid,
+            _                          => user.EloSlow,
         };
     }
 
@@ -115,10 +116,11 @@ public class MatchmakingHub(MatchmakingService matchmaking, IServiceScopeFactory
         if (user == null) return 1200;
         return category switch
         {
-            TimeControlCategory.Blitz => user.EloBlitz,
-            TimeControlCategory.Rapid => user.EloRapid,
-            TimeControlCategory.Slow  => user.EloSlow,
-            _                         => user.EloRapid,  // "Any" → Rapid (default game is 10+5)
+            TimeControlCategory.Bullet => user.EloBullet,
+            TimeControlCategory.Blitz  => user.EloBlitz,
+            TimeControlCategory.Rapid  => user.EloRapid,
+            TimeControlCategory.Slow   => user.EloSlow,
+            _                          => user.EloRapid,  // "Any" → Rapid (default game is 10+5)
         };
     }
 }

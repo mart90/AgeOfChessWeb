@@ -48,7 +48,7 @@ const PIECE_VALUES = {
     'WhiteQueen': 90, 'BlackQueen': 90,
     'WhiteRook': 52, 'BlackRook': 52,
     'WhiteBishop': 42, 'BlackBishop': 42,
-    'WhiteKnight': 42, 'BlackKnight': 42,
+    'WhiteKnight': 40, 'BlackKnight': 40,
     'WhitePawn': 25, 'BlackPawn': 25
 };
 

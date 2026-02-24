@@ -26,8 +26,7 @@
       Because the value of having White is different per board spawn, there is an option to bid for White. This allows the players to look at the starting position before
       it's decided who plays which color. The players each decide how much gold they would pay the other player in return for getting to play White. 
       <br><br>
-      On fully random boards,
-      bids can be negative when Black is better. This can happen when the Black king spawns favorably, near treasures or mines.
+      On fully random boards, bids can be negative when Black is better. This can happen when the Black king spawns favorably, near treasures or mines.
       <br><br>
       After both players submitted their bid, the highest bidder gets White. The winning bid then becomes Black's starting gold. If Black was better and the "winning" bid
       was negative, Black will start in debt (negative gold).
@@ -35,10 +34,10 @@
 
     <hr />
 
-    <!-- <h3>Example position</h3>
+    <h3>Discord</h3>
     <p class="lead">
-      
-    </p> -->
+      Join the <a href="https://discord.gg/UhcU64NCs2">discord server</a> to discuss the game, give feedback, or find people to play with.
+    </p>
     
   </div>
 </div>
@@ -118,6 +117,16 @@
     color: #bbb;
   }
   .example strong { color: #ddd; }
+
+  a {
+    color: #8ab4f8;
+    text-decoration: none;
+  }
+
+  a:hover {
+    color: #aac7ff;
+    text-decoration: underline;
+  }
 
   hr {
     border: none;

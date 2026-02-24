@@ -19,7 +19,7 @@
   let sortCol   = $state('endedAt');
   let sortDir   = $state('desc');  // 'asc' | 'desc'
 
-  const TABS = ['all', 'blitz', 'rapid', 'slow'];
+  const TABS = ['all', 'bullet', 'blitz', 'rapid', 'slow'];
 
   const displayGames = $derived(profile?.games ?? []);
 
@@ -60,13 +60,13 @@
   const plotW = GW - PAD.left - PAD.right;
   const plotH = GH - PAD.top  - PAD.bottom;
 
-  const CAT_COLORS = { blitz: '#7b8cde', rapid: '#6ec97a', slow: '#f5c518' };
+  const CAT_COLORS = { bullet: '#ff6b9d', blitz: '#7b8cde', rapid: '#6ec97a', slow: '#f5c518' };
 
   const eloSeries = $derived.by(() => {
-    if (!profile) return { blitz: [], rapid: [], slow: [] };
+    if (!profile) return { bullet: [], blitz: [], rapid: [], slow: [] };
     const asc = [...profile.games].sort((a, b) => new Date(a.endedAt) - new Date(b.endedAt));
     const result = {};
-    for (const cat of ['blitz', 'rapid', 'slow']) {
+    for (const cat of ['bullet', 'blitz', 'rapid', 'slow']) {
       const catGames = asc.filter(g => g.category === cat && g.eloDelta != null);
       const currentElo = profile.stats[cat].elo;
       if (catGames.length === 0) {
@@ -147,7 +147,7 @@
 
     <!-- Stats cards -->
     <div class="stats-row">
-      {#each [['blitz', 'Blitz', '⚡'], ['rapid', 'Rapid', '🕐'], ['slow', 'Slow', '☕']] as [cat, label, icon]}
+      {#each [['bullet', 'Bullet', '🔥'], ['blitz', 'Blitz', '⚡'], ['rapid', 'Rapid', '🕐'], ['slow', 'Slow', '☕']] as [cat, label, icon]}
         {@const s = profile.stats[cat]}
         <div class="stat-card">
           <div class="stat-label">{icon} {label}</div>

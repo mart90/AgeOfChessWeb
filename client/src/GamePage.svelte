@@ -63,6 +63,8 @@
 
   let rematchRequested         = $state(false);
   let opponentRematchRequested = $state(false);
+  let opponentWantsSameSeed    = $state(false);
+  let sameSeedRematch          = $state(false);
 
   // ── Chat state ───────────────────────────────────────────────────────────
 
@@ -538,9 +540,14 @@
       isWhite = white;
       localStorage.setItem(`color_${gameId}`, white ? 'white' : 'black');
     });
-    hub.on('RematchRequested', (requestedByWhite) => {
-      if (requestedByWhite === isWhite) rematchRequested = true;
-      else opponentRematchRequested = true;
+    hub.on('RematchRequested', (requestedByWhite, wantsSameSeed) => {
+      if (requestedByWhite === isWhite) {
+        rematchRequested = true;
+      } else {
+        opponentRematchRequested = true;
+        opponentWantsSameSeed = wantsSameSeed;
+        sameSeedRematch = wantsSameSeed; // Pre-check the box if opponent wants same board
+      }
     });
     hub.on('RematchReady', (newGameId, newToken, newIsWhite) => {
       localStorage.setItem(`token_${newGameId}`, newToken);
@@ -572,7 +579,7 @@
   function requestRematch() {
     if (!hub || rematchRequested) return;
     rematchRequested = true;
-    hub.invoke('RequestRematch', playerToken);
+    hub.invoke('RequestRematch', playerToken, sameSeedRematch);
   }
 
   function copyInvite() {
@@ -825,10 +832,18 @@
   {#if gameState?.gameEnded && !isSpectator}
     <div class="rematch-bar">
       {#if opponentRematchRequested && !rematchRequested}
+        <label class="rematch-option">
+          <input type="checkbox" bind:checked={sameSeedRematch} />
+          <span>Same board</span>
+        </label>
         <button class="rematch-btn accept" onclick={requestRematch}>Accept Rematch</button>
       {:else if rematchRequested}
         <span class="rematch-waiting">Rematch requested — waiting for opponent…</span>
       {:else}
+        <label class="rematch-option">
+          <input type="checkbox" bind:checked={sameSeedRematch} />
+          <span>Same board</span>
+        </label>
         <button class="rematch-btn" onclick={requestRematch}>Request Rematch</button>
       {/if}
     </div>
@@ -1159,7 +1174,22 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 0.8rem;
     padding: 0.5rem;
+  }
+  .rematch-option {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: #aaa;
+    cursor: pointer;
+    user-select: none;
+  }
+  .rematch-option input[type="checkbox"] {
+    cursor: pointer;
+    width: 15px;
+    height: 15px;
   }
   .rematch-btn {
     padding: 0.45rem 1.4rem;

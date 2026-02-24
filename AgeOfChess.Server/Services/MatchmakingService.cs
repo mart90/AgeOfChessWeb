@@ -218,15 +218,16 @@ public class MatchmakingService : IDisposable
 
     /// <summary>
     /// Default time control for each category when no specific TC was chosen.
-    /// Blitz → 5+3 · Rapid → 15+10 · Slow → 30+15 · Any → 10+5
+    /// Bullet → 1+1 · Blitz → 5+3 · Rapid → 15+10 · Slow → 30+15 · Any → 10+5
     /// </summary>
     private static (bool enabled, int startMin, int incSec) CategoryDefault(TimeControlCategory? cat) =>
         cat switch
         {
-            TimeControlCategory.Blitz => (true,  5,  3),
-            TimeControlCategory.Rapid => (true, 15, 10),
-            TimeControlCategory.Slow  => (true, 30, 15),
-            _                         => (true, 10,  5),  // Any → 10+5
+            TimeControlCategory.Bullet => (true,  1,  1),
+            TimeControlCategory.Blitz  => (true,  5,  3),
+            TimeControlCategory.Rapid  => (true, 15, 10),
+            TimeControlCategory.Slow   => (true, 30, 15),
+            _                          => (true, 10,  5),  // Any → 10+5
         };
 
     /// <summary>

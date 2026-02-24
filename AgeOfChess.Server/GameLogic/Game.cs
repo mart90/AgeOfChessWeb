@@ -19,12 +19,13 @@ public abstract class Game
     public int TimeIncrementSeconds;
     protected bool FirstMoveMade;
 
+    private const int MINE_INCOME = 3;
     private static readonly Dictionary<Type, int> PieceCosts = new()
     {
         [typeof(Queen)]  = 76,
         [typeof(Rook)]   = 40,
         [typeof(Bishop)] = 32,
-        [typeof(Knight)] = 32,
+        [typeof(Knight)] = 30,
         [typeof(Pawn)]   = 28,
     };
 
@@ -91,12 +92,12 @@ public abstract class Game
 
         ActiveColor.Gold++;
 
-        // Mine income: +4 gold for each mine owned by the active player
+        // +{MINE_INCOME} gold for each mine owned by the active player
         foreach (var square in Map.GetMines())
         {
             var ownerColor = square.MineOwner;
             if ((ownerColor == "white" && ActiveColor.IsWhite) || (ownerColor == "black" && !ActiveColor.IsWhite))
-                ActiveColor.Gold += 4;
+                ActiveColor.Gold += MINE_INCOME;
         }
 
         // Time forfeit detected by EndTurn

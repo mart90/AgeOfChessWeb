@@ -125,6 +125,79 @@ namespace AgeOfChess.Server.Migrations
                     b.ToTable("GameSessions");
                 });
 
+            modelBuilder.Entity("AgeOfChess.Server.Data.Models.HistoricGame", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("BlackBid")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("BlackEloAtGame")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("BlackEloDelta")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("BlackPlayerId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BoardSize")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("EndedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("MapSeed")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("MoveCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MovesJson")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Result")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("SettingsJson")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("StartTimeMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("TimeControlEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("TimeIncrementSeconds")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("WhiteBid")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("WhiteEloAtGame")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("WhiteEloDelta")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("WhitePlayerId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("HistoricGames");
+                });
+
             modelBuilder.Entity("AgeOfChess.Server.Data.Models.Lobby", b =>
                 {
                     b.Property<int>("Id")
@@ -167,6 +240,9 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<int>("BlitzGamesPlayed")
                         .HasColumnType("int");
 
+                    b.Property<int>("BulletGamesPlayed")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
@@ -174,6 +250,9 @@ namespace AgeOfChess.Server.Migrations
                         .HasColumnType("longtext");
 
                     b.Property<int>("EloBlitz")
+                        .HasColumnType("int");
+
+                    b.Property<int>("EloBullet")
                         .HasColumnType("int");
 
                     b.Property<int>("EloRapid")

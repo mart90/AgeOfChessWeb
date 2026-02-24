@@ -47,11 +47,7 @@
     <h3>Bidding</h3>
     <p>
       With bidding enabled, both players secretly bid gold for the right to play White. The higher
-      bidder wins White and their bid becomes Black's starting gold.
-    </p>
-    <p>
-      Bids can be negative when Black is better, which can happen on full random boards. In that
-      case, Black starts with negative gold.
+      bidder wins White and their bid becomes Black's starting gold. Bids can be negative.
     </p>
     <p class="example">
       <strong>Example:</strong> You bid 8g, the opponent bids 6g. You play White, and the opponent

@@ -14,10 +14,6 @@ public class GameSession
 {
     public int Id { get; set; }
 
-    // Null for anonymous games
-    public int? LobbyId { get; set; }
-    public Lobby? Lobby { get; set; }
-
     // Null for anonymous players
     public int? WhiteUserId { get; set; }
     public User? WhiteUser { get; set; }
