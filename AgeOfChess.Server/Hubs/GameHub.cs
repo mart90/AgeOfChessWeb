@@ -64,10 +64,6 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         Context.Items["playerToken"] = playerToken;
 
         bool isWhite = game.IsWhitePlayer(playerToken);
-        if (isWhite)
-            game.WhiteConnectionId = Context.ConnectionId;
-        else
-            game.BlackConnectionId = Context.ConnectionId;
 
         // If this slot already has a registered user, the caller's JWT must match
         var callerUserId   = GetCurrentUserId();
@@ -77,6 +73,12 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             await Clients.Caller.SendAsync("Error", "Unauthorized.");
             return;
         }
+
+        // Set connection ID only after passing auth check
+        if (isWhite)
+            game.WhiteConnectionId = Context.ConnectionId;
+        else
+            game.BlackConnectionId = Context.ConnectionId;
 
         // Associate user ID and display name if the player connected with a valid JWT
         if (callerUserId.HasValue)
@@ -136,6 +138,14 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
                 if (game.Bidding != null && !game.Bidding.BothBid)
                     await Clients.Group(game.GroupName).SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
             }
+        }
+        else if (game.HasGameStarted)
+        {
+            // Only one player connected, but game already started — send current state to caller
+            // so they can see the board and make moves while waiting for opponent to reconnect
+            await Clients.Caller.SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
+            if (game.Bidding != null && !game.Bidding.BothBid)
+                await Clients.Caller.SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
         }
     }
 

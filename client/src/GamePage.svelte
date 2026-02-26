@@ -343,6 +343,7 @@
   }
 
   function clearDrag() {
+    stopAutoScroll();
     dragging = null;
     dragOverSquare = null;
     selectedSquare = null;
@@ -363,14 +364,61 @@
 
   // ── Global pointer tracking ───────────────────────────────────────────────
 
+  let autoScrollDirection = $state(0); // -1 = up, 0 = none, +1 = down
+  let autoScrollRafId = null;
+
+  function startAutoScroll() {
+    if (autoScrollRafId !== null) return;
+
+    function scroll() {
+      if (autoScrollDirection !== 0 && dragging) {
+        const SCROLL_SPEED = 8;
+        window.scrollBy(0, autoScrollDirection * SCROLL_SPEED);
+        autoScrollRafId = requestAnimationFrame(scroll);
+      } else {
+        autoScrollRafId = null;
+      }
+    }
+    autoScrollRafId = requestAnimationFrame(scroll);
+  }
+
+  function stopAutoScroll() {
+    if (autoScrollRafId !== null) {
+      cancelAnimationFrame(autoScrollRafId);
+      autoScrollRafId = null;
+    }
+    autoScrollDirection = 0;
+  }
+
   function globalPointerMove(e) {
     if (!dragging) return;
     dragging = { ...dragging, ghostX: e.clientX, ghostY: e.clientY };
     dragOverSquare = globalCursorToBoard(e.clientX, e.clientY);
+
+    // Auto-scroll when dragging near viewport edges (for mobile piece placement)
+    const EDGE_THRESHOLD = 80;
+    const distFromTop = e.clientY;
+    const distFromBottom = window.innerHeight - e.clientY;
+
+    const prevDirection = autoScrollDirection;
+    if (distFromTop < EDGE_THRESHOLD) {
+      autoScrollDirection = -1;
+    } else if (distFromBottom < EDGE_THRESHOLD) {
+      autoScrollDirection = 1;
+    } else {
+      autoScrollDirection = 0;
+    }
+
+    if (autoScrollDirection !== 0 && prevDirection === 0) {
+      startAutoScroll();
+    } else if (autoScrollDirection === 0 && prevDirection !== 0) {
+      stopAutoScroll();
+    }
   }
 
   function globalPointerUp(e) {
     if (!dragging) return;
+    stopAutoScroll();
     // Shop piece dropped anywhere on the board
     if (dragging.type === 'place') {
       const sq = globalCursorToBoard(e.clientX, e.clientY);
@@ -389,6 +437,7 @@
     window.addEventListener('pointerup',   globalPointerUp);
     const clockInterval = setInterval(tickClocks, 250);
     function teardown() {
+      stopAutoScroll();
       window.removeEventListener('pointermove', globalPointerMove);
       window.removeEventListener('pointerup',   globalPointerUp);
       clearInterval(clockInterval);
@@ -619,29 +668,28 @@
 <div class="page">
 <div class="game-layout">
 
-  <!-- Opponent panel (top) — hidden until opponent connects -->
-  {#if opponent}
-  <div class="player-panel">
-    <span class="dot" class:active={opponent.isActive && !biddingState}></span>
+  <!-- Opponent panel (top) -->
+  <div class="player-panel" class:active={opponent?.isActive && !biddingState}>
     <span class="name">
-      {opponent.name}
-      {#if opponent.elo != null}<span class="elo-label">({opponent.elo})</span>{/if}
-      {#if !biddingState}<span class="color-label">{isWhite ? 'Black' : 'White'}</span>{/if}
+      {opponent?.name ?? 'Waiting for opponent...'}
+      {#if opponent?.elo != null}<span class="elo-label">({opponent.elo})</span>{/if}
+      {#if opponent && !biddingState}<span class="color-label">{isWhite ? 'Black' : 'White'}</span>{/if}
     </span>
-    <span class="gold">⚙ {opponent.gold}g</span>
-    {#if biddingState}
-      {@const oppBidPlaced = isWhite ? biddingState.joinerBidPlaced : biddingState.creatorBidPlaced}
-      {@const oppBidMs    = isWhite ? localJoinerMs : localCreatorMs}
-      {#if biddingState.initialMs < 86400000}
-        <span class="clock" class:ticking={!oppBidPlaced}>{formatTime(oppBidMs)}</span>
+    {#if opponent}
+      <span class="gold">⚙ {opponent.gold}g</span>
+      {#if biddingState}
+        {@const oppBidPlaced = isWhite ? biddingState.joinerBidPlaced : biddingState.creatorBidPlaced}
+        {@const oppBidMs    = isWhite ? localJoinerMs : localCreatorMs}
+        {#if biddingState.initialMs < 86400000}
+          <span class="clock" class:ticking={!oppBidPlaced}>{formatTime(oppBidMs)}</span>
+        {/if}
+        {#if oppBidPlaced}<span class="bid-check">✓</span>{/if}
+      {:else if opponent.timeMsRemaining > 0}
+        {@const oppMs = isWhite ? localBlackMs : localWhiteMs}
+        <span class="clock" class:ticking={opponent.isActive}>{formatTime(oppMs)}</span>
       {/if}
-      {#if oppBidPlaced}<span class="bid-check">✓</span>{/if}
-    {:else if opponent.timeMsRemaining > 0}
-      {@const oppMs = isWhite ? localBlackMs : localWhiteMs}
-      <span class="clock" class:ticking={opponent.isActive}>{formatTime(oppMs)}</span>
     {/if}
   </div>
-  {/if}
 
   <!-- Status / invite bar -->
   {#if statusMsg || inviteUrl}
@@ -791,9 +839,8 @@
     {/if}
 
   <!-- My panel — inside game-body so CSS order can place it above the move list on mobile -->
-  <div class="player-panel me">
+  <div class="player-panel me" class:active={me?.isActive && !biddingState}>
     {#if me}
-      <span class="dot" class:active={me.isActive && !biddingState}></span>
       <span class="name">
         {me.name}
         {#if me.elo != null}<span class="elo-label">({me.elo})</span>{/if}
@@ -1021,11 +1068,18 @@
     background: #22223a;
     border-radius: 6px;
     font-size: 1rem;
+    border: 2px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
   }
   .player-panel.me { flex: 0 0 100%; }
+  .player-panel.active {
+    background: #2a2a48;
+    border-color: #7b8cde;
+    box-shadow: 0 0 12px rgba(123, 140, 222, 0.3);
+  }
 
   .dot { width: 10px; height: 10px; border-radius: 50%; background: #444; flex-shrink: 0; }
-  .dot.active { background: #7cfc00; }
+  .dot.connected { background: #7cfc00; }
   .name { font-weight: 600; flex: 1; }
   .muted { opacity: 0.45; }
   .elo-label   { font-weight: 400; font-size: 0.82rem; color: #aaa; margin-left: 0.2rem; }

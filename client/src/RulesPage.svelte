@@ -32,8 +32,8 @@
     <h3>Piece placement</h3>
     <ul>
       <li>Instead of moving a piece, a new piece can be placed on the board.</li>
-      <li>New major pieces can only be placed around the king.</li>
-      <li>Pawns can be placed around any major piece.</li> 
+      <li>New non-pawn pieces can only be placed around the king.</li>
+      <li>Pawns can be placed around any piece except other pawns.</li> 
       <li>Pieces can't be placed on top of enemy pieces or treasures.</li>
     </ul>
     

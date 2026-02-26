@@ -24,21 +24,23 @@ public class GameCreationService(AppDbContext db, GameSessionManager sessions)
         GameSettings settings,
         PlayerInfo? white = null,
         PlayerInfo? black = null,
-        bool isPrivate = false)
+        bool isPrivate = false,
+        bool createdViaMatchmaking = false)
     {
         white ??= new PlayerInfo();
         black ??= new PlayerInfo();
 
         var session = new GameSession
         {
-            SettingsJson         = JsonSerializer.Serialize(settings),
-            WhiteUserId          = white.UserId,
-            BlackUserId          = black.UserId,
-            BoardSize            = settings.BoardSize,
-            TimeControlEnabled   = settings.TimeControlEnabled,
-            StartTimeMinutes     = settings.StartTimeMinutes,
-            TimeIncrementSeconds = settings.TimeIncrementSeconds,
-            IsPrivate            = isPrivate,
+            SettingsJson          = JsonSerializer.Serialize(settings),
+            WhiteUserId           = white.UserId,
+            BlackUserId           = black.UserId,
+            BoardSize             = settings.BoardSize,
+            TimeControlEnabled    = settings.TimeControlEnabled,
+            StartTimeMinutes      = settings.StartTimeMinutes,
+            TimeIncrementSeconds  = settings.TimeIncrementSeconds,
+            IsPrivate             = isPrivate,
+            CreatedViaMatchmaking = createdViaMatchmaking,
         };
         db.GameSessions.Add(session);
         await db.SaveChangesAsync();   // get session.Id
@@ -54,6 +56,7 @@ public class GameCreationService(AppDbContext db, GameSessionManager sessions)
         game.BlackUserId = black.UserId;
         game.WhiteElo    = white.Elo;
         game.BlackElo    = black.Elo;
+        game.CreatedViaMatchmaking = createdViaMatchmaking;
 
         await db.SaveChangesAsync();
         sessions.Add(game);

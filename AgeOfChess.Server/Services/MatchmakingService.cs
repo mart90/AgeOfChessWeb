@@ -127,6 +127,9 @@ public class MatchmakingService : IDisposable
 
     private static bool AreCompatible(MatchmakingEntry a, MatchmakingEntry b)
     {
+        // Can't match a user with themselves (both logged in, same UserId)
+        if (a.UserId.HasValue && b.UserId.HasValue && a.UserId.Value == b.UserId.Value) return false;
+
         // Board size ranges must overlap
         if (a.BoardSizeMax < b.BoardSizeMin || b.BoardSizeMax < a.BoardSizeMin) return false;
 
@@ -196,7 +199,9 @@ public class MatchmakingService : IDisposable
 
         var (session, _) = await gameCreation.CreateAsync(settings,
             new(white.UserId, white.UserId.HasValue ? white.Elo : null, whiteName),
-            new(black.UserId, black.UserId.HasValue ? black.Elo : null, blackName));
+            new(black.UserId, black.UserId.HasValue ? black.Elo : null, blackName),
+            isPrivate: false,
+            createdViaMatchmaking: true);
 
         await _hub.Clients.Client(white.ConnectionId)
             .SendAsync("MatchFound", new { gameId = session.Id, playerToken = session.WhitePlayerToken, isWhite = true });

@@ -123,7 +123,7 @@
 
       // Last-move highlight (subtle warm yellow, drawn early so other overlays sit on top)
       if (lastMoveSet.has(`${sq.x},${sq.y}`)) {
-        ctx.fillStyle = 'rgba(200, 175, 0, 0.30)';
+        ctx.fillStyle = 'rgba(200, 175, 0, 0.45)';
         ctx.fillRect(px, py, cw, ch);
       }
 

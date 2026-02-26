@@ -52,14 +52,14 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<int>("BoardSize")
                         .HasColumnType("int");
 
+                    b.Property<bool>("CreatedViaMatchmaking")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<DateTime?>("EndedAt")
                         .HasColumnType("datetime(6)");
 
                     b.Property<bool>("IsPrivate")
                         .HasColumnType("tinyint(1)");
-
-                    b.Property<int?>("LobbyId")
-                        .HasColumnType("int");
 
                     b.Property<string>("MapSeed")
                         .IsRequired()
@@ -113,9 +113,6 @@ namespace AgeOfChess.Server.Migrations
                         .IsUnique();
 
                     b.HasIndex("BlackUserId");
-
-                    b.HasIndex("LobbyId")
-                        .IsUnique();
 
                     b.HasIndex("WhitePlayerToken")
                         .IsUnique();
@@ -198,37 +195,6 @@ namespace AgeOfChess.Server.Migrations
                     b.ToTable("HistoricGames");
                 });
 
-            modelBuilder.Entity("AgeOfChess.Server.Data.Models.Lobby", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("HostId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("HostUserId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("SettingsJson")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("HostId");
-
-                    b.ToTable("Lobbies");
-                });
-
             modelBuilder.Entity("AgeOfChess.Server.Data.Models.User", b =>
                 {
                     b.Property<int>("Id")
@@ -300,35 +266,13 @@ namespace AgeOfChess.Server.Migrations
                         .WithMany()
                         .HasForeignKey("BlackUserId");
 
-                    b.HasOne("AgeOfChess.Server.Data.Models.Lobby", "Lobby")
-                        .WithOne("GameSession")
-                        .HasForeignKey("AgeOfChess.Server.Data.Models.GameSession", "LobbyId");
-
                     b.HasOne("AgeOfChess.Server.Data.Models.User", "WhiteUser")
                         .WithMany()
                         .HasForeignKey("WhiteUserId");
 
                     b.Navigation("BlackUser");
 
-                    b.Navigation("Lobby");
-
                     b.Navigation("WhiteUser");
-                });
-
-            modelBuilder.Entity("AgeOfChess.Server.Data.Models.Lobby", b =>
-                {
-                    b.HasOne("AgeOfChess.Server.Data.Models.User", "Host")
-                        .WithMany()
-                        .HasForeignKey("HostId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Host");
-                });
-
-            modelBuilder.Entity("AgeOfChess.Server.Data.Models.Lobby", b =>
-                {
-                    b.Navigation("GameSession");
                 });
 #pragma warning restore 612, 618
         }

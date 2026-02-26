@@ -32,6 +32,12 @@ public class GameSession
 
     public bool IsPrivate { get; set; } = false;
 
+    /// <summary>
+    /// True if this game was created via the matchmaking system (not a manual lobby).
+    /// Matchmaking games should not appear in "open lobbies" lists.
+    /// </summary>
+    public bool CreatedViaMatchmaking { get; set; } = false;
+
     // Denormalized from SettingsJson so EF Core can filter/sort at the SQL level
     public int  BoardSize            { get; set; } = 12;
     public bool TimeControlEnabled   { get; set; } = true;

@@ -12,6 +12,7 @@ public class ServerGame : Game
     public int SessionId { get; }
     public bool BiddingEnabled { get; }
     public bool IsSlowGame { get; }
+    public bool CreatedViaMatchmaking { get; set; }
     public string WhitePlayerToken { get; private set; }
     public string BlackPlayerToken { get; private set; }
 

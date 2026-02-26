@@ -171,6 +171,8 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
 
         var list = sessions.GetAll()
             .Where(g => !g.GameEnded && (g.WhiteUserId == userId || g.BlackUserId == userId))
+            // Exclude matchmaking games that haven't started yet (not "your game" until both join)
+            .Where(g => !g.CreatedViaMatchmaking || g.HasGameStarted)
             .Select(g =>
             {
                 bool isWhite = g.WhiteUserId == userId;

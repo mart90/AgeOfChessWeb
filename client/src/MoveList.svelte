@@ -45,7 +45,22 @@
   $effect(() => {
     if (activeIndex == null || !listEl) return;
     const row = listEl.querySelector(`[data-move-idx="${activeIndex}"]`);
-    row?.scrollIntoView({ block: 'nearest' });
+    if (!row) return;
+
+    // Scroll only the container, not the page (prevents mobile page scroll)
+    const container = listEl;
+    const rowTop = row.offsetTop;
+    const rowBottom = rowTop + row.offsetHeight;
+    const containerTop = container.scrollTop;
+    const containerBottom = containerTop + container.clientHeight;
+
+    if (rowTop < containerTop) {
+      // Row is above visible area
+      container.scrollTop = rowTop;
+    } else if (rowBottom > containerBottom) {
+      // Row is below visible area
+      container.scrollTop = rowBottom - container.clientHeight;
+    }
   });
 
   // ── Pair moves for display (white / black per row) ───────────────────────
