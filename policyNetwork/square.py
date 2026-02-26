@@ -6,12 +6,13 @@ class Square(object):
         # m = Mine
         # t = Trees
         # r = Rocks
-        self.type = None
+        self.terrain_type = None
         
         # k, q, r, n, b, or p
-        self.piece_type = None
-        
-        self.is_white = None
+        self.piece_type = None        
+        self.piece_is_white = None
+
+        self.has_treasure = False
 
         # Relevant if type == "m"
         # 0 is white, 1 is black
@@ -19,6 +20,6 @@ class Square(object):
 
     def set_piece(self, piece_type, is_white):
         self.piece_type = piece_type
-        self.is_white = is_white
+        self.piece_is_white = is_white
         if self.type == "m":
             self.owned_by = 0 if is_white else 1

@@ -131,12 +131,11 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             }
             else
             {
-                // Both players now connected on a resumed/ongoing game — sync the whole group so
-                // a player who reconnected before their opponent (and is stuck at "waiting") also
-                // receives the current state.
-                await Clients.Group(game.GroupName).SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
+                // Game already started - only send to the caller (who just reconnected).
+                // The other player already has the state and doesn't need a notification.
+                await Clients.Caller.SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
                 if (game.Bidding != null && !game.Bidding.BothBid)
-                    await Clients.Group(game.GroupName).SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
+                    await Clients.Caller.SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
             }
         }
         else if (game.HasGameStarted)

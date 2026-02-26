@@ -61,11 +61,11 @@ public class MapGenerator
 
         if (width == 8)
         {
-            density = 1;
+            density = 2;
         }
         else if (width == 10)
         {
-            density = 2;
+            density = 3;
         }
         else if (width == 12)
         {
@@ -77,7 +77,7 @@ public class MapGenerator
         }
         else if (width == 16)
         {
-            density = 5;
+            density = 6;
         }
 
         AddRandomlyGeneratedSquares(SquareType.DirtRocks, density, false);
@@ -88,14 +88,6 @@ public class MapGenerator
         AddRandomlyGeneratedSquares(SquareType.GrassMine, density - (width == 16 ? 1 : 0), false);
         
         bool addOne = width == 8 || width == 10 || width == 16;
-
-        if (addOne)
-        {
-            AddRandomlyGeneratedSquares(SquareType.GrassRocks, 1, false);
-            AddRandomlyGeneratedSquares(SquareType.GrassTrees, 1, false);
-            AddRandomlyGeneratedSquares(SquareType.GrassMine, 1, false);
-        }
-
         AddRandomlyGeneratedGaiaObjects<Treasure>(density * 2 + (addOne ? 1 : 0), false);
 
         SpawnKings(false);

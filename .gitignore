@@ -20,6 +20,7 @@ publish/
 # Fill in ConnectionStrings:Default and Jwt:Key in the appropriate override file.
 appsettings.*.json
 !appsettings.json
+policyNetwork/config.py
 
 # Node
 node_modules/

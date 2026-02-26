@@ -22,11 +22,11 @@ public abstract class Game
     private const int MINE_INCOME = 3;
     private static readonly Dictionary<Type, int> PieceCosts = new()
     {
-        [typeof(Queen)]  = 76,
+        [typeof(Queen)]  = 72,
         [typeof(Rook)]   = 40,
         [typeof(Bishop)] = 32,
         [typeof(Knight)] = 30,
-        [typeof(Pawn)]   = 28,
+        [typeof(Pawn)]   = 26,
     };
 
     public int MapSize => Map.Width;
@@ -131,6 +131,22 @@ public abstract class Game
 
         var legalDestinations = Map.FindLegalDestinationsForPiece(piece, sourceSquare);
         if (!legalDestinations.Contains(destinationSquare)) return false;
+
+        // Safety check: simulate the move and verify king won't be in check
+        var capturedObject = destinationSquare.Object;
+        sourceSquare.ClearObject();
+        destinationSquare.SetObject(piece);
+
+        var kingSquare = Map.Squares.Single(s => s.Object is King k && k.IsWhite == ActiveColor.IsWhite);
+        var pathFinder = new PathFinder(Map);
+        var checkingSquares = pathFinder.FindCheckingSourceSquares(kingSquare);
+        bool wouldBeInCheck = checkingSquares.Any();
+
+        // Undo the simulation
+        destinationSquare.SetObject(capturedObject);
+        sourceSquare.SetObject(piece);
+
+        if (wouldBeInCheck) return false;
 
         MovePiece(sourceSquare, destinationSquare);
         return true;

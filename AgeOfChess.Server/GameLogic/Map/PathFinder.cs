@@ -296,7 +296,7 @@ public class PathFinder
         return false;
     }
 
-    private List<Square> FindCheckingSourceSquares(Square kingSquare)
+    public List<Square> FindCheckingSourceSquares(Square kingSquare)
     {
         bool checkingColorIsWhite = !((Piece)kingSquare.Object!).IsWhite;
         var checkingSquares = new List<Square>();
