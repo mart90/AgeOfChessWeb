@@ -1,7 +1,8 @@
 class Square(object):
-    def __init__(self):
-        self.x = None
-        self.y = None
+    def __init__(self, id, x, y):
+        self.x = x
+        self.y = y
+        self.id = id
         
         # m = Mine
         # t = Trees
@@ -23,3 +24,11 @@ class Square(object):
         self.piece_is_white = is_white
         if self.type == "m":
             self.owned_by = 0 if is_white else 1
+
+    # Returns 0 if not a blocker, 1 if full blocker, 2 if we can move here but no further
+    def blocker_type(self, checking_for_white):
+        if self.terrain_type == "r" or (self.piece_type is not None and self.piece_is_white == checking_for_white):
+            return 1
+        if self.terrain_type is not None or self.has_treasure or (self.piece_type is not None and self.piece_is_white != checking_for_white):
+            return 2
+        return 0

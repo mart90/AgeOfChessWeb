@@ -29,9 +29,15 @@ public class MapGenerator
 
         if (width == 12 || width == 10)
         {
-            AddRandomlyGeneratedSquares(SquareType.GrassMine, 0.00001);
-            AddRandomlyGeneratedSquares(SquareType.GrassRocks, 0.00001);
-            AddRandomlyGeneratedSquares(SquareType.GrassTrees, 0.00001);
+            AddRandomlyGeneratedSquares(SquareType.GrassMine, 0.000001);
+            AddRandomlyGeneratedSquares(SquareType.GrassRocks, 0.000001);
+            AddRandomlyGeneratedSquares(SquareType.GrassTrees, 0.000001);
+        }
+
+        if (width == 12)
+        {
+            AddRandomlyGeneratedSquares(SquareType.DirtRocks, 0.000001);
+            AddRandomlyGeneratedSquares(SquareType.DirtTrees, 0.000001);
         }
 
         AddRandomlyGeneratedGaiaObjects<Treasure>(0.02);

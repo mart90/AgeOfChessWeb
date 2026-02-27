@@ -224,7 +224,9 @@ public abstract class Game
 
     private PieceColor? CheckForGoldVictory()
     {
-        var colorsWithWinningGold = Colors.Where(e => e.Gold >= 150).ToList();
+        // Scale gold victory threshold with board size: 6x6→125, 8x8→150, 10x10→175, etc.
+        int goldThreshold = 125 + (Map.Width - 6) * 25 / 2;
+        var colorsWithWinningGold = Colors.Where(e => e.Gold >= goldThreshold).ToList();
         if (!colorsWithWinningGold.Any()) return null;
 
         PieceColor? winningColor = null;

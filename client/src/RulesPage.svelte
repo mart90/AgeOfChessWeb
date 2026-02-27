@@ -21,7 +21,7 @@
 
     <h3>Piece movement</h3>
     <ul>
-      <li>Major pieces move as in Chess.</li>
+      <li>Pieces other than pawns move as in Chess.</li>
       <li>Pawns can move any direction in a straight line, and capture any direction diagonally.</li>
       <li><strong>Rocks</strong> block movement along files and diagonals and nothing can stand
           on them.</li>
@@ -40,7 +40,8 @@
     <h3>Additional win conditions</h3>
     <p>Two additional win conditions compared to regular Chess:</p>
     <ul>
-      <li>If a player reaches 150 gold, they win the game.</li>
+      <li>If a player reaches a high amount of gold, they win the game. This is 125 gold for 6x6 boards, and increases by 25 
+          per board size up to 250 for 16x16</li>
       <li>Stalemate wins the game instead of drawing it.</li>
     </ul>
 

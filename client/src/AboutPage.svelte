@@ -6,7 +6,7 @@
       and will need to buy new pieces for gold, which you earn by collecting treasures and owning mines. 
       <br><br>
       The game revolves mostly around gaining an advantage in gold income by securing more mines than your opponent, then converting that to a material advantage and 
-      ultimately checkmating the enemy king or storing 150 gold to win the game. The early game, though it may seem simple with just a king on the board, is crucial, 
+      ultimately checkmating the enemy king or storing lots of gold to win the game. The early game, though it may seem simple with just a king on the board, is crucial, 
       since a small tempo advantage can lead to a won position many moves later.
     </p>
 
