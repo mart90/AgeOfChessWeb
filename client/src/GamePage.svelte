@@ -31,9 +31,11 @@
   $effect(() => { if (gameState?.mapSeed) currentGame.mapSeed = gameState.mapSeed; });
   onDestroy(() => { currentGame.mapSeed = null; document.title = 'Goldrush Gambit'; });
 
-  // Page title: "{White} vs {Black}" once we know player names
+  // Page title: "Your move - {White} vs {Black}" when it's your turn
   $effect(() => {
-    if (gameState) document.title = `${gameState.white.name} vs ${gameState.black.name}`;
+    if (!gameState) return;
+    const base = `${gameState.white.name} vs ${gameState.black.name}`;
+    document.title = isMyTurn ? `Your move - ${base}` : base;
   });
   let isWhite        = $state(true);
   let statusMsg      = $state('Loading…');
@@ -533,7 +535,7 @@
       statusMsg = 'Connection lost — please refresh the page.';
     });
 
-    hub.on('GameStarted', (state) => {
+    hub.on('GameStarted', async (state) => {
       if (biddingState == null) {
         playSound('game_started')
       }
@@ -544,6 +546,24 @@
           : biddingState.revealedCreatorBid;
         pendingBidReveal = { opponentBid };
       }
+
+      // If rejoining a game with moves, fetch full history for replay
+      if (state.moves?.length > 0) {
+        try {
+          const r = await fetch(`/api/game/${gameId}/replay`);
+          if (r.ok) {
+            const { snapshots } = await r.json();
+            if (snapshots?.length) {
+              stateHistory = snapshots;
+              gameState = state; biddingState = null; syncLocalTimes(state); statusMsg = ''; inviteUrl = '';
+              return;
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch replay history:', e);
+        }
+      }
+
       stateHistory = [state];
       gameState = state; biddingState = null; syncLocalTimes(state); statusMsg = ''; inviteUrl = '';
     });

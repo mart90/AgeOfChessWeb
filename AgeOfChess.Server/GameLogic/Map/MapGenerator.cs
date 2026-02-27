@@ -1,12 +1,15 @@
 using AgeOfChess.Server.GameLogic.PlaceableObjects;
 using AgeOfChess.Server.GameLogic.PlaceableObjects.GaiaObjects;
 using AgeOfChess.Server.GameLogic.PlaceableObjects.Pieces;
+using AgeOfChess.Server.Services;
 
 namespace AgeOfChess.Server.GameLogic.Map;
 
 public class MapGenerator
 {
-    private Map _map = null!;
+    private Map _map = null!;    
+
+    private readonly Random _random = new();
 
     public Map GenerateMirrored(int width, int height)
     {
@@ -20,24 +23,21 @@ public class MapGenerator
 
         MakeBaseSquares();
 
-        AddRandomlyGeneratedSquares(SquareType.DirtRocks, 0.02);
-        AddRandomlyGeneratedSquares(SquareType.GrassRocks, 0.02);
-        AddRandomlyGeneratedSquares(SquareType.DirtTrees, 0.02);
-        AddRandomlyGeneratedSquares(SquareType.GrassTrees, 0.02);
-        AddRandomlyGeneratedSquares(SquareType.DirtMine, 0.02);
-        AddRandomlyGeneratedSquares(SquareType.GrassMine, 0.02);
+        AddRandomlyGeneratedSquares(SquareTypeGrouped.Rocks, 0.04);
+        AddRandomlyGeneratedSquares(SquareTypeGrouped.Trees, 0.04);
+        AddRandomlyGeneratedSquares(SquareTypeGrouped.Mine, 0.04);
 
-        if (width == 12 || width == 10)
+        if (width == 8 || width == 10)
         {
-            AddRandomlyGeneratedSquares(SquareType.GrassMine, 0.000001);
-            AddRandomlyGeneratedSquares(SquareType.GrassRocks, 0.000001);
-            AddRandomlyGeneratedSquares(SquareType.GrassTrees, 0.000001);
+            AddRandomlyGeneratedSquares(SquareTypeGrouped.Mine, 0.000001);
+            AddRandomlyGeneratedSquares(SquareTypeGrouped.Rocks, 0.000001);
+            AddRandomlyGeneratedSquares(SquareTypeGrouped.Trees, 0.000001);
         }
 
         if (width == 12)
         {
-            AddRandomlyGeneratedSquares(SquareType.DirtRocks, 0.000001);
-            AddRandomlyGeneratedSquares(SquareType.DirtTrees, 0.000001);
+            AddRandomlyGeneratedSquares(SquareTypeGrouped.Rocks, 0.000001);
+            AddRandomlyGeneratedSquares(SquareTypeGrouped.Trees, 0.000001);
         }
 
         AddRandomlyGeneratedGaiaObjects<Treasure>(0.02);
@@ -63,38 +63,35 @@ public class MapGenerator
 
         MakeBaseSquares();
 
-        int density = 1;
+        int amountToAdd = 2;
 
         if (width == 8)
         {
-            density = 2;
+            amountToAdd = 4;
         }
         else if (width == 10)
         {
-            density = 3;
+            amountToAdd = 6;
         }
         else if (width == 12)
         {
-            density = 3;
+            amountToAdd = 6;
         }
         else if (width == 14)
         {
-            density = 4;
+            amountToAdd = 8;
         }
         else if (width == 16)
         {
-            density = 6;
+            amountToAdd = 12;
         }
 
-        AddRandomlyGeneratedSquares(SquareType.DirtRocks, density, false);
-        AddRandomlyGeneratedSquares(SquareType.GrassRocks, density, false);
-        AddRandomlyGeneratedSquares(SquareType.DirtTrees, density, false);
-        AddRandomlyGeneratedSquares(SquareType.GrassTrees, density, false);
-        AddRandomlyGeneratedSquares(SquareType.DirtMine, density - (width == 16 ? 1 : 0), false);
-        AddRandomlyGeneratedSquares(SquareType.GrassMine, density - (width == 16 ? 1 : 0), false);
+        AddRandomlyGeneratedSquares(SquareTypeGrouped.Rocks, amountToAdd, false);
+        AddRandomlyGeneratedSquares(SquareTypeGrouped.Trees, amountToAdd, false);
+        AddRandomlyGeneratedSquares(SquareTypeGrouped.Mine, amountToAdd - (width == 16 ? 2 : 0), false);
         
         bool addOne = width == 8 || width == 10 || width == 16;
-        AddRandomlyGeneratedGaiaObjects<Treasure>(density * 2 + (addOne ? 1 : 0), false);
+        AddRandomlyGeneratedGaiaObjects<Treasure>(amountToAdd + (addOne ? 1 : 0), false);
 
         SpawnKings(false);
 
@@ -199,17 +196,34 @@ public class MapGenerator
         blackKingSquare.SetObject(new BlackKing());
     }
 
-    public void AddRandomlyGeneratedSquares(SquareType squareType, double fractionOfMap, bool isMirrored = true)
+    public void AddRandomlyGeneratedSquares(SquareTypeGrouped squareTypeGrouped, double fractionOfMap, bool isMirrored = true)
     {
         int amountToAdd = (int)Math.Round(fractionOfMap * _map.Squares.Count * (isMirrored ? 0.5 : 1));
         if (amountToAdd == 0) amountToAdd = 1;
 
-        var unoccupiedType = squareType is SquareType.DirtRocks or SquareType.DirtMine or SquareType.DirtTrees
-            ? SquareType.Dirt
-            : SquareType.Grass;
-
         for (int i = 0; i < amountToAdd; i++)
         {
+            var isDirt = _random.Next(2) == 0;
+            var unoccupiedType = isDirt ? SquareType.Dirt : SquareType.Grass;
+            
+            SquareType squareType;
+            if (squareTypeGrouped == SquareTypeGrouped.Rocks)
+            {
+                squareType = isDirt ? SquareType.DirtRocks : SquareType.GrassRocks;
+            }
+            else if (squareTypeGrouped == SquareTypeGrouped.Trees)
+            {
+                squareType = isDirt ? SquareType.DirtTrees : SquareType.GrassTrees;
+            }
+            else if (squareTypeGrouped == SquareTypeGrouped.Mine)
+            {
+                squareType = isDirt ? SquareType.DirtMine : SquareType.GrassMine;
+            }
+            else
+            {
+                throw new Exception("Unknown square type");
+            }
+
             if (isMirrored)
             {
                 _map.GetRandomSquareOfType(unoccupiedType, 0, _map.Height * _map.Width / 2 - 1).SetType(squareType);                
@@ -241,16 +255,33 @@ public class MapGenerator
         }
     }
 
-    public void AddRandomlyGeneratedSquares(SquareType squareType, int amount, bool isMirrored = true)
+    public void AddRandomlyGeneratedSquares(SquareTypeGrouped squareTypeGrouped, int amount, bool isMirrored = true)
     {
         int amountToAdd = (int)Math.Round(amount * (isMirrored ? 0.5 : 1));
 
-        var unoccupiedType = squareType is SquareType.DirtRocks or SquareType.DirtMine or SquareType.DirtTrees
-            ? SquareType.Dirt
-            : SquareType.Grass;
-
         for (int i = 0; i < amountToAdd; i++)
         {
+            var isDirt = _random.Next(2) == 0;
+            var unoccupiedType = isDirt ? SquareType.Dirt : SquareType.Grass;
+            
+            SquareType squareType;
+            if (squareTypeGrouped == SquareTypeGrouped.Rocks)
+            {
+                squareType = isDirt ? SquareType.DirtRocks : SquareType.GrassRocks;
+            }
+            else if (squareTypeGrouped == SquareTypeGrouped.Trees)
+            {
+                squareType = isDirt ? SquareType.DirtTrees : SquareType.GrassTrees;
+            }
+            else if (squareTypeGrouped == SquareTypeGrouped.Mine)
+            {
+                squareType = isDirt ? SquareType.DirtMine : SquareType.GrassMine;
+            }
+            else
+            {
+                throw new Exception("Unknown square type");
+            }
+
             if (isMirrored)
             {
                 _map.GetRandomSquareOfType(unoccupiedType, 0, _map.Height * _map.Width / 2 - 1).SetType(squareType);                

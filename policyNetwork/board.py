@@ -1,4 +1,4 @@
-from constants import PIECE_COSTS, DIRECTIONS
+from constants import PIECE_COSTS
 from math import sqrt
 
 
@@ -49,11 +49,46 @@ class Board(object):
         return self.white_gold if self.white_is_active else self.black_gold
     
     def is_capturable(self, square, capturable_by_white):
-        pass
+        for direction in range(0, 7):
+            if self.discover_attacker_vector(square, direction, not capturable_by_white):
+                return True
+        for direction in range(0, 7):
+            new_square = self.knight_jump(square, direction)
+            if new_square is None:
+                continue
+            if new_square.piece_type == "n" and new_square.piece_is_white == capturable_by_white:
+                return True
+        return False
 
     def king_square(self, is_white):
         return [s for s in self.squares if s.piece_type == "k" and s.is_white == is_white][0]
     
+    # Direction 0 is north, then it continues clockwise
+    # Returns true if we discover an enemy piece that could capture the source square
+    def discover_attacker_vector(self, source_square, direction, defender_is_white):
+        square = source_square
+        range = 1
+        while True:
+            new_square = self.square_in_direction(square, direction)
+            if new_square is None:
+                return False
+            blocker_type = new_square.blocker_type(defender_is_white)
+            if blocker_type == 1:
+                return False
+            if blocker_type == 2:
+                if new_square.piece_type is None or new_square.piece_type == "n":
+                    return False
+                if new_square.piece_type == "k":
+                    return range == 1
+                return True if new_square.piece_type == "q" \
+                    else True if new_square.piece_type == "r" and direction % 2 == 0 \
+                    else True if new_square.piece_type == "b" and direction % 2 == 1 \
+                    else False
+            square = new_square
+            range += 1
+    
+    # Direction 0 is north, then it continues clockwise
+    # Returns all squares a piece of ours could move to from the given source square, going the given direction
     def open_squares_vector(self, source_square, direction, is_white):
         legal_squares = []
         square = source_square

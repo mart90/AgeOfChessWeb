@@ -57,9 +57,10 @@ public class UserController(AppDbContext db) : ControllerBase
         if (category != "all")
             baseQuery = category switch
             {
-                "blitz" => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes < 10),
-                "rapid" => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes >= 10 && g.StartTimeMinutes < 30),
-                _       => baseQuery.Where(g => !g.TimeControlEnabled || g.StartTimeMinutes >= 30),
+                "bullet" => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes < 3),
+                "blitz"  => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes >= 3 && g.StartTimeMinutes < 10),
+                "rapid"  => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes >= 10 && g.StartTimeMinutes < 30),
+                _        => baseQuery.Where(g => !g.TimeControlEnabled || g.StartTimeMinutes >= 30),
             };
 
         bool asc = sortDir == "asc";
@@ -157,7 +158,8 @@ public class UserController(AppDbContext db) : ControllerBase
             string cat = !g.TimeControlEnabled      ? "slow" :
                           g.StartTimeMinutes >= 30  ? "slow" :
                           g.StartTimeMinutes >= 10  ? "rapid" :
-                                                      "blitz";
+                          g.StartTimeMinutes >= 3   ? "blitz" :
+                                                      "bullet";
 
             // MapMode still requires the JSON blob (not a filter/sort column)
             string mapMode = "m";

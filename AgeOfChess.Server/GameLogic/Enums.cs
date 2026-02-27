@@ -12,6 +12,14 @@ public enum SquareType
     GrassTrees
 }
 
+public enum SquareTypeGrouped
+{
+    Empty,
+    Rocks,
+    Mine,
+    Trees
+}
+
 public enum SquareColor
 {
     None,

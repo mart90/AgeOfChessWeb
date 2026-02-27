@@ -113,7 +113,10 @@
   function fmtDate(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    return d.toLocaleString(undefined, {
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    });
   }
 
   function fmtDelta(d) {
