@@ -42,7 +42,7 @@ async function analyze(version) {
     }
     const { squares, whiteGold, blackGold, whiteIsActive } = currentPosition;
 
-    // const startTime = performance.now();
+    const startTime = performance.now();
     const topMoves = await getTopMoves(
       squares,
       whiteGold,
@@ -51,7 +51,7 @@ async function analyze(version) {
       depth,
       10
     );
-    // const timeMs = performance.now() - startTime;
+    const timeMs = performance.now() - startTime;
 
     // Check again after getTopMoves - position may have changed
     if (!running) break;
@@ -67,7 +67,7 @@ async function analyze(version) {
       type: 'depth-result',
       depth,
       topMoves,
-      // timeMs
+      timeMs
     });
 
     depth++;

@@ -35,3 +35,8 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# MISC
+policyNetwork/__pycache__
+policyNetwork/replays
+policyNetwork/test_policy.onnx.data

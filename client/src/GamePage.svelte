@@ -31,11 +31,10 @@
   $effect(() => { if (gameState?.mapSeed) currentGame.mapSeed = gameState.mapSeed; });
   onDestroy(() => { currentGame.mapSeed = null; document.title = 'Goldrush Gambit'; });
 
-  // Page title: "Your move - {White} vs {Black}" when it's your turn
+  // Page title updates based on turn
   $effect(() => {
     if (!gameState) return;
-    const base = `${gameState.white.name} vs ${gameState.black.name}`;
-    document.title = isMyTurn ? `Your move - ${base}` : base;
+    document.title = isMyTurn ? 'Your move' : `${gameState.white.name} vs ${gameState.black.name}`;
   });
   let isWhite        = $state(true);
   let statusMsg      = $state('Loading…');

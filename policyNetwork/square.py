@@ -25,10 +25,19 @@ class Square(object):
         if self.type == "m":
             self.owned_by = 0 if is_white else 1
 
+    def clone(self):
+        sq = Square(self.id, self.x, self.y)
+        sq.terrain_type = self.terrain_type
+        sq.piece_type = self.piece_type
+        sq.piece_is_white = self.piece_is_white
+        sq.has_treasure = self.has_treasure
+        sq.owned_by = self.owned_by
+        return sq
+
     # Returns 0 if not a blocker, 1 if full blocker, 2 if we can move here but no further
     def blocker_type(self, checking_for_white):
         if self.terrain_type == "r" or (self.piece_type is not None and self.piece_is_white == checking_for_white):
             return 1
-        if self.terrain_type is not None or self.has_treasure or (self.piece_type is not None and self.piece_is_white != checking_for_white):
+        if self.terrain_type is not None or self.has_treasure or self.piece_type is not None:
             return 2
         return 0

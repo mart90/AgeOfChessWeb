@@ -76,24 +76,24 @@
   let analysisWorker = $state(null);
   let analysisResults = $state([]);
   let analysisDepth = $state(0);
-  // let depthTimings = $state([]);
+  let depthTimings = $state([]);
 
   function startWorker() {
     if (!analysisWorker) {
       analysisWorker = new AnalysisWorker();
 
       analysisWorker.onmessage = (event) => {
-        const { type, depth, topMoves /*, timeMs*/ } = event.data;
+        const { type, depth, topMoves, timeMs } = event.data;
 
         if (type === 'depth-result') {
           analysisDepth = depth;
           analysisResults = topMoves;
-          // depthTimings = [...depthTimings, { depth, timeMs }];
+          depthTimings = [...depthTimings, { depth, timeMs }];
         }
       };
     }
 
-    // depthTimings = [];
+    depthTimings = [];
     analysisWorker.postMessage({
       type: 'start',
       payload: getCurrentPosition()
@@ -293,7 +293,7 @@
 
     if (analyzing && analysisWorker) {
       analysisResults = [];  // Clear old results
-      // depthTimings = [];
+      depthTimings = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -309,7 +309,7 @@
 
     if (analyzing && analysisWorker) {
       analysisResults = [];  // Clear old results
-      // depthTimings = [];
+      depthTimings = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -437,7 +437,7 @@
 
     if (analyzing && analysisWorker) {
       analysisResults = [];  // Clear old results
-      // depthTimings = [];
+      depthTimings = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -789,13 +789,13 @@
               </button>
             {/each}
           </div>
-          <!-- {#if depthTimings.length > 0}
+          {#if depthTimings.length > 0}
             <div class="depth-timings">
               {#each depthTimings as { depth, timeMs }}
                 <div>Depth {depth}: {timeMs.toFixed(0)}ms</div>
               {/each}
             </div>
-          {/if} -->
+          {/if}
         </div>
       {/if}
     </div>
@@ -995,6 +995,13 @@
   .move-score {
     color: #f5c518;
     font-weight: 600;
+  }
+
+  .depth-timings {
+    font-size: 0.78rem;
+    color: #777;
+    padding: 0.3rem 0.2rem;
+    line-height: 1.5;
   }
 
   /* ── Mobile: stack vertically ── */

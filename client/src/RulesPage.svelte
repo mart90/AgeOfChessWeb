@@ -12,6 +12,7 @@
   <div class="content">
     <h3>Economy</h3>
     <ul>
+      <li>Black starts with 5 gold by default.</li>
       <li>Players get 1 gold at the start of each turn.</li>
       <li>Capturing a treasure earns 20 gold.</li>
       <li>Mines owned by a player earn {MINE_INCOME} gold each at the start of their turn.</li>
