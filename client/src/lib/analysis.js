@@ -10,6 +10,10 @@ const YIELD_INTERVAL = 1000;
 const transpositionTable = new Map();
 const MAX_TT_SIZE = 500000;
 
+const TT_EXACT = 0;
+const TT_LOWERBOUND = 1;  // beta cutoff — score is at least this good
+const TT_UPPERBOUND = 2;  // fail-low — score is at most this good
+
 export function requestStop() {
     stopRequested = true;
 }
@@ -429,11 +433,11 @@ function getAllLegalMoves(state) {
 }
 
 // ── Evaluation ───────────────────────────────────────────────────────────────
+// Returns score from the ACTIVE player's perspective (positive = active player ahead).
 
 function evaluate(state) {
-    const { ctx, whiteGold, blackGold, whiteMines, blackMines } = state;
+    const { ctx, whiteGold, blackGold, whiteMines, blackMines, whiteIsActive } = state;
     const { lookup } = ctx;
-    let score = 0;
     let whiteMaterialValue = 0;
     let blackMaterialValue = 0;
     let whiteHasKing = false;
@@ -447,13 +451,15 @@ function evaluate(state) {
             if (pt === "BlackKing") { blackHasKing = true; continue; }
             if (pt === "Treasure") continue;
             if (sq.piece.isWhite) {
-                whiteMaterialValue += pieceValue(pt) * 1.2;
+                whiteMaterialValue += pieceValue(pt);
             } else {
-                blackMaterialValue += pieceValue(pt) * 1.2;
+                blackMaterialValue += pieceValue(pt);
             }
         }
     }
 
+    // Score from white's perspective first
+    let score = 0;
     if (!whiteHasKing) score -= 999;
     if (!blackHasKing) score += 999;
 
@@ -463,10 +469,12 @@ function evaluate(state) {
     score += whiteMines * (MINE_INCOME / 2);
     score -= blackMines * (MINE_INCOME / 2);
 
-    return score;
+    // Flip to active player's perspective
+    return whiteIsActive ? score : -score;
 }
 
-// ── Search ───────────────────────────────────────────────────────────────────
+// ── Search (negamax alpha-beta) ──────────────────────────────────────────────
+// All scores are from the ACTIVE player's perspective (positive = active player ahead).
 
 async function negamax(state, depth, alpha, beta) {
     if (stopRequested) return 0;
@@ -476,58 +484,49 @@ async function negamax(state, depth, alpha, beta) {
         await new Promise(r => setTimeout(r, 0));
     }
 
-    // Transposition table lookup
-    const ttKey = `${state.hashHi}:${state.hashLo}:${state.whiteGold}:${state.blackGold}`;
-    const ttEntry = transpositionTable.get(ttKey);
-    if (ttEntry && ttEntry.depth >= depth) {
-        return ttEntry.score;
-    }
-
     const evalScore = evaluate(state);
 
     if (depth === 0 || Math.abs(evalScore) > 900) {
-        return state.whiteIsActive ? evalScore : -evalScore;
+        return evalScore;
+    }
+
+    // TT probe
+    const ttKey = state.hashHi * 0x100000000 + state.hashLo;
+    const ttEntry = transpositionTable.get(ttKey);
+    if (ttEntry && ttEntry.depth >= depth) {
+        if (ttEntry.flag === TT_EXACT) return ttEntry.score;
+        if (ttEntry.flag === TT_LOWERBOUND && ttEntry.score >= beta) return ttEntry.score;
+        if (ttEntry.flag === TT_UPPERBOUND && ttEntry.score <= alpha) return ttEntry.score;
     }
 
     const legalMoves = getAllLegalMoves(state);
 
     if (legalMoves.length === 0) {
-        return state.whiteIsActive ? evalScore : -evalScore;
+        return evalScore;
     }
 
-    let bestScore = -Infinity;
-    const FULL_DEPTH_MOVES = 4;
-    const REDUCTION_LIMIT = 3;
-
+    const origAlpha = alpha;
+    let best = -Infinity;
     for (let i = 0; i < legalMoves.length; i++) {
-        const move = legalMoves[i];
-        if (stopRequested) return bestScore || 0;
-
-        const undo = makeMove(state, move);
-
-        let score;
-
-        if (i >= FULL_DEPTH_MOVES && depth > REDUCTION_LIMIT) {
-            score = -(await negamax(state, depth - 2, -beta, -alpha));
-            if (score > alpha) {
-                score = -(await negamax(state, depth - 1, -beta, -alpha));
-            }
-        } else {
-            score = -(await negamax(state, depth - 1, -beta, -alpha));
-        }
-
+        if (stopRequested) return best === -Infinity ? 0 : best;
+        const undo = makeMove(state, legalMoves[i]);
+        const score = -await negamax(state, depth - 1, -beta, -alpha);
         unmakeMove(state, undo);
-
-        if (score > bestScore) bestScore = score;
+        if (score > best) best = score;
         if (score > alpha) alpha = score;
         if (alpha >= beta) break;
     }
 
+    // TT store
     if (transpositionTable.size < MAX_TT_SIZE) {
-        transpositionTable.set(ttKey, { score: bestScore, depth });
+        let flag;
+        if (best <= origAlpha) flag = TT_UPPERBOUND;
+        else if (best >= beta) flag = TT_LOWERBOUND;
+        else flag = TT_EXACT;
+        transpositionTable.set(ttKey, { score: best, depth, flag });
     }
 
-    return bestScore;
+    return best;
 }
 
 // ── Entry points (signatures unchanged for analysisWorker.js) ────────────────
@@ -544,16 +543,23 @@ export async function getTopMoves(position, whiteGold, blackGold, whiteIsActive,
         if (stopRequested) break;
 
         const undo = makeMove(state, move);
-        const score = -(await negamax(state, depth - 1, -Infinity, Infinity));
+        const score = -await negamax(state, depth - 1, -Infinity, Infinity);
         unmakeMove(state, undo);
 
-        results.push({ move, score: whiteIsActive ? score : -score });
+        results.push({ move, score });
 
         await new Promise(r => setTimeout(r, 0));
     }
 
-    if (whiteIsActive) return results.sort((a, b) => b.score - a.score).slice(0, amountOfMoves);
-    else return results.sort((a, b) => a.score - b.score).slice(0, amountOfMoves);
+    // Higher = better for active player
+    const sorted = results.sort((a, b) => b.score - a.score).slice(0, amountOfMoves);
+
+    // Convert scores to white's perspective for display
+    if (!whiteIsActive) {
+        for (const r of sorted) r.score = -r.score;
+    }
+
+    return sorted;
 }
 
 export async function getBestMove(position, whiteGold, blackGold, whiteIsActive, maxPlayouts) {
@@ -583,7 +589,7 @@ export async function getBestMove(position, whiteGold, blackGold, whiteIsActive,
 
     for (const move of legalMoves) {
         const undo = makeMove(state, move);
-        const score = -(await negamax(state, depth - 1, -Infinity, Infinity));
+        const score = -await negamax(state, depth - 1, -Infinity, Infinity);
         unmakeMove(state, undo);
 
         if (score > bestScore) {

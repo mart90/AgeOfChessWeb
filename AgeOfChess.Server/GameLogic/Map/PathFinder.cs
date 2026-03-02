@@ -16,14 +16,23 @@ public class PathFinder
     {
         var legalSquares = new List<Square>();
 
+        bool pinConstrained = false;
         if (!checkingForChecks)
         {
             (bool isPinned, List<Square> legalSquaresDespitePin) = CheckForPinToKing(sourceSquare, piece);
             if (isPinned)
-                return legalSquaresDespitePin;
+            {
+                legalSquares.AddRange(legalSquaresDespitePin);
+                pinConstrained = true;
+            }
         }
 
-        if (piece is Pawn)
+        if (pinConstrained)
+        {
+            // Skip normal move generation — pin-constrained moves are already set.
+            // Fall through to the check filter below.
+        }
+        else if (piece is Pawn)
         {
             legalSquares.AddRange(FindLegalSquaresVector(piece, Direction.North, sourceSquare, checkingForChecks, 1));
             legalSquares.AddRange(FindLegalSquaresVector(piece, Direction.East, sourceSquare, checkingForChecks, 1));

@@ -39,4 +39,4 @@ Thumbs.db
 # MISC
 policyNetwork/__pycache__
 policyNetwork/replays
-policyNetwork/test_policy.onnx.data
+policyNetwork/checkpoints

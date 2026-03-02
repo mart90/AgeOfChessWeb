@@ -1,9 +1,14 @@
-"""Generate self-play games using the training pipeline and save selected ones for review."""
+"""Generate self-play games using the current best model and save selected ones for review."""
 import argparse
 import json
 import os
+import torch
+
+from model import PolicyNetwork
 from generate_boards import fetch_boards
-from self_play import check_victory, pick_random_move, MAX_MOVES
+from self_play import (
+    check_victory, pick_random_move, policy_move, MAX_MOVES,
+)
 from board import M, P
 
 
@@ -38,7 +43,7 @@ def serialize_move(move):
         return {"type": "place", "piece": move[1], "dest": move[2], "isWhite": move[3]}
 
 
-def play_and_record(board, placement_bias=1.0):
+def play_and_record(board, model=None, device=None, temperature=0.5):
     """Play a full game, recording every move (both sides)."""
     game_board = board.clone()
     moves = []
@@ -54,7 +59,11 @@ def play_and_record(board, placement_bias=1.0):
             result = -1 if game_board.white_is_active else 1
             return moves, result
 
-        move = pick_random_move(legal_moves, placement_bias)
+        if model is not None:
+            move = policy_move(model, game_board, legal_moves, device, temperature)
+        else:
+            move = pick_random_move(legal_moves, placement_bias=1.0)
+
         moves.append(serialize_move(move))
         game_board.do_move(move)
         move_count += 1
@@ -66,7 +75,24 @@ def main():
     parser = argparse.ArgumentParser(description="Generate and save self-play games for review")
     parser.add_argument("--games", type=int, default=50, help="Number of games to play")
     parser.add_argument("--save", type=int, default=5, help="Number of games to save as replays")
+    parser.add_argument("--model", type=str, default="checkpoints/best_overall.pt",
+                        help="Path to model checkpoint (omit for random play)")
+    parser.add_argument("--random", action="store_true", help="Use random play instead of model")
+    parser.add_argument("--temperature", type=float, default=0.5, help="Model temperature")
     args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = None
+    if not args.random and os.path.exists(args.model):
+        model = PolicyNetwork().to(device)
+        model.load_state_dict(torch.load(args.model, map_location=device))
+        model.eval()
+        print(f"Using model: {args.model} (temperature={args.temperature})")
+    else:
+        if not args.random:
+            print(f"Model not found at {args.model}, falling back to random play")
+        print("Using random play")
 
     print(f"Fetching {args.games} boards from server...")
     boards = fetch_boards(amount=args.games)
@@ -77,7 +103,7 @@ def main():
 
     for i in range(1, args.games + 1):
         board = boards[i - 1]
-        moves, result = play_and_record(board)
+        moves, result = play_and_record(board, model=model, device=device, temperature=args.temperature)
 
         result_str = {1: "White wins", -1: "Black wins", 0: "Draw"}[result]
         print(f"Game {i:2d}: {len(moves)} moves, {result_str}")

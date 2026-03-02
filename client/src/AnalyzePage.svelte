@@ -87,7 +87,7 @@
 
         if (type === 'depth-result') {
           analysisDepth = depth;
-          analysisResults = topMoves;
+          analysisResults = topMoves || [];
           depthTimings = [...depthTimings, { depth, timeMs }];
         }
       };
@@ -464,7 +464,7 @@
         const capturedMine = s.type?.includes('Mine');
         return {
           ...s,
-          piece: { type: pieceType, isWhite: isWhitePiece },
+          piece: { type: (isWhitePiece ? 'White' : 'Black') + pieceType, isWhite: isWhitePiece },
           mineOwner: capturedMine ? (isWhitePiece ? 'white' : 'black') : s.mineOwner
         };
       }

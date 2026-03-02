@@ -79,7 +79,7 @@ def export_onnx(model, filepath, device):
     print(f"Exported ONNX model to {filepath} ({size_mb:.1f} MB)")
 
 
-def run_training(board_tensors, move_indices, device, model=None,
+def run_training(board_tensors, move_indices, device, game_ids=None, model=None,
                  epochs=20, batch_size=256, lr=1e-3, patience=2,
                  save_path=None):
     """
@@ -90,11 +90,23 @@ def run_training(board_tensors, move_indices, device, model=None,
     boards_t = torch.from_numpy(board_tensors)
     moves_t = torch.from_numpy(move_indices)
 
-    n = len(boards_t)
-    val_size = max(1, n // 10)
-    indices = torch.randperm(n)
-    train_idx = indices[:n - val_size]
-    val_idx = indices[n - val_size:]
+    if game_ids is not None:
+        # Split by game: hold out ~10% of games for validation
+        unique_games = np.unique(game_ids)
+        np.random.shuffle(unique_games)
+        val_game_count = max(1, len(unique_games) // 10)
+        val_games = set(unique_games[:val_game_count].tolist())
+        val_mask = np.array([gid in val_games for gid in game_ids])
+        train_mask = ~val_mask
+        train_idx = np.where(train_mask)[0]
+        val_idx = np.where(val_mask)[0]
+    else:
+        # Fallback: random sample split
+        n = len(boards_t)
+        val_size = max(1, n // 10)
+        indices = torch.randperm(n).numpy()
+        train_idx = indices[:n - val_size]
+        val_idx = indices[n - val_size:]
 
     train_ds = TensorDataset(boards_t[train_idx], moves_t[train_idx])
     val_ds = TensorDataset(boards_t[val_idx], moves_t[val_idx])
@@ -169,7 +181,7 @@ def main():
     # Load or generate training data
     if args.data_file and os.path.exists(args.data_file):
         print(f"Loading training data from {args.data_file}")
-        board_tensors, move_indices = load_training_data(args.data_file)
+        board_tensors, move_indices, game_ids = load_training_data(args.data_file)
     else:
         print(f"Generating training data: {args.boards} boards x {args.games_per_board} games")
 
@@ -184,7 +196,7 @@ def main():
 
         print(f"  Playing {args.boards * args.games_per_board} games...")
         t0 = time.time()
-        board_tensors, move_indices = generate_training_data(
+        board_tensors, move_indices, game_ids = generate_training_data(
             all_boards,
             games_per_board=args.games_per_board,
             placement_bias=args.placement_bias,
@@ -197,7 +209,7 @@ def main():
             return
 
         data_path = os.path.join(args.save_dir, f"phase{args.phase}_data.npz")
-        save_training_data(data_path, board_tensors, move_indices)
+        save_training_data(data_path, board_tensors, move_indices, game_ids)
 
     print(f"Training data: {len(board_tensors)} samples")
 
@@ -210,6 +222,7 @@ def main():
     save_path = os.path.join(args.save_dir, f"phase{args.phase}_best.pt")
     model, best_val_loss = run_training(
         board_tensors, move_indices, device,
+        game_ids=game_ids,
         model=model,
         epochs=args.epochs,
         batch_size=args.batch_size,

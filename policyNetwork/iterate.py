@@ -6,7 +6,7 @@ import torch
 
 from model import PolicyNetwork
 from self_play import (
-    generate_training_data, save_training_data,
+    generate_training_data, generate_training_data_parallel, save_training_data,
     make_policy_fn, play_game, check_victory, pick_random_move, MAX_MOVES,
     policy_move,
 )
@@ -16,13 +16,23 @@ from encode import encode_board, move_to_index, get_legal_move_mask
 from board import M, P
 
 
-def evaluate_vs_random(model, device, num_games=30, temperature=0.5):
-    """Play model vs random and return win rate."""
+def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.5):
+    """Play model vs benchmark model and return win rate."""
     boards = fetch_boards(amount=num_games)
     model.eval()
 
+    # Load benchmark model
+    if os.path.exists(benchmark_path):
+        benchmark = PolicyNetwork().to(device)
+        benchmark.load_state_dict(torch.load(benchmark_path, map_location=device))
+        benchmark.eval()
+        bench_label = os.path.basename(benchmark_path)
+    else:
+        benchmark = None
+        bench_label = "random"
+
     model_wins = 0
-    random_wins = 0
+    bench_wins = 0
     draws = 0
 
     for i in range(num_games):
@@ -43,6 +53,8 @@ def evaluate_vs_random(model, device, num_games=30, temperature=0.5):
             is_model_turn = (board.white_is_active == model_is_white)
             if is_model_turn:
                 move = policy_move(model, board, legal_moves, device, temperature)
+            elif benchmark is not None:
+                move = policy_move(benchmark, board, legal_moves, device, temperature)
             else:
                 move = pick_random_move(legal_moves, placement_bias=1.0)
 
@@ -57,11 +69,11 @@ def evaluate_vs_random(model, device, num_games=30, temperature=0.5):
         elif model_won:
             model_wins += 1
         else:
-            random_wins += 1
+            bench_wins += 1
 
-    total = model_wins + random_wins + draws
+    total = model_wins + bench_wins + draws
     win_rate = model_wins / total if total > 0 else 0
-    print(f"  Eval: {model_wins}W / {random_wins}L / {draws}D "
+    print(f"  Eval vs {bench_label}: {model_wins}W / {bench_wins}L / {draws}D "
           f"({100*win_rate:.0f}% win rate, {num_games} games)")
     return win_rate
 
@@ -72,7 +84,6 @@ def fetch_all_boards(count):
     remaining = count
     while remaining > 0:
         batch = min(remaining, 100)
-        print(f"  Fetching {batch} boards...")
         boards.extend(fetch_boards(amount=batch))
         remaining -= batch
     return boards
@@ -88,8 +99,15 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--patience", type=int, default=2, help="Early stopping patience")
     parser.add_argument("--temperature", type=float, default=1.0, help="Self-play temperature")
-    parser.add_argument("--eval-games", type=int, default=30, help="Evaluation games per iteration")
+    parser.add_argument("--eval-games", type=int, default=200, help="Evaluation games per iteration")
     parser.add_argument("--save-dir", type=str, default="checkpoints", help="Checkpoint directory")
+    parser.add_argument("--resume", action="store_true", help="Resume from best_overall.pt")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Number of worker processes for self-play (default: cpu_count - 2)")
+    parser.add_argument("--benchmark", type=str, default="checkpoints/benchmark.pt",
+                        help="Path to benchmark model for evaluation (falls back to random if not found)")
+    parser.add_argument("--noise-weight", type=float, default=0.25,
+                        help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -101,6 +119,14 @@ def main():
     best_overall_win_rate = 0
     best_model_path = None
 
+    if args.resume:
+        candidate = os.path.join(args.save_dir, "best_overall.pt")
+        if os.path.exists(candidate):
+            best_model_path = candidate
+            print(f"Resuming from {candidate}")
+        else:
+            print("No best_overall.pt found, starting from scratch")
+
     for iteration in range(1, args.iterations + 1):
         print(f"\n{'='*60}")
         print(f"Iteration {iteration}/{args.iterations}")
@@ -110,20 +136,22 @@ def main():
         print(f"Generating data: {args.boards} boards x {args.games_per_board} games")
         all_boards = fetch_all_boards(args.boards)
 
-        policy_fn = None
-        if iteration > 1 and best_model_path:
-            print(f"  Using model from {best_model_path} for self-play")
-            prev_model = PolicyNetwork().to(device)
-            prev_model.load_state_dict(torch.load(best_model_path, map_location=device))
-            prev_model.eval()
-            policy_fn = make_policy_fn(prev_model, device, temperature=args.temperature)
-
         t0 = time.time()
-        board_tensors, move_indices = generate_training_data(
-            all_boards,
-            games_per_board=args.games_per_board,
-            policy_fn=policy_fn,
-        )
+        if best_model_path:
+            print(f"  Using model from {best_model_path} for self-play (parallel)")
+            board_tensors, move_indices, game_ids = generate_training_data_parallel(
+                all_boards,
+                model_path=best_model_path,
+                games_per_board=args.games_per_board,
+                temperature=args.temperature,
+                workers=args.workers,
+                noise_weight=args.noise_weight,
+            )
+        else:
+            board_tensors, move_indices, game_ids = generate_training_data(
+                all_boards,
+                games_per_board=args.games_per_board,
+            )
         elapsed = time.time() - t0
         print(f"  Self-play took {elapsed:.1f}s")
 
@@ -133,17 +161,18 @@ def main():
             continue
 
         data_path = os.path.join(args.save_dir, f"iter{iteration}_data.npz")
-        save_training_data(data_path, board_tensors, move_indices)
+        save_training_data(data_path, board_tensors, move_indices, game_ids)
 
         # Train
         model = PolicyNetwork().to(device)
-        if iteration > 1 and best_model_path:
+        if best_model_path:
             model.load_state_dict(torch.load(best_model_path, map_location=device))
             print(f"  Fine-tuning from {best_model_path}")
 
         save_path = os.path.join(args.save_dir, f"iter{iteration}_best.pt")
         model, val_loss = run_training(
             board_tensors, move_indices, device,
+            game_ids=game_ids,
             model=model,
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -153,15 +182,17 @@ def main():
         )
 
         # Evaluate
-        print(f"Evaluating vs random ({args.eval_games} games)...")
-        win_rate = evaluate_vs_random(model, device, num_games=args.eval_games, temperature=0.5)
+        bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
+        print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
+        win_rate = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.5)
 
+        # Always use the latest model for next iteration
+        overall_best = os.path.join(args.save_dir, "best_overall.pt")
+        best_model_path = save_path
+        torch.save(model.state_dict(), overall_best)
         if win_rate > best_overall_win_rate:
             best_overall_win_rate = win_rate
-            best_model_path = save_path
-            overall_best = os.path.join(args.save_dir, "best_overall.pt")
-            torch.save(model.state_dict(), overall_best)
-            print(f"  New best overall model! ({100*win_rate:.0f}% win rate)")
+            print(f"  New best win rate: {100*win_rate:.0f}%")
 
         results.append({
             "iteration": iteration,
