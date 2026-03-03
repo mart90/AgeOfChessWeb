@@ -16,8 +16,10 @@ Usage:
 First-deploy checklist:
   1. Ensure .NET 9 runtime/SDK is installed  (dotnet --version)
   2. Ensure Node.js + npm are installed       (node --version, npm --version)
-  3. Place your production appsettings on the server — this is NEVER overwritten by this script:
-       /var/www/goldrushgambit/appsettings.Production.json
+  3. Copy production settings to the server BEFORE first deploy:
+       sudo cp /var/www/AgeOfChessWeb/AgeOfChess.Server/appsettings.Production.json /var/www/goldrushgambit/
+       sudo chown www-data:www-data /var/www/goldrushgambit/appsettings.Production.json
+     This file is preserved across deployments but must exist before the first deploy.
   4. Run a full deploy to set up the service and nginx config.
   5. Run: sudo certbot --nginx -d goldrushgambit.com -d www.goldrushgambit.com
 """
@@ -82,12 +84,28 @@ def build_server(repo):
 def deploy_full():
     step(f'Deploying to {DEPLOY_PATH}')
     DEPLOY_PATH.mkdir(parents=True, exist_ok=True)
-    # appsettings.Production.json lives on the server only and is never overwritten.
+
+    # Backup appsettings.Production.json if it exists
+    prod_settings = DEPLOY_PATH / 'appsettings.Production.json'
+    backup = None
+    if prod_settings.exists():
+        backup = DEPLOY_PATH / 'appsettings.Production.json.backup'
+        run(f'cp {prod_settings} {backup}')
+
+    # rsync will delete it, but we exclude it from deletion
     run(
         f'rsync -a --delete '
         f'--exclude "appsettings.Production.json" '
         f'{PUBLISH_TMP}/ {DEPLOY_PATH}/'
     )
+
+    # Restore from backup if needed
+    if backup and backup.exists() and not prod_settings.exists():
+        run(f'mv {backup} {prod_settings}')
+        print(f'Restored appsettings.Production.json from backup')
+    elif backup and backup.exists():
+        run(f'rm {backup}')
+
     run(f'chown -R {SERVICE_USER}:{SERVICE_USER} {DEPLOY_PATH}')
 
 
