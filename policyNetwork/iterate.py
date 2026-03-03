@@ -108,8 +108,6 @@ def main():
                         help="Path to benchmark model for evaluation (falls back to random if not found)")
     parser.add_argument("--noise-weight", type=float, default=0.25,
                         help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
-    parser.add_argument("--selfplay-model", type=str,
-                        help="Use a different model for self-play generation (e.g., old architecture). Training still uses --resume model.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -138,15 +136,12 @@ def main():
         print(f"Generating data: {args.boards} boards x {args.games_per_board} games")
         all_boards = fetch_all_boards(args.boards)
 
-        # Use --selfplay-model if specified, otherwise use best_model_path
-        selfplay_path = args.selfplay_model if args.selfplay_model else best_model_path
-
         t0 = time.time()
-        if selfplay_path:
-            print(f"  Using model from {selfplay_path} for self-play (parallel)")
+        if best_model_path:
+            print(f"  Using model from {best_model_path} for self-play (parallel)")
             board_tensors, move_indices, game_ids = generate_training_data_parallel(
                 all_boards,
-                model_path=selfplay_path,
+                model_path=best_model_path,
                 games_per_board=args.games_per_board,
                 temperature=args.temperature,
                 workers=args.workers,
