@@ -248,6 +248,8 @@ def generate_training_data(boards, games_per_board=10, policy_fn=None,
 def _worker_init(model_path, temperature, noise_weight=0.0):
     """Initialize a worker process with its own model."""
     global _worker_model, _worker_device, _worker_temperature, _worker_noise_weight
+    # Limit intra-op threads per worker to avoid OpenMP deadlock on Linux
+    torch.set_num_threads(1)
     from model import PolicyNetwork
     _worker_device = torch.device("cpu")  # workers always use CPU
     _worker_model = PolicyNetwork().to(_worker_device)
@@ -319,8 +321,14 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
 
     print(f"  Using {workers} workers, {len(chunks)} chunks")
 
-    with mp.Pool(workers, initializer=_worker_init,
-                 initargs=(model_path, temperature, noise_weight)) as pool:
+    # Limit OpenMP/MKL threads so spawned workers don't deadlock on Linux
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+    # Use 'spawn' to avoid deadlock from CUDA state inherited via fork
+    ctx = mp.get_context("spawn")
+    with ctx.Pool(workers, initializer=_worker_init,
+                  initargs=(model_path, temperature, noise_weight)) as pool:
         results = pool.map(_worker_play_boards,
                            [(chunk, games_per_board, augment) for chunk in chunks])
 

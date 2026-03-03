@@ -99,7 +99,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--patience", type=int, default=2, help="Early stopping patience")
     parser.add_argument("--temperature", type=float, default=1.0, help="Self-play temperature")
-    parser.add_argument("--eval-games", type=int, default=200, help="Evaluation games per iteration")
+    parser.add_argument("--eval-games", type=int, default=100, help="Evaluation games per iteration")
     parser.add_argument("--save-dir", type=str, default="checkpoints", help="Checkpoint directory")
     parser.add_argument("--resume", action="store_true", help="Resume from best_overall.pt")
     parser.add_argument("--workers", type=int, default=None,
