@@ -62,7 +62,7 @@ class Board(object):
         self.size = int(sqrt(len(squares)))
         self.white_is_active = True
         self.white_gold = 0
-        self.black_gold = 5
+        self.black_gold = 6
         self.white_king_square = self.king_square(True)
         self.black_king_square = self.king_square(False)
         self.mines_owned_by_white = 0

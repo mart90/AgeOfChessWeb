@@ -13,6 +13,6 @@ public class PieceColor
         IsWhite = isWhite;
         PlayedByStr = playedByStr;
         IsActive = isWhite;
-        Gold = isWhite ? 0 : 5;
+        Gold = isWhite ? 0 : 6;
     }
 }

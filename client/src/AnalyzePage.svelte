@@ -22,7 +22,7 @@
   let mapSize       = $state(0);
   let mapSeed       = $state('');
   let whiteGold     = $state(0);
-  let blackGold     = $state(5);
+  let blackGold     = $state(6);
   let whiteIsActive = $state(true);
   let viewAsWhite   = $state(true);
 
