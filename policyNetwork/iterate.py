@@ -169,7 +169,6 @@ def main():
             model.load_state_dict(torch.load(best_model_path, map_location=device))
             print(f"  Fine-tuning from {best_model_path}")
 
-        save_path = os.path.join(args.save_dir, f"iter{iteration}_best.pt")
         model, val_loss = run_training(
             board_tensors, move_indices, device,
             game_ids=game_ids,
@@ -178,7 +177,7 @@ def main():
             batch_size=args.batch_size,
             lr=args.lr,
             patience=args.patience,
-            save_path=save_path,
+            save_path=None,  # Don't save individual iteration checkpoints
         )
 
         # Evaluate
@@ -186,10 +185,10 @@ def main():
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
         win_rate = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.5)
 
-        # Always use the latest model for next iteration
+        # Save as best_overall for next iteration
         overall_best = os.path.join(args.save_dir, "best_overall.pt")
-        best_model_path = save_path
         torch.save(model.state_dict(), overall_best)
+        best_model_path = overall_best
         if win_rate > best_overall_win_rate:
             best_overall_win_rate = win_rate
             print(f"  New best win rate: {100*win_rate:.0f}%")
