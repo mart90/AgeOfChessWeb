@@ -21,7 +21,7 @@ class ResBlock(nn.Module):
 
 class PolicyNetwork(nn.Module):
     def __init__(self, in_channels=NUM_PLANES, board_size=BOARD_SIZE,
-                 num_actions=NUM_ACTIONS, num_filters=64, num_res_blocks=4):
+                 num_actions=NUM_ACTIONS, num_filters=256, num_res_blocks=15):
         super().__init__()
         self.board_size = board_size
 

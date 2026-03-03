@@ -43,7 +43,7 @@ def serialize_move(move):
         return {"type": "place", "piece": move[1], "dest": move[2], "isWhite": move[3]}
 
 
-def play_and_record(board, model=None, device=None, temperature=0.5):
+def play_and_record(board, white_model=None, black_model=None, device=None, white_temp=0.5, black_temp=0.5):
     """Play a full game, recording every move (both sides)."""
     game_board = board.clone()
     moves = []
@@ -59,8 +59,12 @@ def play_and_record(board, model=None, device=None, temperature=0.5):
             result = -1 if game_board.white_is_active else 1
             return moves, result
 
-        if model is not None:
-            move = policy_move(model, game_board, legal_moves, device, temperature)
+        # Choose model based on active player
+        current_model = white_model if game_board.white_is_active else black_model
+        current_temp = white_temp if game_board.white_is_active else black_temp
+
+        if current_model is not None:
+            move = policy_move(current_model, game_board, legal_moves, device, current_temp)
         else:
             move = pick_random_move(legal_moves, placement_bias=1.0)
 
@@ -76,34 +80,63 @@ def main():
     parser.add_argument("--games", type=int, default=50, help="Number of games to play")
     parser.add_argument("--save", type=int, default=5, help="Number of games to save as replays")
     parser.add_argument("--model", type=str, default="checkpoints/best_overall.pt",
-                        help="Path to model checkpoint (omit for random play)")
-    parser.add_argument("--random", action="store_true", help="Use random play instead of model")
-    parser.add_argument("--temperature", type=float, default=0.5, help="Model temperature")
+                        help="Path to model checkpoint for both sides (omit for random play)")
+    parser.add_argument("--white-model", type=str, help="Path to white's model (overrides --model)")
+    parser.add_argument("--black-model", type=str, help="Path to black's model (overrides --model)")
+    parser.add_argument("--random", action="store_true", help="Use random play for both sides")
+    parser.add_argument("--white-random", action="store_true", help="Use random play for white")
+    parser.add_argument("--black-random", action="store_true", help="Use random play for black")
+    parser.add_argument("--temperature", type=float, default=0.5, help="Temperature for both sides")
+    parser.add_argument("--white-temp", type=float, help="Temperature for white (overrides --temperature)")
+    parser.add_argument("--black-temp", type=float, help="Temperature for black (overrides --temperature)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = None
-    if not args.random and os.path.exists(args.model):
-        model = PolicyNetwork().to(device)
-        model.load_state_dict(torch.load(args.model, map_location=device))
-        model.eval()
-        print(f"Using model: {args.model} (temperature={args.temperature})")
+    # Determine white model
+    white_model_path = args.white_model or args.model
+    white_model = None
+    if not (args.random or args.white_random) and os.path.exists(white_model_path):
+        white_model = PolicyNetwork().to(device)
+        white_model.load_state_dict(torch.load(white_model_path, map_location=device))
+        white_model.eval()
+        print(f"White: {white_model_path}")
     else:
-        if not args.random:
-            print(f"Model not found at {args.model}, falling back to random play")
-        print("Using random play")
+        print("White: random play")
 
-    print(f"Fetching {args.games} boards from server...")
+    # Determine black model
+    black_model_path = args.black_model or args.model
+    black_model = None
+    if not (args.random or args.black_random) and os.path.exists(black_model_path):
+        black_model = PolicyNetwork().to(device)
+        black_model.load_state_dict(torch.load(black_model_path, map_location=device))
+        black_model.eval()
+        print(f"Black: {black_model_path}")
+    else:
+        print("Black: random play")
+
+    # Determine temperatures
+    white_temp = args.white_temp if args.white_temp is not None else args.temperature
+    black_temp = args.black_temp if args.black_temp is not None else args.temperature
+    print(f"Temperatures: White={white_temp}, Black={black_temp}")
+
+    print(f"\nFetching {args.games} boards from server...")
     boards = fetch_boards(amount=args.games)
-    print(f"Fetched {len(boards)} boards")
+    print(f"Fetched {len(boards)} boards\n")
 
     os.makedirs("replays", exist_ok=True)
     saved = 0
 
     for i in range(1, args.games + 1):
         board = boards[i - 1]
-        moves, result = play_and_record(board, model=model, device=device, temperature=args.temperature)
+        moves, result = play_and_record(
+            board,
+            white_model=white_model,
+            black_model=black_model,
+            device=device,
+            white_temp=white_temp,
+            black_temp=black_temp
+        )
 
         result_str = {1: "White wins", -1: "Black wins", 0: "Draw"}[result]
         print(f"Game {i:2d}: {len(moves)} moves, {result_str}")

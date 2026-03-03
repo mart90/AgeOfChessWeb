@@ -16,7 +16,7 @@ TERRAIN_MAP = {
 }
 
 
-def fetch_board(size=10, server_url="https://localhost:7074"):
+def fetch_board(size=10, server_url=config["ServerUrl"]):
     resp = requests.post(
         f"{server_url}/api/sandbox/generateBulk",
         json={
