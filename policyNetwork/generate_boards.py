@@ -15,6 +15,7 @@ TERRAIN_MAP = {
     "GrassTrees": "t",
 }
 
+SERVER_URL = config.get("ServerUrl", "https://localhost:7074")
 
 def parse_board(board_data, size):
     """Parse a single board JSON object into a Board instance."""
@@ -33,7 +34,7 @@ def parse_board(board_data, size):
 def fetch_boards(amount=100, size=10, server_url=config["ServerUrl"]):
     """Fetch multiple mirrored boards in one API call."""
     resp = requests.post(
-        f"{server_url}/api/sandbox/generateBulk",
+        f"{server_url}/sandbox/generateBulk",
         json={
             "Size": size,
             "IsRandom": False,
