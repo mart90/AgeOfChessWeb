@@ -19,7 +19,7 @@ from board import M, P
 
 
 def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.5):
-    """Play model vs benchmark model and return win rate."""
+    """Play model vs benchmark model and return score (wins + 0.5*draws)."""
     boards = fetch_boards(amount=num_games)
     model.eval()
 
@@ -74,10 +74,10 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
             bench_wins += 1
 
     total = model_wins + bench_wins + draws
-    win_rate = model_wins / total if total > 0 else 0
+    score = (model_wins + draws * 0.5) / total if total > 0 else 0
     print(f"  Eval vs {bench_label}: {model_wins}W / {bench_wins}L / {draws}D "
-          f"({100*win_rate:.0f}% win rate, {num_games} games)")
-    return win_rate
+          f"({100*score:.0f}% score, {num_games} games)")
+    return score
 
 
 def fetch_all_boards(count):
@@ -118,7 +118,7 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
 
     results = []
-    best_overall_win_rate = 0
+    best_overall_score = 0
     best_model_path = None
 
     if args.resume:
@@ -159,7 +159,7 @@ def main():
 
         if board_tensors is None:
             print("  No data generated, skipping iteration")
-            results.append({"iteration": iteration, "val_loss": None, "win_rate": 0})
+            results.append({"iteration": iteration, "val_loss": None, "score": 0})
             continue
 
         data_path = os.path.join(args.save_dir, f"iter{iteration}_data.npz")
@@ -185,32 +185,32 @@ def main():
         # Evaluate
         bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
-        win_rate = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.5)
+        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.5)
 
         # Save as best_overall for next iteration
         overall_best = os.path.join(args.save_dir, "best_overall.pt")
         torch.save(model.state_dict(), overall_best)
         best_model_path = overall_best
-        if win_rate > best_overall_win_rate:
-            best_overall_win_rate = win_rate
-            print(f"  New best win rate: {100*win_rate:.0f}%")
+        if score > best_overall_score:
+            best_overall_score = score
+            print(f"  New best score: {100*score:.0f}%")
 
         results.append({
             "iteration": iteration,
             "val_loss": val_loss,
-            "win_rate": win_rate,
+            "score": score,
         })
 
     # Summary
     print(f"\n{'='*60}")
     print("Summary")
     print(f"{'='*60}")
-    print(f"{'Iter':>4}  {'Val Loss':>9}  {'Win Rate':>9}")
+    print(f"{'Iter':>4}  {'Val Loss':>9}  {'Score':>9}")
     print(f"{'-'*4}  {'-'*9}  {'-'*9}")
     for r in results:
         vl = f"{r['val_loss']:.4f}" if r['val_loss'] is not None else "   N/A"
-        wr = f"{100*r['win_rate']:.0f}%"
-        print(f"{r['iteration']:4d}  {vl:>9}  {wr:>9}")
+        sc = f"{100*r['score']:.0f}%"
+        print(f"{r['iteration']:4d}  {vl:>9}  {sc:>9}")
 
     # Export best model to ONNX
     if best_model_path:
