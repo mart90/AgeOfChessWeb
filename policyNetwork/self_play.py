@@ -69,7 +69,7 @@ def _heuristic_score(board, move):
         # Placement — neutral for pieces, strongly discourage pawns
         piece = move[1]
         if piece == "p":
-            score -= 15  # Strong penalty for pawns
+            score -= 100  # Strong penalty for pawns
         # else: neutral (no bonus for placing other pieces)
 
         # Placing on a mine is valuable
