@@ -1,3 +1,5 @@
+# python3 iterate.py --resume --boards 900 --workers 17 --iterations 5 --noise-weight 0.25
+
 """Iterative self-play training loop."""
 import argparse
 import os
@@ -102,7 +104,7 @@ def main():
     parser.add_argument("--eval-games", type=int, default=100, help="Evaluation games per iteration")
     parser.add_argument("--save-dir", type=str, default="checkpoints", help="Checkpoint directory")
     parser.add_argument("--resume", action="store_true", help="Resume from best_overall.pt")
-    parser.add_argument("--workers", type=int, default=None,
+    parser.add_argument("--workers", type=int, default=16,
                         help="Number of worker processes for self-play (default: cpu_count - 2)")
     parser.add_argument("--benchmark", type=str, default="checkpoints/benchmark.pt",
                         help="Path to benchmark model for evaluation (falls back to random if not found)")

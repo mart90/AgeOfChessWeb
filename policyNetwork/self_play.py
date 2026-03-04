@@ -66,12 +66,12 @@ def _heuristic_score(board, move):
             if not already_owned:
                 score += 15  # mine income is very valuable
     else:
-        # Placement — encourage pieces but not pawns
+        # Placement — neutral for pieces, strongly discourage pawns
         piece = move[1]
         if piece == "p":
-            score -= 15 # Discourage pawns
-        else:
-            score += PIECE_VALUES.get(piece, 0) * 0.3  # Bonus for other pieces
+            score -= 15  # Strong penalty for pawns
+        # else: neutral (no bonus for placing other pieces)
+
         # Placing on a mine is valuable
         dest_sq = board.squares[move[2]]
         if dest_sq.terrain_type == "m":
