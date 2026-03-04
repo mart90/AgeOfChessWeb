@@ -77,8 +77,8 @@ def play_and_record(board, white_model=None, black_model=None, device=None, whit
 
 def main():
     parser = argparse.ArgumentParser(description="Generate and save self-play games for review")
-    parser.add_argument("--games", type=int, default=50, help="Number of games to play")
-    parser.add_argument("--save", type=int, default=5, help="Number of games to save as replays")
+    parser.add_argument("--games", type=int, default=3, help="Number of games to play")
+    parser.add_argument("--save", type=int, default=3, help="Number of games to save as replays")
     parser.add_argument("--model", type=str, default="checkpoints/best_overall.pt",
                         help="Path to model checkpoint for both sides (omit for random play)")
     parser.add_argument("--white-model", type=str, help="Path to white's model (overrides --model)")

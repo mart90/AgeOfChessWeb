@@ -34,7 +34,7 @@ def parse_board(board_data, size):
 def fetch_boards(amount=100, size=10, server_url=config["ServerUrl"]):
     """Fetch multiple mirrored boards in one API call."""
     resp = requests.post(
-        f"{server_url}/sandbox/generateBulk",
+        f"{server_url}/api/sandbox/generateBulk",
         json={
             "Size": size,
             "IsRandom": False,
