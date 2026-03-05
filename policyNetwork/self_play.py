@@ -90,10 +90,10 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
     Args:
         noise_weight: Fraction of heuristic noise to mix into policy (0-1).
     """
-    # Enforce pawn limit: max 5 pawns per side
+    # Enforce pawn limit: max 0 pawns per side (completely disabled)
     pawn_count = sum(1 for sq in board.squares
                      if sq.piece_type == "p" and sq.piece_is_white == board.white_is_active)
-    if pawn_count >= 5:
+    if pawn_count >= 0:
         # Filter out pawn placements from legal moves
         legal_moves = [m for m in legal_moves if not (m[0] == P and m[1] == "p")]
         if len(legal_moves) == 0:
