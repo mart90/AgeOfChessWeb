@@ -36,6 +36,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     model_wins = 0
     bench_wins = 0
     draws = 0
+    move_counts = []
 
     for i in range(num_games):
         board = boards[i].clone()
@@ -65,6 +66,8 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
         else:
             result = 0
 
+        move_counts.append(move_count)
+
         model_won = (result == 1 and model_is_white) or (result == -1 and not model_is_white)
         if result == 0:
             draws += 1
@@ -75,8 +78,9 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
     total = model_wins + bench_wins + draws
     score = (model_wins + draws * 0.5) / total if total > 0 else 0
+    avg_moves = sum(move_counts) / len(move_counts) if move_counts else 0
     print(f"  Eval vs {bench_label}: {model_wins}W / {bench_wins}L / {draws}D "
-          f"({100*score:.0f}% score, {num_games} games)")
+          f"({100*score:.0f}% score, {num_games} games, {avg_moves:.1f} avg moves)")
     return score
 
 
