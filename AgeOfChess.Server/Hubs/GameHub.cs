@@ -176,6 +176,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         game.EndTurn();
         game.StartNewTurn();
 
+        // Execute premove if opponent has one set
+        await TryExecutePremove(game);
+
         await BroadcastState(game);
     }
 
@@ -213,6 +216,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         game.EndTurn();
         game.StartNewTurn();
+
+        // Execute premove if opponent has one set
+        await TryExecutePremove(game);
 
         await BroadcastState(game);
     }
@@ -357,6 +363,48 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         return pf.FindLegalDestinationsForPiecePlacement(game.ActiveColor.IsWhite, isPawn)
                  .Select(s => new[] { s.X, s.Y })
                  .ToArray();
+    }
+
+    /// <summary>
+    /// Sets a premove for the calling player. The premove will be executed immediately
+    /// after the opponent's next move if it remains legal at that time.
+    /// </summary>
+    public async Task SetPremove(string playerToken, string type, int fromX, int fromY, int toX, int toY, string? pieceCode)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null || game.GameEnded) return;
+
+        if (!IsAuthorizedPlayer(game, playerToken)) return;
+
+        bool isWhite = game.IsWhitePlayer(playerToken);
+
+        var premoveData = new ServerGame.PremoveData(
+            type.ToLower() == "move" ? ServerGame.PremoveType.Move : ServerGame.PremoveType.Place,
+            fromX, fromY, toX, toY, pieceCode
+        );
+
+        if (isWhite)
+            game.WhitePremove = premoveData;
+        else
+            game.BlackPremove = premoveData;
+    }
+
+    /// <summary>
+    /// Clears the calling player's premove (e.g., if they make a manual move).
+    /// </summary>
+    public async Task ClearPremove(string playerToken)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null) return;
+
+        if (!IsAuthorizedPlayer(game, playerToken)) return;
+
+        bool isWhite = game.IsWhitePlayer(playerToken);
+
+        if (isWhite)
+            game.WhitePremove = null;
+        else
+            game.BlackPremove = null;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
@@ -688,4 +736,60 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         "p" => typeof(GameLogic.PlaceableObjects.Pieces.Pawn),
         _ => null
     };
+
+    /// <summary>
+    /// Attempts to execute the premove set by the now-active player (whose turn just started).
+    /// Returns true if a premove was executed, false if no premove or premove was illegal.
+    /// </summary>
+    private async Task<bool> TryExecutePremove(ServerGame game)
+    {
+        if (game.GameEnded) return false;
+
+        // Get the premove for the player who just became active
+        var premove = game.ActiveColor.IsWhite ? game.WhitePremove : game.BlackPremove;
+
+        if (premove == null) return false;
+
+        // Clear the premove immediately (regardless of whether execution succeeds)
+        if (game.ActiveColor.IsWhite)
+            game.WhitePremove = null;
+        else
+            game.BlackPremove = null;
+
+        bool success = false;
+
+        try
+        {
+            if (premove.Type == ServerGame.PremoveType.Move)
+            {
+                // Attempt to execute the move
+                if (game.TryMovePiece(premove.FromX, premove.FromY, premove.ToX, premove.ToY))
+                {
+                    success = true;
+                }
+            }
+            else if (premove.Type == ServerGame.PremoveType.Place)
+            {
+                var pieceType = PieceTypeFromCode(premove.PieceCode!);
+                if (pieceType != null && game.TryPlacePiece(premove.ToX, premove.ToY, pieceType))
+                {
+                    success = true;
+                }
+            }
+
+            if (success)
+            {
+                // Complete the premove turn cycle
+                game.EndTurn();
+                game.StartNewTurn();
+            }
+        }
+        catch
+        {
+            // If anything goes wrong, silently fail (premove becomes illegal, just discard it)
+            success = false;
+        }
+
+        return success;
+    }
 }

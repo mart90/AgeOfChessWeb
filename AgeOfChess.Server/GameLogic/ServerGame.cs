@@ -44,6 +44,25 @@ public class ServerGame : Game
     /// <summary>In-memory chat history (not persisted, wiped on server restart).</summary>
     public List<ChatMessageDto> ChatMessages { get; } = new();
 
+    // ── Premove tracking ──────────────────────────────────────────────────
+
+    /// <summary>Premove set by white player, executed immediately after black's turn ends if legal.</summary>
+    public PremoveData? WhitePremove { get; set; }
+
+    /// <summary>Premove set by black player, executed immediately after white's turn ends if legal.</summary>
+    public PremoveData? BlackPremove { get; set; }
+
+    public record PremoveData(
+        PremoveType Type,
+        int FromX,  // -1 for placements
+        int FromY,  // -1 for placements
+        int ToX,
+        int ToY,
+        string? PieceCode  // null for moves, "q"|"r"|"b"|"n"|"p" for placements
+    );
+
+    public enum PremoveType { Move, Place }
+
     // ── Rematch tracking ──────────────────────────────────────────────────
 
     private readonly Lock _rematchLock = new();

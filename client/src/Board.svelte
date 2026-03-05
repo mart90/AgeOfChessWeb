@@ -25,6 +25,7 @@
     legalDests      = [],
     dragOverSquare  = null,
     hoverSquares    = [],   // {x,y}[] highlighted from move-list hover
+    premoveSquares  = [],   // {x,y}[] highlighted for premove
     lastMoveSquares = [],   // {x,y}[] from/to of the last move played
     showCoords      = true,
     onPieceGrabbed  = null,
@@ -83,6 +84,7 @@
 
   const legalSet    = $derived(new Set(legalDests.map(d => `${d.x},${d.y}`)));
   const hoverSet    = $derived(new Set(hoverSquares.map(d => `${d.x},${d.y}`)));
+  const premoveSet  = $derived(new Set(premoveSquares.map(d => `${d.x},${d.y}`)));
   const lastMoveSet = $derived(new Set(lastMoveSquares.map(d => `${d.x},${d.y}`)));
 
   // ── Draw ────────────────────────────────────────────────────────────────
@@ -124,6 +126,12 @@
       // Last-move highlight (subtle warm yellow, drawn early so other overlays sit on top)
       if (lastMoveSet.has(`${sq.x},${sq.y}`)) {
         ctx.fillStyle = 'rgba(200, 175, 0, 0.45)';
+        ctx.fillRect(px, py, cw, ch);
+      }
+
+      // Premove highlight (blue)
+      if (premoveSet.has(`${sq.x},${sq.y}`)) {
+        ctx.fillStyle = 'rgba(50, 100, 255, 0.45)';
         ctx.fillRect(px, py, cw, ch);
       }
 
@@ -242,7 +250,7 @@
 
   // Re-draw when highlights change without squares changing
   $effect(() => {
-    void legalSet; void selectedSquare; void dragOverSquare; void hoverSet; void showCoords; void lastMoveSet;
+    void legalSet; void selectedSquare; void dragOverSquare; void hoverSet; void showCoords; void premoveSet; void lastMoveSet;
     draw();
   });
 

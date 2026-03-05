@@ -153,6 +153,12 @@
    */
   let dragging = $state(null);
 
+  /**
+   * premove = null | { type:'move', fromX, fromY, toX, toY }
+   *                | { type:'place', toX, toY, code }
+   */
+  let premove = $state(null);
+
   // ── Replay & notation hover ──────────────────────────────────────────────
 
   let stateHistory  = [];          // GameStateDto snapshots; index = move count
@@ -287,12 +293,19 @@
   // ── Board callbacks ───────────────────────────────────────────────────────
 
   async function onPieceGrabbed(x, y, clientX, clientY) {
-    if (!isMyTurn || gameState?.gameEnded || biddingState) return;
+    if (gameState?.gameEnded || biddingState) return;
     const sq = gameState.squares.find(s => s.x === x && s.y === y);
     if (!sq?.piece || sq.piece.isWhite !== isWhite) return;
 
     selectedSquare = { x, y };
-    legalDests = await fetchLegalMoves(x, y);
+
+    // Premove mode: don't fetch legal moves on opponent's turn
+    if (!isMyTurn) {
+      legalDests = [];
+    } else {
+      legalDests = await fetchLegalMoves(x, y);
+    }
+
     const pieceName = sq.piece.type.replace(/^(White|Black)/, '').toLowerCase();
     const imgSrc = `/assets/objects/${isWhite ? 'w' : 'b'}_${pieceName}.png`;
     dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
@@ -300,21 +313,41 @@
 
   function onDropOnBoard(toX, toY) {
     if (!dragging) return;
-    if (dragging.type === 'move') {
-      const isSameSquare = toX === dragging.fromX && toY === dragging.fromY;
-      const destSq = gameState.squares.find(s => s.x === toX && s.y === toY);
-      const isCapture = destSq?.piece != null && !isSameSquare;
-      hub?.invoke('MakeMove', playerToken, dragging.fromX, dragging.fromY, toX, toY);
-      playSound(isCapture ? 'capture' : 'move');
-    } else if (dragging.type === 'place') {
-      hub?.invoke('PlacePiece', playerToken, toX, toY, dragging.code);
-      playSound('move');
+
+    if (isMyTurn) {
+      // Clear premove if making manual move
+      if (premove) {
+        premove = null;
+        hub?.invoke('ClearPremove', playerToken);
+      }
+
+      // Normal move execution
+      if (dragging.type === 'move') {
+        const isSameSquare = toX === dragging.fromX && toY === dragging.fromY;
+        const destSq = gameState.squares.find(s => s.x === toX && s.y === toY);
+        const isCapture = destSq?.piece != null && !isSameSquare;
+        hub?.invoke('MakeMove', playerToken, dragging.fromX, dragging.fromY, toX, toY);
+        playSound(isCapture ? 'capture' : 'move');
+      } else if (dragging.type === 'place') {
+        hub?.invoke('PlacePiece', playerToken, toX, toY, dragging.code);
+        playSound('move');
+      }
+    } else {
+      // Premove mode: send to server
+      if (dragging.type === 'move') {
+        premove = { type: 'move', fromX: dragging.fromX, fromY: dragging.fromY, toX, toY };
+        hub?.invoke('SetPremove', playerToken, 'move', dragging.fromX, dragging.fromY, toX, toY, null);
+      } else if (dragging.type === 'place') {
+        premove = { type: 'place', toX, toY, code: dragging.code };
+        hub?.invoke('SetPremove', playerToken, 'place', -1, -1, toX, toY, dragging.code);
+      }
     }
+
     clearDrag();
   }
 
   function onSquareClick(x, y) {
-    if (!isMyTurn || gameState?.gameEnded || biddingState) return;
+    if (gameState?.gameEnded || biddingState) return;
     const sq = gameState.squares.find(s => s.x === x && s.y === y);
 
     if (selectedSquare) {
@@ -324,17 +357,40 @@
       }
       if (sq?.piece?.isWhite === isWhite) {
         selectedSquare = { x, y };
-        fetchLegalMoves(x, y).then(d => { legalDests = d; });
+        if (!isMyTurn) {
+          legalDests = [];
+        } else {
+          fetchLegalMoves(x, y).then(d => { legalDests = d; });
+        }
         return;
       }
-      const isCapture = sq?.piece != null;
-      hub?.invoke('MakeMove', playerToken, selectedSquare.x, selectedSquare.y, x, y);
-      playSound(isCapture ? 'capture' : 'move');
-      selectedSquare = null; legalDests = [];
+
+      // Clicking to move selected piece to different square
+      if (isMyTurn) {
+        // Clear premove if making manual move
+        if (premove) {
+          premove = null;
+          hub?.invoke('ClearPremove', playerToken);
+        }
+
+        const isCapture = sq?.piece != null;
+        hub?.invoke('MakeMove', playerToken, selectedSquare.x, selectedSquare.y, x, y);
+        playSound(isCapture ? 'capture' : 'move');
+        selectedSquare = null; legalDests = [];
+      } else {
+        // Premove mode: set premove
+        premove = { type: 'move', fromX: selectedSquare.x, fromY: selectedSquare.y, toX: x, toY: y };
+        hub?.invoke('SetPremove', playerToken, 'move', selectedSquare.x, selectedSquare.y, x, y, null);
+        selectedSquare = null; legalDests = [];
+      }
     } else {
       if (sq?.piece?.isWhite === isWhite) {
         selectedSquare = { x, y };
-        fetchLegalMoves(x, y).then(d => { legalDests = d; });
+        if (!isMyTurn) {
+          legalDests = [];
+        } else {
+          fetchLegalMoves(x, y).then(d => { legalDests = d; });
+        }
       }
     }
   }
@@ -354,12 +410,22 @@
   // ── Shop drag ─────────────────────────────────────────────────────────────
 
   async function shopPointerDown(e, code) {
-    if (!isMyTurn || gameState?.gameEnded || biddingState) return;
+    if (gameState?.gameEnded || biddingState) return;
     const item = SHOP.find(s => s.code === code);
-    if (!item || (me?.gold ?? 0) < item.cost) return;
+    if (!item) return;
+
+    // On our turn, check if we can afford it; on opponent's turn, allow premove even without gold
+    if (isMyTurn && (me?.gold ?? 0) < item.cost) return;
 
     e.preventDefault();
-    legalDests = await fetchLegalPlacements(code);
+
+    // Premove mode: don't fetch legal placements on opponent's turn
+    if (!isMyTurn) {
+      legalDests = [];
+    } else {
+      legalDests = await fetchLegalPlacements(code);
+    }
+
     dragging = { type: 'place', code, imgSrc: shopImgSrc(code), ghostX: e.clientX, ghostY: e.clientY };
   }
 
@@ -423,8 +489,21 @@
     // Shop piece dropped anywhere on the board
     if (dragging.type === 'place') {
       const sq = globalCursorToBoard(e.clientX, e.clientY);
-      if (sq) hub?.invoke('PlacePiece', playerToken, sq.x, sq.y, dragging.code);
-      playSound('move');
+      if (sq) {
+        if (isMyTurn) {
+          // Clear premove if making manual move
+          if (premove) {
+            premove = null;
+            hub?.invoke('ClearPremove', playerToken);
+          }
+          hub?.invoke('PlacePiece', playerToken, sq.x, sq.y, dragging.code);
+          playSound('move');
+        } else {
+          // Premove mode: set premove
+          premove = { type: 'place', toX: sq.x, toY: sq.y, code: dragging.code };
+          hub?.invoke('SetPremove', playerToken, 'place', -1, -1, sq.x, sq.y, dragging.code);
+        }
+      }
     }
     // Board piece drops are handled by onDropOnBoard; this catches drops outside the canvas
     clearDrag();
@@ -568,6 +647,10 @@
     });
     hub.on('StateUpdated', (state) => {
       stateHistory = [...stateHistory, state];
+
+      // Clear premove on any state update (either executed or became invalid)
+      premove = null;
+
       if (gameState.moves.length < state.moves.length && !isMyTurn) {
         // Opponent played a move - check if it was a capture by comparing piece counts
         const oldPieceCount = gameState.squares.filter(s => s.piece).length;
@@ -732,6 +815,11 @@
             legalDests={replayIndex !== null ? [] : legalDests}
             dragOverSquare={replayIndex !== null ? null : dragOverSquare}
             {hoverSquares}
+            premoveSquares={replayIndex === null && premove
+              ? (premove.type === 'move'
+                  ? [{x: premove.fromX, y: premove.fromY}, {x: premove.toX, y: premove.toY}]
+                  : [{x: premove.toX, y: premove.toY}])
+              : []}
             {lastMoveSquares}
             showCoords={settings.showCoordinates}
             {mapSize}
@@ -795,7 +883,7 @@
           <button
             class="shop-piece"
             class:active={dragging?.type === 'place' && dragging.code === item.code}
-            disabled={!isMyTurn || !canAfford}
+            disabled={isMyTurn && !canAfford}
             title="{item.name} — {item.cost}g"
             onpointerdown={(e) => shopPointerDown(e, item.code)}
           >

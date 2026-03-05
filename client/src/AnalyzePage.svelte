@@ -329,7 +329,7 @@
       mapSize       = data.mapSize;
       mapSeed       = data.mapSeed;
       whiteGold     = 0;
-      blackGold     = 5;
+      blackGold     = 6;
       whiteIsActive = true;
       lastMoveFrom  = null;
       lastMoveTo    = null;
