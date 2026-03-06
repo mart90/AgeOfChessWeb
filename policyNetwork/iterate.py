@@ -70,6 +70,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     draws = 0
     move_counts = []
     model_pawn_placements = 0
+    model_queen_placements = 0
     model_total_moves = 0
     recorded_game = None  # Will store first game for inspection
 
@@ -94,9 +95,12 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
             if is_model_turn:
                 move = policy_move(model, board, legal_moves, device, temperature)
                 model_total_moves += 1
-                # Check if model placed a pawn
-                if move[0] == P and move[1] == "p":
-                    model_pawn_placements += 1
+                # Track piece placements
+                if move[0] == P:
+                    if move[1] == "p":
+                        model_pawn_placements += 1
+                    elif move[1] == "q":
+                        model_queen_placements += 1
             elif benchmark is not None:
                 move = policy_move(benchmark, board, legal_moves, device, temperature)
             else:
@@ -137,9 +141,10 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     score = (model_wins + draws * 0.5) / total if total > 0 else 0
     avg_moves = sum(move_counts) / len(move_counts) if move_counts else 0
     pawn_rate = 100 * model_pawn_placements / model_total_moves if model_total_moves > 0 else 0
+    queen_rate = 100 * model_queen_placements / model_total_moves if model_total_moves > 0 else 0
     print(f"  Eval vs {bench_label}: {model_wins}W / {bench_wins}L / {draws}D "
           f"({100*score:.0f}% score, {num_games} games, {avg_moves:.1f} avg moves, "
-          f"{pawn_rate:.2f}% pawns [{model_pawn_placements}/{model_total_moves} moves])")
+          f"{pawn_rate:.2f}% pawns, {queen_rate:.2f}% queens)")
 
     # Save first game for inspection
     if recorded_game is not None:
