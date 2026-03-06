@@ -64,7 +64,7 @@ def play_and_record(board, white_model=None, black_model=None, device=None, whit
         current_temp = white_temp if game_board.white_is_active else black_temp
 
         if current_model is not None:
-            move = policy_move(current_model, game_board, legal_moves, device, current_temp, apply_pawn_cap=False)
+            move = policy_move(current_model, game_board, legal_moves, device, current_temp)
         else:
             move = pick_random_move(legal_moves, placement_bias=1.0)
 
@@ -96,24 +96,28 @@ def main():
     # Determine white model
     white_model_path = args.white_model or args.model
     white_model = None
-    if not (args.random or args.white_random) and os.path.exists(white_model_path):
+    if args.random or args.white_random:
+        print("White: random play")
+    elif os.path.exists(white_model_path):
         white_model = PolicyNetwork().to(device)
         white_model.load_state_dict(torch.load(white_model_path, map_location=device))
         white_model.eval()
         print(f"White: {white_model_path}")
     else:
-        print("White: random play")
+        raise FileNotFoundError(f"White model not found: {white_model_path}")
 
     # Determine black model
     black_model_path = args.black_model or args.model
     black_model = None
-    if not (args.random or args.black_random) and os.path.exists(black_model_path):
+    if args.random or args.black_random:
+        print("Black: random play")
+    elif os.path.exists(black_model_path):
         black_model = PolicyNetwork().to(device)
         black_model.load_state_dict(torch.load(black_model_path, map_location=device))
         black_model.eval()
         print(f"Black: {black_model_path}")
     else:
-        print("Black: random play")
+        raise FileNotFoundError(f"Black model not found: {black_model_path}")
 
     # Determine temperatures
     white_temp = args.white_temp if args.white_temp is not None else args.temperature

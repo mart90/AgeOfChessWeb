@@ -92,13 +92,13 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
             is_model_turn = (board.white_is_active == model_is_white)
             if is_model_turn:
-                move = policy_move(model, board, legal_moves, device, temperature, apply_pawn_cap=False)
+                move = policy_move(model, board, legal_moves, device, temperature)
                 model_total_moves += 1
                 # Check if model placed a pawn
                 if move[0] == P and move[1] == "p":
                     model_pawn_placements += 1
             elif benchmark is not None:
-                move = policy_move(benchmark, board, legal_moves, device, temperature, apply_pawn_cap=False)
+                move = policy_move(benchmark, board, legal_moves, device, temperature)
             else:
                 move = pick_random_move(legal_moves, placement_bias=1.0)
 
