@@ -37,6 +37,8 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     bench_wins = 0
     draws = 0
     move_counts = []
+    model_pawn_placements = 0
+    model_total_moves = 0
 
     for i in range(num_games):
         board = boards[i].clone()
@@ -55,9 +57,13 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
             is_model_turn = (board.white_is_active == model_is_white)
             if is_model_turn:
-                move = policy_move(model, board, legal_moves, device, temperature)
+                move = policy_move(model, board, legal_moves, device, temperature, apply_pawn_cap=False)
+                model_total_moves += 1
+                # Check if model placed a pawn
+                if move[0] == P and move[1] == "p":
+                    model_pawn_placements += 1
             elif benchmark is not None:
-                move = policy_move(benchmark, board, legal_moves, device, temperature)
+                move = policy_move(benchmark, board, legal_moves, device, temperature, apply_pawn_cap=False)
             else:
                 move = pick_random_move(legal_moves, placement_bias=1.0)
 
@@ -79,8 +85,9 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     total = model_wins + bench_wins + draws
     score = (model_wins + draws * 0.5) / total if total > 0 else 0
     avg_moves = sum(move_counts) / len(move_counts) if move_counts else 0
+    pawn_rate = 100 * model_pawn_placements / model_total_moves if model_total_moves > 0 else 0
     print(f"  Eval vs {bench_label}: {model_wins}W / {bench_wins}L / {draws}D "
-          f"({100*score:.0f}% score, {num_games} games, {avg_moves:.1f} avg moves)")
+          f"({100*score:.0f}% score, {num_games} games, {avg_moves:.1f} avg moves, {pawn_rate:.2f}% pawns)")
     return score
 
 
@@ -103,7 +110,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=20, help="Max epochs per iteration")
     parser.add_argument("--batch-size", type=int, default=256, help="Training batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--patience", type=int, default=2, help="Early stopping patience")
+    parser.add_argument("--patience", type=int, default=1, help="Early stopping patience")
     parser.add_argument("--temperature", type=float, default=1.0, help="Self-play temperature")
     parser.add_argument("--eval-games", type=int, default=100, help="Evaluation games per iteration")
     parser.add_argument("--save-dir", type=str, default="checkpoints", help="Checkpoint directory")

@@ -84,21 +84,24 @@ def _heuristic_score(board, move):
 
 
 def policy_move(model, board, legal_moves, device, temperature=1.0,
-                noise_weight=0.0):
+                noise_weight=0.0, apply_pawn_cap=True):
     """Pick a move using the policy network.
 
     Args:
         noise_weight: Fraction of heuristic noise to mix into policy (0-1).
+        apply_pawn_cap: If True, filter out pawn placements (for self-play data generation).
+                        If False, allow all legal moves (for evaluation).
     """
-    # Enforce pawn limit: max 0 pawns per side (completely disabled)
-    pawn_count = sum(1 for sq in board.squares
-                     if sq.piece_type == "p" and sq.piece_is_white == board.white_is_active)
-    if pawn_count >= 0:
-        # Filter out pawn placements from legal moves
-        legal_moves = [m for m in legal_moves if not (m[0] == P and m[1] == "p")]
-        if len(legal_moves) == 0:
-            # Fallback if filtering removes all moves (shouldn't happen)
-            legal_moves = board.get_legal_moves()
+    # Enforce pawn limit: max 0 pawns per side (completely disabled during self-play)
+    if apply_pawn_cap:
+        pawn_count = sum(1 for sq in board.squares
+                         if sq.piece_type == "p" and sq.piece_is_white == board.white_is_active)
+        if pawn_count >= 0:
+            # Filter out pawn placements from legal moves
+            legal_moves = [m for m in legal_moves if not (m[0] == P and m[1] == "p")]
+            if len(legal_moves) == 0:
+                # Fallback if filtering removes all moves (shouldn't happen)
+                legal_moves = board.get_legal_moves()
 
     encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
@@ -133,11 +136,11 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
     return pick_random_move(legal_moves, placement_bias=1.0)
 
 
-def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0):
+def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0, apply_pawn_cap=True):
     """Create a policy function compatible with play_game's policy_fn parameter."""
     def fn(board, legal_moves, _temperature):
         return policy_move(model, board, legal_moves, device, temperature,
-                           noise_weight=noise_weight)
+                           noise_weight=noise_weight, apply_pawn_cap=apply_pawn_cap)
     return fn
 
 
