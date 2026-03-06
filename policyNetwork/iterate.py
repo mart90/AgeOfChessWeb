@@ -11,7 +11,7 @@ from model import PolicyNetwork
 from self_play import (
     generate_training_data, generate_training_data_parallel, save_training_data,
     make_policy_fn, play_game, check_victory, pick_random_move, MAX_MOVES,
-    policy_move,
+    policy_move, GOLD_VICTORY_THRESHOLD,
 )
 from train import run_training, export_onnx
 from generate_boards import fetch_boards
@@ -68,6 +68,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     model_wins = 0
     bench_wins = 0
     draws = 0
+    mate_endings = 0
     move_counts = []
     model_pawn_placements = 0
     model_queen_placements = 0
@@ -116,6 +117,13 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
         move_counts.append(move_count)
 
+        # Track mate endings (not gold victory, not draw)
+        if result != 0:
+            is_gold_victory = (board.white_gold >= GOLD_VICTORY_THRESHOLD or
+                             board.black_gold >= GOLD_VICTORY_THRESHOLD)
+            if not is_gold_victory:
+                mate_endings += 1
+
         # Save first game for inspection
         if i == 0:
             result_str = {1: "White wins", -1: "Black wins", 0: "Draw"}[result]
@@ -142,9 +150,11 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     avg_moves = sum(move_counts) / len(move_counts) if move_counts else 0
     pawn_rate = 100 * model_pawn_placements / model_total_moves if model_total_moves > 0 else 0
     queen_rate = 100 * model_queen_placements / model_total_moves if model_total_moves > 0 else 0
-    print(f"  Eval vs {bench_label}: {model_wins}W / {bench_wins}L / {draws}D "
-          f"({100*score:.0f}% score, {num_games} games, {avg_moves:.1f} avg moves, "
-          f"{pawn_rate:.2f}% pawns, {queen_rate:.2f}% queens)")
+
+    print(f"  Eval vs {bench_label}:")
+    print(f"    Result: {model_wins}W / {bench_wins}L / {draws}D ({100*score:.0f}% score)")
+    print(f"    Games: {num_games} total, {avg_moves:.1f} avg moves, {mate_endings} mates")
+    print(f"    Model: {pawn_rate:.2f}% pawns, {queen_rate:.2f}% queens")
 
     # Save first game for inspection
     if recorded_game is not None:
