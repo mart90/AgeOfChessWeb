@@ -2,6 +2,7 @@
 
 """Iterative self-play training loop."""
 import argparse
+import json
 import os
 import time
 import torch
@@ -16,6 +17,37 @@ from train import run_training, export_onnx
 from generate_boards import fetch_boards
 from encode import encode_board, move_to_index, get_legal_move_mask
 from board import M, P
+
+
+def serialize_board(board):
+    """Serialize initial board state to JSON-compatible dict."""
+    squares = []
+    for sq in board.squares:
+        s = {"id": sq.id, "x": sq.x, "y": sq.y}
+        if sq.terrain_type is not None:
+            s["terrain"] = sq.terrain_type
+        if sq.piece_type is not None:
+            s["piece"] = sq.piece_type
+            s["isWhite"] = sq.piece_is_white
+        if sq.has_treasure:
+            s["treasure"] = True
+        if sq.owned_by is not None:
+            s["ownedBy"] = sq.owned_by
+        squares.append(s)
+    return {
+        "size": board.size,
+        "squares": squares,
+        "whiteGold": board.white_gold,
+        "blackGold": board.black_gold,
+    }
+
+
+def serialize_move(move):
+    """Serialize a move tuple to JSON-compatible dict."""
+    if move[0] == M:
+        return {"type": "move", "from": move[1], "to": move[2]}
+    else:
+        return {"type": "place", "piece": move[1], "dest": move[2], "isWhite": move[3]}
 
 
 def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.0):
@@ -39,11 +71,14 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     move_counts = []
     model_pawn_placements = 0
     model_total_moves = 0
+    recorded_game = None  # Will store first game for inspection
 
     for i in range(num_games):
         board = boards[i].clone()
+        initial_board = boards[i].clone()  # Save initial state for JSON
         model_is_white = (i % 2 == 0)
         move_count = 0
+        moves_list = [] if i == 0 else None  # Record first game only
 
         while move_count < MAX_MOVES:
             result = check_victory(board)
@@ -67,12 +102,28 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
             else:
                 move = pick_random_move(legal_moves, placement_bias=1.0)
 
+            if moves_list is not None:
+                moves_list.append(serialize_move(move))
+
             board.do_move(move)
             move_count += 1
         else:
             result = 0
 
         move_counts.append(move_count)
+
+        # Save first game for inspection
+        if i == 0:
+            result_str = {1: "White wins", -1: "Black wins", 0: "Draw"}[result]
+            recorded_game = {
+                "gameNumber": 1,
+                "initialBoard": serialize_board(initial_board),
+                "moves": moves_list,
+                "result": result,
+                "totalMoves": len(moves_list),
+                "modelSide": "white" if model_is_white else "black",
+                "temperature": temperature,
+            }
 
         model_won = (result == 1 and model_is_white) or (result == -1 and not model_is_white)
         if result == 0:
@@ -87,7 +138,17 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     avg_moves = sum(move_counts) / len(move_counts) if move_counts else 0
     pawn_rate = 100 * model_pawn_placements / model_total_moves if model_total_moves > 0 else 0
     print(f"  Eval vs {bench_label}: {model_wins}W / {bench_wins}L / {draws}D "
-          f"({100*score:.0f}% score, {num_games} games, {avg_moves:.1f} avg moves, {pawn_rate:.2f}% pawns)")
+          f"({100*score:.0f}% score, {num_games} games, {avg_moves:.1f} avg moves, "
+          f"{pawn_rate:.2f}% pawns [{model_pawn_placements}/{model_total_moves} moves])")
+
+    # Save first game for inspection
+    if recorded_game is not None:
+        os.makedirs("eval_games", exist_ok=True)
+        save_path = "eval_games/last_eval_game.json"
+        with open(save_path, "w") as f:
+            json.dump(recorded_game, f, indent=2)
+        print(f"  Saved eval game to {save_path}")
+
     return score
 
 

@@ -64,7 +64,7 @@ def play_and_record(board, white_model=None, black_model=None, device=None, whit
         current_temp = white_temp if game_board.white_is_active else black_temp
 
         if current_model is not None:
-            move = policy_move(current_model, game_board, legal_moves, device, current_temp)
+            move = policy_move(current_model, game_board, legal_moves, device, current_temp, apply_pawn_cap=False)
         else:
             move = pick_random_move(legal_moves, placement_bias=1.0)
 
@@ -86,7 +86,7 @@ def main():
     parser.add_argument("--random", action="store_true", help="Use random play for both sides")
     parser.add_argument("--white-random", action="store_true", help="Use random play for white")
     parser.add_argument("--black-random", action="store_true", help="Use random play for black")
-    parser.add_argument("--temperature", type=float, default=0.5, help="Temperature for both sides")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for both sides")
     parser.add_argument("--white-temp", type=float, help="Temperature for white (overrides --temperature)")
     parser.add_argument("--black-temp", type=float, help="Temperature for black (overrides --temperature)")
     args = parser.parse_args()
