@@ -69,9 +69,9 @@ def _heuristic_score(board, move):
         # Placement — encourage queens, discourage pawns
         piece = move[1]
         if piece == "p":
-            score -= 100  # Strong penalty for pawns
+            score -30  # Penalty for pawns
         elif piece == "q":
-            score += 80  # Encourage queen exploration (counteract gold-hoarding bias)
+            score += 30  # Encourage queen exploration (counteract gold-hoarding bias)
         # Other pieces: neutral (model already places these appropriately)
 
         # Placing on a mine is valuable
