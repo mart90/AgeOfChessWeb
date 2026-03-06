@@ -18,7 +18,7 @@ from encode import encode_board, move_to_index, get_legal_move_mask
 from board import M, P
 
 
-def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.5):
+def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.0):
     """Play model vs benchmark model and return score (wins + 0.5*draws)."""
     boards = fetch_boards(amount=num_games)
     model.eval()
@@ -196,7 +196,7 @@ def main():
         # Evaluate
         bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
-        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.5)
+        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.0)
 
         # Save as best_overall for next iteration
         overall_best = os.path.join(args.save_dir, "best_overall.pt")
