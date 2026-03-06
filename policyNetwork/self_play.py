@@ -66,11 +66,13 @@ def _heuristic_score(board, move):
             if not already_owned:
                 score += 15  # mine income is very valuable
     else:
-        # Placement — neutral for pieces, strongly discourage pawns
+        # Placement — encourage queens, discourage pawns
         piece = move[1]
         if piece == "p":
             score -= 100  # Strong penalty for pawns
-        # else: neutral (no bonus for placing other pieces)
+        elif piece == "q":
+            score += 80  # Encourage queen exploration (counteract gold-hoarding bias)
+        # Other pieces: neutral (model already places these appropriately)
 
         # Placing on a mine is valuable
         dest_sq = board.squares[move[2]]
