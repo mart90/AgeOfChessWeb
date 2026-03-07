@@ -52,35 +52,36 @@ def _heuristic_score(board, move):
     score = 0.0
 
     if move[0] == M:
-        dest_sq = board.squares[move[2]]
-        # Capturing an enemy piece
-        if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
-            score += PIECE_VALUES.get(dest_sq.piece_type, 0)
-        # Taking a treasure
-        if dest_sq.has_treasure:
-            score += 15
-        # Taking/stealing a mine
-        if dest_sq.terrain_type == "m":
-            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-                            (dest_sq.owned_by == 1 and not board.white_is_active)
-            if not already_owned:
-                score += 10 # mine income is very valuable
+        pass
+        # dest_sq = board.squares[move[2]]
+        # # Capturing an enemy piece
+        # if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
+        #     score += PIECE_VALUES.get(dest_sq.piece_type, 0)
+        # # Taking a treasure
+        # if dest_sq.has_treasure:
+        #     score += 15
+        # # Taking/stealing a mine
+        # if dest_sq.terrain_type == "m":
+        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
+        #     if not already_owned:
+        #         score += 10 # mine income is very valuable
     else:
         # Placement — encourage queens, discourage pawns
         piece = move[1]
-        if piece == "p":
-            score -15  # Penalty for pawns
-        # elif piece == "q":
-        #     score += 30  # Encourage queen exploration (counteract gold-hoarding bias)
+        # if piece == "p":
+        #     score -15  # Penalty for pawns
+        if piece == "q":
+            score += 20  # Encourage queen exploration (counteract gold-hoarding bias)
         # Other pieces: neutral (model already places these appropriately)
 
         # Placing on a mine is valuable
-        dest_sq = board.squares[move[2]]
-        if dest_sq.terrain_type == "m":
-            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-                            (dest_sq.owned_by == 1 and not board.white_is_active)
-            if not already_owned:
-                score += 10
+        # dest_sq = board.squares[move[2]]
+        # if dest_sq.terrain_type == "m":
+        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
+        #     if not already_owned:
+        #         score += 10
 
     return score
 
@@ -94,12 +95,12 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
         filter_pawns: If True, filter out pawn placements (for self-play training).
     """
     # Filter out pawn placements during self-play to prevent model from learning pawn spam
-    if filter_pawns:
-        legal_moves = [m for m in legal_moves if not (m[0] == P and m[1] == "p")]
+    # if filter_pawns:
+    #     legal_moves = [m for m in legal_moves if not (m[0] == P and m[1] == "p")]
 
-        if len(legal_moves) == 0:
-            # Safety: if somehow all moves were pawns, allow them (shouldn't happen)
-            legal_moves = board.get_legal_moves()
+    #     if len(legal_moves) == 0:
+    #         # Safety: if somehow all moves were pawns, allow them (shouldn't happen)
+    #         legal_moves = board.get_legal_moves()
 
     encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
