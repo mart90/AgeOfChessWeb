@@ -18,6 +18,8 @@ def train_epoch(model, dataloader, optimizer, device):
     total_loss = 0
     total_correct = 0
     total_samples = 0
+    large_grad_count = 0
+    nan_count = 0
 
     for boards, moves in dataloader:
         boards = boards.to(device)
@@ -26,8 +28,20 @@ def train_epoch(model, dataloader, optimizer, device):
         logits = model(boards)
         loss = F.cross_entropy(logits, moves)
 
+        # Check for NaN/inf loss
+        if not torch.isfinite(loss):
+            print(f"    WARNING: Non-finite loss detected, skipping batch")
+            nan_count += 1
+            continue
+
         optimizer.zero_grad()
         loss.backward()
+
+        # Clip gradients and log when large
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        if grad_norm > 5.0:
+            large_grad_count += 1
+
         optimizer.step()
 
         total_loss += loss.item() * boards.size(0)
@@ -37,6 +51,13 @@ def train_epoch(model, dataloader, optimizer, device):
 
     avg_loss = total_loss / total_samples
     accuracy = total_correct / total_samples
+
+    # Log gradient issues if any occurred
+    if large_grad_count > 0:
+        print(f"    Clipped large gradients in {large_grad_count} batches")
+    if nan_count > 0:
+        print(f"    Skipped {nan_count} batches due to NaN/inf loss")
+
     return avg_loss, accuracy
 
 

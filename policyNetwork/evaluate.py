@@ -29,7 +29,7 @@ def play_eval_game(board, model, device, model_is_white=True, temperature=0.5):
         is_model_turn = (game_board.white_is_active == model_is_white)
 
         if is_model_turn:
-            move = policy_move(model, game_board, legal_moves, device, temperature)
+            move = policy_move(model, game_board, legal_moves, device, temperature, filter_pawns=False)
         else:
             move = pick_random_move(legal_moves, placement_bias=1.0)
 

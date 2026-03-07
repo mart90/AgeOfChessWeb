@@ -94,7 +94,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
             is_model_turn = (board.white_is_active == model_is_white)
             if is_model_turn:
-                move = policy_move(model, board, legal_moves, device, temperature)
+                move = policy_move(model, board, legal_moves, device, temperature, filter_pawns=False)
                 model_total_moves += 1
                 # Track piece placements
                 if move[0] == P:
@@ -103,7 +103,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
                     elif move[1] == "q":
                         model_queen_placements += 1
             elif benchmark is not None:
-                move = policy_move(benchmark, board, legal_moves, device, temperature)
+                move = policy_move(benchmark, board, legal_moves, device, temperature, filter_pawns=False)
             else:
                 move = pick_random_move(legal_moves, placement_bias=1.0)
 
@@ -279,7 +279,7 @@ def main():
         # Check if val_loss regressed by more than 20%
         val_loss_threshold = best_overall_val_loss * 1.2
         if val_loss > val_loss_threshold:
-            print(f"  WARNING: val_loss {val_loss:.4f} increased >15% from best {best_overall_val_loss:.4f}")
+            print(f"  WARNING: val_loss {val_loss:.4f} increased >20% from best {best_overall_val_loss:.4f}")
             print(f"  Rejecting iteration, keeping previous model")
         else:
             # Update best_overall for next iteration

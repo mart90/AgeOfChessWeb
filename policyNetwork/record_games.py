@@ -64,7 +64,7 @@ def play_and_record(board, white_model=None, black_model=None, device=None, whit
         current_temp = white_temp if game_board.white_is_active else black_temp
 
         if current_model is not None:
-            move = policy_move(current_model, game_board, legal_moves, device, current_temp)
+            move = policy_move(current_model, game_board, legal_moves, device, current_temp, filter_pawns=False)
         else:
             move = pick_random_move(legal_moves, placement_bias=1.0)
 
