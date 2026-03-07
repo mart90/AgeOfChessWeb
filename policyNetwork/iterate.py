@@ -206,6 +206,7 @@ def main():
 
     results = []
     best_overall_score = 0
+    best_overall_val_loss = float('inf')
     best_model_path = None
 
     if args.resume:
@@ -258,6 +259,7 @@ def main():
             model.load_state_dict(torch.load(best_model_path, map_location=device))
             print(f"  Fine-tuning from {best_model_path}")
 
+        iter_checkpoint = os.path.join(args.save_dir, f"iter{iteration}_model.pt")
         model, val_loss = run_training(
             board_tensors, move_indices, device,
             game_ids=game_ids,
@@ -266,7 +268,7 @@ def main():
             batch_size=args.batch_size,
             lr=args.lr,
             patience=args.patience,
-            save_path=None,  # Don't save individual iteration checkpoints
+            save_path=iter_checkpoint,
         )
 
         # Evaluate
@@ -274,13 +276,24 @@ def main():
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
         score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.0)
 
-        # Save as best_overall for next iteration
-        overall_best = os.path.join(args.save_dir, "best_overall.pt")
-        torch.save(model.state_dict(), overall_best)
-        best_model_path = overall_best
-        if score > best_overall_score:
-            best_overall_score = score
-            print(f"  New best score: {100*score:.0f}%")
+        # Check if val_loss regressed by more than 10%
+        val_loss_threshold = best_overall_val_loss * 1.1
+        if val_loss > val_loss_threshold:
+            print(f"  WARNING: val_loss {val_loss:.4f} increased >10% from best {best_overall_val_loss:.4f}")
+            print(f"  Rejecting iteration, keeping previous model")
+        else:
+            # Update best_overall for next iteration
+            overall_best = os.path.join(args.save_dir, "best_overall.pt")
+            torch.save(model.state_dict(), overall_best)
+            best_model_path = overall_best
+
+            if val_loss < best_overall_val_loss:
+                best_overall_val_loss = val_loss
+                print(f"  New best val_loss: {val_loss:.4f}")
+
+            if score > best_overall_score:
+                best_overall_score = score
+                print(f"  New best score: {100*score:.0f}%")
 
         results.append({
             "iteration": iteration,
