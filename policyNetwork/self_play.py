@@ -74,13 +74,13 @@ def _heuristic_score(board, move):
             score += 30  # Encourage queen exploration (counteract gold-hoarding bias)
         # Other pieces: neutral (model already places these appropriately)
 
-        # Placing on a mine is valuable
-        dest_sq = board.squares[move[2]]
-        if dest_sq.terrain_type == "m":
-            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-                            (dest_sq.owned_by == 1 and not board.white_is_active)
-            if not already_owned:
-                score += 15
+        # # Placing on a mine is valuable
+        # dest_sq = board.squares[move[2]]
+        # if dest_sq.terrain_type == "m":
+        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
+        #     if not already_owned:
+        #         score += 15
 
     return score
 
