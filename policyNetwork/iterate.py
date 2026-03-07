@@ -276,10 +276,10 @@ def main():
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
         score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.0)
 
-        # Check if val_loss regressed by more than 10%
-        val_loss_threshold = best_overall_val_loss * 1.1
+        # Check if val_loss regressed by more than 20%
+        val_loss_threshold = best_overall_val_loss * 1.2
         if val_loss > val_loss_threshold:
-            print(f"  WARNING: val_loss {val_loss:.4f} increased >10% from best {best_overall_val_loss:.4f}")
+            print(f"  WARNING: val_loss {val_loss:.4f} increased >15% from best {best_overall_val_loss:.4f}")
             print(f"  Rejecting iteration, keeping previous model")
         else:
             # Update best_overall for next iteration

@@ -52,19 +52,20 @@ def _heuristic_score(board, move):
     score = 0.0
 
     if move[0] == M:
-        dest_sq = board.squares[move[2]]
-        # Capturing an enemy piece
-        if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
-            score += PIECE_VALUES.get(dest_sq.piece_type, 0)
-        # Taking a treasure
-        if dest_sq.has_treasure:
-            score += 20
-        # Taking/stealing a mine
-        if dest_sq.terrain_type == "m":
-            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-                            (dest_sq.owned_by == 1 and not board.white_is_active)
-            if not already_owned:
-                score += 15  # mine income is very valuable
+        pass
+        # dest_sq = board.squares[move[2]]
+        # # Capturing an enemy piece
+        # if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
+        #     score += PIECE_VALUES.get(dest_sq.piece_type, 0)
+        # # Taking a treasure
+        # if dest_sq.has_treasure:
+        #     score += 20
+        # # Taking/stealing a mine
+        # if dest_sq.terrain_type == "m":
+        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
+        #     if not already_owned:
+        #         score += 15  # mine income is very valuable
     else:
         # Placement — encourage queens, discourage pawns
         piece = move[1]
