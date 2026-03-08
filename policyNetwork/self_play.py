@@ -1,6 +1,5 @@
 import os
 import random
-import time
 import multiprocessing as mp
 import numpy as np
 import torch
@@ -345,26 +344,8 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers, initializer=_worker_init,
                   initargs=(model_path, temperature, noise_weight)) as pool:
-        # Simple heartbeat timer on one line
-        start_time = time.time()
-        last_log_time = start_time
-        print("  0", end='', flush=True)
-
-        results = []
-        for result in pool.imap_unordered(_worker_play_boards,
-                                          [(chunk, games_per_board, augment) for chunk in chunks]):
-            results.append(result)
-
-            current_time = time.time()
-            if current_time - last_log_time >= 60:  # 1 minute
-                elapsed_min = int((current_time - start_time) / 60)
-                if elapsed_min % 5 == 0:
-                    print(f" {elapsed_min}", end='', flush=True)
-                else:
-                    print(" -", end='', flush=True)
-                last_log_time = current_time
-
-        print()  # Newline when done
+        results = pool.map(_worker_play_boards,
+                           [(chunk, games_per_board, augment) for chunk in chunks])
 
     # Merge results
     all_boards = []
