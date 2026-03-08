@@ -338,9 +338,9 @@ def _timer_thread(stop_event):
 
         elapsed_min = int((time.time() - start_time) / 60)
         if elapsed_min % 5 == 0:
-            print(f" {elapsed_min}", end='', flush=True)
+            print(f"{elapsed_min}", end='', flush=True)
         else:
-            print(" -", end='', flush=True)
+            print("-", end='', flush=True)
 
     print()  # Newline when done
 
@@ -400,14 +400,14 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
             game_id_offset += max(gids_chunk) + 1
 
     if len(all_boards) == 0:
-        print(f"Warning: no training data generated ({total_games} games, {total_draws} draws)")
+        print(f"\nWarning: no training data generated ({total_games} games, {total_draws} draws)")
         return None, None, None
 
     board_tensors = np.stack(all_boards)
     move_indices = np.array(all_moves, dtype=np.int64)
     game_ids = np.array(all_game_ids, dtype=np.int32)
 
-    print(f"Generated {len(all_boards)} samples from {total_wins} decisive games "
+    print(f"\nGenerated {len(all_boards)} samples from {total_wins} decisive games "
           f"({total_draws} draws discarded, {total_games} total)")
 
     return board_tensors, move_indices, game_ids
