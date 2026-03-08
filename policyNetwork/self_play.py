@@ -52,36 +52,36 @@ def _heuristic_score(board, move):
     score = 0.0
 
     if move[0] == M:
-        pass
-        # dest_sq = board.squares[move[2]]
-        # # Capturing an enemy piece
-        # if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
-        #     score += PIECE_VALUES.get(dest_sq.piece_type, 0)
-        # # Taking a treasure
-        # if dest_sq.has_treasure:
-        #     score += 15
-        # # Taking/stealing a mine
-        # if dest_sq.terrain_type == "m":
-        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
-        #     if not already_owned:
-        #         score += 10 # mine income is very valuable
+        dest_sq = board.squares[move[2]]
+        # Capturing an enemy piece
+        if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
+            score += PIECE_VALUES.get(dest_sq.piece_type, 0)
+        # Taking a treasure
+        if dest_sq.has_treasure:
+            score += 15
+        # Taking/stealing a mine
+        if dest_sq.terrain_type == "m":
+            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+                            (dest_sq.owned_by == 1 and not board.white_is_active)
+            if not already_owned:
+                score += 10 # mine income is very valuable
     else:
-        # Placement — encourage queens, discourage pawns
+        # Placement
         piece = move[1]
-        # if piece == "p":
-        #     score -15  # Penalty for pawns
-        if piece == "q":
-            score += 20  # Encourage queen exploration (counteract gold-hoarding bias)
-        # Other pieces: neutral (model already places these appropriately)
+        if piece == "p":
+            score -= 25  # Penalty for pawns
+        # if piece == "q":
+        #     score += 20  # Encourage queen exploration (counteract gold-hoarding bias)
+        # Other pieces:
+        score += 10
 
         # Placing on a mine is valuable
-        # dest_sq = board.squares[move[2]]
-        # if dest_sq.terrain_type == "m":
-        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
-        #     if not already_owned:
-        #         score += 10
+        dest_sq = board.squares[move[2]]
+        if dest_sq.terrain_type == "m":
+            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+                            (dest_sq.owned_by == 1 and not board.white_is_active)
+            if not already_owned:
+                score += 10
 
     return score
 
