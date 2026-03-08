@@ -345,26 +345,26 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers, initializer=_worker_init,
                   initargs=(model_path, temperature, noise_weight)) as pool:
-        # Use imap_unordered for progress tracking
+        # Simple heartbeat timer on one line
         start_time = time.time()
         last_log_time = start_time
-        completed = 0
+        print("  0", end='', flush=True)
 
         results = []
         for result in pool.imap_unordered(_worker_play_boards,
                                           [(chunk, games_per_board, augment) for chunk in chunks]):
             results.append(result)
-            completed += 1
 
             current_time = time.time()
             if current_time - last_log_time >= 60:  # 1 minute
-                elapsed = current_time - start_time
-                print(f"\r  Self-play progress: {completed}/{len(chunks)} chunks, {elapsed/60:.1f}min elapsed", end='', flush=True)
+                elapsed_min = int((current_time - start_time) / 60)
+                if elapsed_min % 5 == 0:
+                    print(f" {elapsed_min}", end='', flush=True)
+                else:
+                    print(" -", end='', flush=True)
                 last_log_time = current_time
 
-        # Clear progress line
-        if completed > 0:
-            print("\r" + " " * 80 + "\r", end='', flush=True)
+        print()  # Newline when done
 
     # Merge results
     all_boards = []
