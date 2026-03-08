@@ -73,12 +73,12 @@ def _heuristic_score(board, move):
         piece = move[1]
         if piece == "p":
             score -= 10
-        if piece == "n":
-            score -= 5
+        # if piece == "n":
+        #     score -= 5
         # if piece == "b":
         #     score += 5
-        # if piece == "r":
-        #     score += 10
+        if piece == "r":
+            score += 5
         if piece == "q":
             score += 5
 
