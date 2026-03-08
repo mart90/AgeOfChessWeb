@@ -69,18 +69,18 @@ def _heuristic_score(board, move):
         #     if not already_owned:
         #         score += 10
     else: # Placement
-        score += 10
+        # score += 10
         piece = move[1]
-        if piece == "p":
-            score -= 10
-        if piece == "n":
-            score -= 10
-        if piece == "b":
-            score += 5
+        # if piece == "p":
+        #     score -= 10
+        # if piece == "n":
+        #     score -= 10
+        # if piece == "b":
+        #     score += 5
         if piece == "r":
-            score += 10
+            score += 3
         if piece == "q":
-            score += 20
+            score += 15
 
         # # Placing on a mine is valuable
         # dest_sq = board.squares[move[2]]
