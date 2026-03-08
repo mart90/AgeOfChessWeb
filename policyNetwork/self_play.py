@@ -78,9 +78,9 @@ def _heuristic_score(board, move):
         # if piece == "b":
         #     score += 5
         if piece == "r":
-            score += 3
+            score += 5
         if piece == "q":
-            score += 12
+            score += 15
 
         # # Placing on a mine is valuable
         # dest_sq = board.squares[move[2]]
