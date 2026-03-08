@@ -55,19 +55,19 @@ def _heuristic_score(board, move):
 
     if move[0] == M:
         pass
-        # dest_sq = board.squares[move[2]]
-        # # Capturing an enemy piece
-        # if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
-        #     score += PIECE_VALUES.get(dest_sq.piece_type, 0)
-        # # Taking a treasure
-        # if dest_sq.has_treasure:
-        #     score += 15
-        # # Taking/stealing a mine
-        # if dest_sq.terrain_type == "m":
-        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
-        #     if not already_owned:
-        #         score += 10
+        dest_sq = board.squares[move[2]]
+        # Capturing an enemy piece
+        if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
+            score += PIECE_VALUES.get(dest_sq.piece_type, 0)
+        # Taking a treasure
+        if dest_sq.has_treasure:
+            score += 10
+        # Taking/stealing a mine
+        if dest_sq.terrain_type == "m":
+            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+                            (dest_sq.owned_by == 1 and not board.white_is_active)
+            if not already_owned:
+                score += 5
     else: # Placement
         # score += 10
         piece = move[1]
@@ -82,13 +82,13 @@ def _heuristic_score(board, move):
         if piece == "q":
             score += 10
 
-        # # Placing on a mine is valuable
-        # dest_sq = board.squares[move[2]]
-        # if dest_sq.terrain_type == "m":
-        #     already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
-        #                     (dest_sq.owned_by == 1 and not board.white_is_active)
-        #     if not already_owned:
-        #         score += 10
+        # Placing on a mine is valuable
+        dest_sq = board.squares[move[2]]
+        if dest_sq.terrain_type == "m":
+            already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
+                            (dest_sq.owned_by == 1 and not board.white_is_active)
+            if not already_owned:
+                score += 5
 
     return score
 
