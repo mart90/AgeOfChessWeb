@@ -1,5 +1,7 @@
 import os
 import random
+import time
+import threading
 import multiprocessing as mp
 import numpy as np
 import torch
@@ -324,6 +326,25 @@ def _worker_play_boards(args):
     return all_boards, all_moves, all_game_ids, wins, draws, total
 
 
+def _timer_thread(stop_event):
+    """Background thread that prints elapsed time every minute."""
+    start_time = time.time()
+    print("  0", end='', flush=True)
+
+    while not stop_event.is_set():
+        time.sleep(60)  # Wait 1 minute
+        if stop_event.is_set():
+            break
+
+        elapsed_min = int((time.time() - start_time) / 60)
+        if elapsed_min % 5 == 0:
+            print(f" {elapsed_min}", end='', flush=True)
+        else:
+            print(" -", end='', flush=True)
+
+    print()  # Newline when done
+
+
 def generate_training_data_parallel(boards, model_path, games_per_board=1,
                                      temperature=1.0, augment=True, workers=None,
                                      noise_weight=0.0):
@@ -343,12 +364,21 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
 
+    # Start timer thread
+    stop_event = threading.Event()
+    timer = threading.Thread(target=_timer_thread, args=(stop_event,), daemon=True)
+    timer.start()
+
     # Use 'spawn' to avoid deadlock from CUDA state inherited via fork
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers, initializer=_worker_init,
                   initargs=(model_path, temperature, noise_weight)) as pool:
         results = pool.map(_worker_play_boards,
                            [(chunk, games_per_board, augment) for chunk in chunks])
+
+    # Stop timer thread
+    stop_event.set()
+    timer.join(timeout=1.0)
 
     # Merge results
     all_boards = []
