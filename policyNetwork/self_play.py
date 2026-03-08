@@ -66,10 +66,10 @@ def _heuristic_score(board, move):
             if not already_owned:
                 score += 10 # mine income is very valuable
     else: # Placement
-        score += 5
+        score += 10
         piece = move[1]
         if piece == "p":
-            score -= 5
+            score -= 10
         if piece == "b":
             score += 5
         if piece == "r":
