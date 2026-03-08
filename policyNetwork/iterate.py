@@ -71,6 +71,9 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     mate_endings = 0
     move_counts = []
     model_pawn_placements = 0
+    model_knight_placements = 0
+    model_bishop_placements = 0
+    model_rook_placements = 0
     model_queen_placements = 0
     model_total_placements = 0
     model_total_moves = 0
@@ -100,9 +103,16 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
                 # Track piece placements
                 if move[0] == P:
                     model_total_placements += 1
-                    if move[1] == "p":
+                    piece_type = move[1]
+                    if piece_type == "p":
                         model_pawn_placements += 1
-                    elif move[1] == "q":
+                    elif piece_type == "n":
+                        model_knight_placements += 1
+                    elif piece_type == "b":
+                        model_bishop_placements += 1
+                    elif piece_type == "r":
+                        model_rook_placements += 1
+                    elif piece_type == "q":
                         model_queen_placements += 1
             elif benchmark is not None:
                 move = policy_move(benchmark, board, legal_moves, device, temperature, filter_pawns=False)
@@ -151,13 +161,17 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     score = (model_wins + draws * 0.5) / total if total > 0 else 0
     avg_moves = sum(move_counts) / len(move_counts) if move_counts else 0
     pawn_rate = 100 * model_pawn_placements / model_total_moves if model_total_moves > 0 else 0
+    knight_rate = 100 * model_knight_placements / model_total_moves if model_total_moves > 0 else 0
+    bishop_rate = 100 * model_bishop_placements / model_total_moves if model_total_moves > 0 else 0
+    rook_rate = 100 * model_rook_placements / model_total_moves if model_total_moves > 0 else 0
     queen_rate = 100 * model_queen_placements / model_total_moves if model_total_moves > 0 else 0
     placement_rate = 100 * model_total_placements / model_total_moves if model_total_moves > 0 else 0
 
     print(f"  Eval vs {bench_label}:")
     print(f"    Result: {model_wins}W / {bench_wins}L / {draws}D ({100*score:.0f}% score)")
     print(f"    Games: {num_games} total, {avg_moves:.1f} avg moves, {mate_endings} mates")
-    print(f"    Model: {placement_rate:.1f}% placements ({pawn_rate:.2f}% pawns, {queen_rate:.2f}% queens)")
+    print(f"    Placements: {placement_rate:.1f}% total")
+    print(f"    Pieces: {pawn_rate:.2f}% p, {knight_rate:.2f}% n, {bishop_rate:.2f}% b, {rook_rate:.2f}% r, {queen_rate:.2f}% q")
 
     # Save first game for inspection
     if recorded_game is not None:
