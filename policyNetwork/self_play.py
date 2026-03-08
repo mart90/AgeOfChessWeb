@@ -69,11 +69,11 @@ def _heuristic_score(board, move):
         # Placement
         piece = move[1]
         if piece == "p":
-            score -= 25  # Penalty for pawns
+            score -= 20  # Penalty for pawns
         # if piece == "q":
         #     score += 20  # Encourage queen exploration (counteract gold-hoarding bias)
         # Other pieces:
-        score += 10
+        score += 5
 
         # Placing on a mine is valuable
         dest_sq = board.squares[move[2]]
