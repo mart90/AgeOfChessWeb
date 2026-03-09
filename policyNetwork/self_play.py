@@ -103,12 +103,12 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
         filter_pawns: If True, filter out pawn placements (for self-play training).
     """
     # Filter out pawn placements during self-play to prevent model from learning pawn spam
-    # if filter_pawns:
-    #     legal_moves = [m for m in legal_moves if not (m[0] == P and m[1] == "p")]
+    if heuristics["pawns_disabled"]:
+        legal_moves = [m for m in legal_moves if not (m[0] == P and m[1] == "p")]
 
-    #     if len(legal_moves) == 0:
-    #         # Safety: if somehow all moves were pawns, allow them (shouldn't happen)
-    #         legal_moves = board.get_legal_moves()
+        if len(legal_moves) == 0:
+            # Safety: if somehow all moves were pawns, allow them (shouldn't happen)
+            legal_moves = board.get_legal_moves()
 
     encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
