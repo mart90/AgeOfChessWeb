@@ -332,18 +332,25 @@ def main():
             "iteration": iteration,
             "val_loss": val_loss,
             "score": score,
+            "time_min": iteration_time / 60,
         })
 
     # Summary
     print(f"\n{'='*60}")
     print("Summary")
     print(f"{'='*60}")
-    print(f"{'Iter':>4}  {'Val Loss':>9}  {'Score':>9}")
-    print(f"{'-'*4}  {'-'*9}  {'-'*9}")
+    print(f"{'Iter':>4}  {'Val Loss':>9}  {'Score':>9}  {'Time':>9}")
+    print(f"{'-'*4}  {'-'*9}  {'-'*9}  {'-'*9}")
     for r in results:
         vl = f"{r['val_loss']:.4f}" if r['val_loss'] is not None else "   N/A"
         sc = f"{100*r['score']:.0f}%"
-        print(f"{r['iteration']:4d}  {vl:>9}  {sc:>9}")
+        tm = f"{r['time_min']:.1f}m"
+        print(f"{r['iteration']:4d}  {vl:>9}  {sc:>9}  {tm:>9}")
+
+    # Print total time
+    total_time = sum(r['time_min'] for r in results)
+    print(f"{'-'*4}  {'-'*9}  {'-'*9}  {'-'*9}")
+    print(f"{'':>4}  {'':>9}  {'Total:':>9}  {total_time:.1f}m")
 
     # Export best model to ONNX
     if best_model_path:
