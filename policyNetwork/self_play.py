@@ -70,7 +70,7 @@ def _heuristic_score(board, move):
             if not already_owned:
                 score += heuristics["mine_capture"]
     else: # Placement
-        # score += 5
+        score += heuristics["placement"]
         piece = move[1]
         if piece == "p":
             score += heuristics["pawn"]
