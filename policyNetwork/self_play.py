@@ -73,9 +73,9 @@ def _heuristic_score(board, move):
         # score += 5
         piece = move[1]
         if piece == "p":
-            score -= heuristics["pawn"]
+            score += heuristics["pawn"]
         if piece == "n":
-            score -= heuristics["knight"]
+            score += heuristics["knight"]
         if piece == "b":
             score += heuristics["bishop"]
         if piece == "r":
