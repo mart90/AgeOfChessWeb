@@ -228,9 +228,16 @@ def main():
 
     if args.resume:
         candidate = os.path.join(args.save_dir, "best_overall.pt")
+        val_loss_file = os.path.join(args.save_dir, "best_overall_val_loss.txt")
         if os.path.exists(candidate):
             best_model_path = candidate
-            print(f"Resuming from {candidate}")
+            # Load the val_loss from the saved model
+            if os.path.exists(val_loss_file):
+                with open(val_loss_file, 'r') as f:
+                    best_overall_val_loss = float(f.read().strip())
+                print(f"Resuming from {candidate} (val_loss={best_overall_val_loss:.4f})")
+            else:
+                print(f"Resuming from {candidate} (val_loss unknown, using inf)")
         else:
             print("No best_overall.pt found, starting from scratch")
 
@@ -301,12 +308,17 @@ def main():
         else:
             # Update best_overall for next iteration
             overall_best = os.path.join(args.save_dir, "best_overall.pt")
+            val_loss_file = os.path.join(args.save_dir, "best_overall_val_loss.txt")
             torch.save(model.state_dict(), overall_best)
             best_model_path = overall_best
 
             if val_loss < best_overall_val_loss:
                 best_overall_val_loss = val_loss
                 print(f"  New best val_loss: {val_loss:.4f}")
+
+            # Save val_loss to file for resuming later
+            with open(val_loss_file, 'w') as f:
+                f.write(f"{best_overall_val_loss:.6f}")
 
             if score > best_overall_score:
                 best_overall_score = score

@@ -61,7 +61,7 @@ def _heuristic_score(board, move):
             score += 5
         # Taking a treasure
         if dest_sq.has_treasure:
-            score += 5
+            score += 4
         # Taking/stealing a mine
         if dest_sq.terrain_type == "m":
             already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
@@ -69,16 +69,16 @@ def _heuristic_score(board, move):
             if not already_owned:
                 score += 5
     else: # Placement
-        # score += 10
+        # score += 5
         piece = move[1]
-        # if piece == "p":
-        #     score -= 10
-        # if piece == "n":
-        #     score -= 10
-        # if piece == "b":
-        #     score += 5
+        if piece == "p":
+            score -= 5
+        if piece == "n":
+            score -= 1
+        if piece == "b":
+            score += 3
         if piece == "r":
-            score += 2
+            score += 4
         if piece == "q":
             score += 5
 
