@@ -298,7 +298,7 @@ def main():
         # Evaluate
         bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
-        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.0)
+        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.1)
 
         # Check if val_loss regressed by more than 20%
         val_loss_threshold = best_overall_val_loss * 1.2
