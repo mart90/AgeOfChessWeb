@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from board import M, P
 from encode import encode_board, move_to_index, get_legal_move_mask, augment_180, NUM_ACTIONS
+from config import heuristics
 
 MAX_MOVES = 300
 GOLD_VICTORY_THRESHOLD = 175  # 10x10 board
@@ -58,29 +59,29 @@ def _heuristic_score(board, move):
         dest_sq = board.squares[move[2]]
         # Capturing an enemy piece
         if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
-            score += 5
+            score += heuristics["enemy_capture"]
         # Taking a treasure
         if dest_sq.has_treasure:
-            score += 4
+            score += heuristics["treasure_capture"]
         # Taking/stealing a mine
         if dest_sq.terrain_type == "m":
             already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
                             (dest_sq.owned_by == 1 and not board.white_is_active)
             if not already_owned:
-                score += 5
+                score += heuristics["mine_capture"]
     else: # Placement
         # score += 5
         piece = move[1]
         if piece == "p":
-            score -= 5
+            score -= heuristics["pawn"]
         if piece == "n":
-            score -= 1
+            score -= heuristics["knight"]
         if piece == "b":
-            score += 3
+            score += heuristics["bishop"]
         if piece == "r":
-            score += 4
+            score += heuristics["rook"]
         if piece == "q":
-            score += 5
+            score += heuristics["queen"]
 
         # Placing on a mine is valuable
         dest_sq = board.squares[move[2]]
@@ -88,7 +89,7 @@ def _heuristic_score(board, move):
             already_owned = (dest_sq.owned_by == 0 and board.white_is_active) or \
                             (dest_sq.owned_by == 1 and not board.white_is_active)
             if not already_owned:
-                score += 5
+                score += heuristics["mine_capture"]
 
     return score
 
