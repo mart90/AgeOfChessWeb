@@ -242,6 +242,7 @@ def main():
             print("No best_overall.pt found, starting from scratch")
 
     for iteration in range(1, args.iterations + 1):
+        iteration_start = time.time()
         print(f"\n{'='*60}")
         print(f"Iteration {iteration}/{args.iterations}")
         print(f"{'='*60}")
@@ -323,6 +324,9 @@ def main():
             if score > best_overall_score:
                 best_overall_score = score
                 print(f"  New best score: {100*score:.0f}%")
+
+        iteration_time = time.time() - iteration_start
+        print(f"  Iteration {iteration} completed in {iteration_time/60:.1f} minutes")
 
         results.append({
             "iteration": iteration,
