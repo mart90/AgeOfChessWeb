@@ -9,9 +9,13 @@ import torch.nn.functional as F
 from board import M, P
 from encode import encode_board, move_to_index, get_legal_move_mask, augment_180, NUM_ACTIONS
 from config import heuristics
+from constants import PIECE_COSTS
 
 MAX_MOVES = 300
 GOLD_VICTORY_THRESHOLD = 175  # 10x10 board
+
+# Precompute piece value lookup dictionary
+PIECE_VALUES = {p["type"]: p["cost"] for p in PIECE_COSTS}
 
 # Worker globals (set by _worker_init)
 _worker_model = None
@@ -44,8 +48,6 @@ def pick_random_move(legal_moves, placement_bias=2.0):
     weights = [placement_bias if m[0] == P else 1.0 for m in legal_moves]
     return random.choices(legal_moves, weights=weights, k=1)[0]
 
-
-PIECE_VALUES = {"q": 90, "r": 52, "b": 42, "n": 40, "p": 25, "k": 0}
 MINE_INCOME = 3
 
 
@@ -60,6 +62,7 @@ def _heuristic_score(board, move):
         # Capturing an enemy piece
         if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
             score += heuristics["enemy_capture"]
+            score += heuristics["enemy_capture_piece_value"] * PIECE_VALUES.get(dest_sq.piece_type, 0)
         # Taking a treasure
         if dest_sq.has_treasure:
             score += heuristics["treasure_capture"]
