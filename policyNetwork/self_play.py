@@ -401,11 +401,10 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     if workers is None:
         workers = max(1, os.cpu_count() - 2)
 
-    # Split boards into chunks
-    chunk_size = max(1, len(boards) // workers)
-    chunks = []
-    for i in range(0, len(boards), chunk_size):
-        chunks.append(boards[i:i + chunk_size])
+    # Split boards into exactly `workers` chunks (avoids one worker getting 2 chunks)
+    n = len(boards)
+    chunks = [boards[i * n // workers:(i + 1) * n // workers] for i in range(workers)]
+    chunks = [c for c in chunks if c]  # drop empty chunks if boards < workers
 
     print(f"  Using {workers} workers, {len(chunks)} chunks")
 
