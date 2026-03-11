@@ -12,7 +12,7 @@
   <div class="content">
     <h3>Economy</h3>
     <ul>
-      <li>Black starts with 5 gold by default.</li>
+      <li>Black starts with 6 gold by default.</li>
       <li>Players get 1 gold at the start of each turn.</li>
       <li>Capturing a treasure earns 20 gold.</li>
       <li>Mines owned by a player earn {MINE_INCOME} gold each at the start of their turn.</li>
@@ -41,8 +41,8 @@
     <h3>Additional win conditions</h3>
     <p>Two additional win conditions compared to regular Chess:</p>
     <ul>
-      <li>If a player reaches a high amount of gold, they win the game. This is 125 gold for 6x6 boards, and increases by 25 
-          per board size up to 250 for 16x16</li>
+      <li>If a player reaches a high amount of gold, they win the game. This is 150 gold for 6x6 boards, and increases by 25 
+          per board size up to 275 for 16x16. You cannot win a gold victory when your king is in check.</li>
       <li>Stalemate wins the game instead of drawing it.</li>
     </ul>
 

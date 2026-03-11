@@ -224,8 +224,8 @@ public abstract class Game
 
     private PieceColor? CheckForGoldVictory()
     {
-        // Scale gold victory threshold with board size: 6x6→125, 8x8→150, 10x10→175, etc.
-        int goldThreshold = 125 + (Map.Width - 6) * 25 / 2;
+        // Scale gold victory threshold with board size: 6x6→150, 8x8→175, 10x10→200, etc.
+        int goldThreshold = 150 + (Map.Width - 6) * 25 / 2;
         var colorsWithWinningGold = Colors.Where(e => e.Gold >= goldThreshold).ToList();
         if (!colorsWithWinningGold.Any()) return null;
 
@@ -240,8 +240,17 @@ public abstract class Game
             winningColor = colorsWithWinningGold.Single(e => e.Gold == colorsWithWinningGold.Max(c => c.Gold));
         }
 
+        // Cannot win by gold if your king is currently in check
         if (winningColor != null)
+        {
+            var pathFinder = new PathFinder(Map);
+            Square winnerKingSquare = Map.Squares.Single(e => e.Object is King king && king.IsWhite == winningColor.IsWhite);
+            var attacksOnWinner = pathFinder.FindAttacksForColor(!winningColor.IsWhite);
+            if (attacksOnWinner.Contains(winnerKingSquare))
+                return null;
+
             Result = winningColor.IsWhite ? "w+g" : "b+g";
+        }
 
         return winningColor;
     }

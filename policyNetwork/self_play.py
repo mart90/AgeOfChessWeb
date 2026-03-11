@@ -12,7 +12,7 @@ from config import heuristics
 from constants import PIECE_COSTS
 
 MAX_MOVES = 300
-GOLD_VICTORY_THRESHOLD = 175  # 10x10 board
+GOLD_VICTORY_THRESHOLD = 200  # 10x10 board
 
 # Precompute piece value lookup dictionary
 PIECE_VALUES = {p["type"]: p["cost"] for p in PIECE_COSTS}
