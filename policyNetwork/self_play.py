@@ -116,23 +116,19 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
             # Safety: if somehow all moves were pawns, allow them (shouldn't happen)
             legal_moves = board.get_legal_moves()
 
-    # 1-ply value lookahead: evaluate each move with the value head
+    # 1-ply value lookahead: evaluate all moves in a single batched forward pass
     if use_value_lookahead:
-        best_move = None
-        best_val = -float('inf')
+        encs = []
         for move in legal_moves:
             test_board = board.clone()
             test_board.do_move(move)
-            enc = encode_board(test_board)
-            t = torch.from_numpy(enc).unsqueeze(0).to(device)
-            with torch.no_grad():
-                _, v = model(t)
-            # Negate: after our move it's opponent's turn; their good = our bad
-            val = -v.item()
-            if val > best_val:
-                best_val = val
-                best_move = move
-        return best_move
+            encs.append(encode_board(test_board))
+        batch = torch.from_numpy(np.stack(encs)).to(device)
+        with torch.no_grad():
+            _, values = model(batch)
+        # Negate: after our move it's opponent's turn; their good = our bad
+        best_idx = (-values.squeeze(1)).argmax().item()
+        return legal_moves[best_idx]
 
     # Standard policy sampling
     encoded = encode_board(board)
