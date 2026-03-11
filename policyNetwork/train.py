@@ -209,6 +209,7 @@ def run_training(board_tensors, move_indices, device, outcome_labels=None,
     best_val_ploss = float("inf")
     best_val_vloss = float("inf")
     best_state = None
+    best_value_state = None
     ploss_patience_counter = 0
     vloss_patience_counter = 0
     train_value = True
@@ -232,10 +233,18 @@ def run_training(board_tensors, move_indices, device, outcome_labels=None,
             if val_vloss < best_val_vloss:
                 best_val_vloss = val_vloss
                 vloss_patience_counter = 0
+                best_value_state = {k: v.clone() for k, v in model.state_dict().items()
+                                    if 'value_' in k}
             else:
                 vloss_patience_counter += 1
                 if vloss_patience_counter >= patience:
-                    print(f"  Freezing value head (val_vloss={val_vloss:.4f} not improving)")
+                    # Restore best value head weights, then hard-freeze
+                    if best_value_state is not None:
+                        model.load_state_dict(best_value_state, strict=False)
+                    for name, param in model.named_parameters():
+                        if 'value_' in name:
+                            param.requires_grad = False
+                    print(f"  Freezing value head at best val_vloss={best_val_vloss:.4f}")
                     train_value = False
 
         # Policy head: save best and early stop
