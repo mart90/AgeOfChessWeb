@@ -27,8 +27,9 @@ _worker_gold_victory = False
 
 def check_victory(board, gold_victory=True):
     """
-    Check if the game is over.
+    Check gold/king victory conditions (does NOT call get_legal_moves).
     Returns +1 if white wins, -1 if black wins, None if game continues.
+    Mate detection (no legal moves) is handled in play_game.
     """
     # Gold victory (disabled during training)
     if gold_victory:
@@ -36,11 +37,6 @@ def check_victory(board, gold_victory=True):
             return 1
         if board.black_gold >= GOLD_VICTORY_THRESHOLD:
             return -1
-
-    # Mate: active player has 0 legal moves → they lose
-    legal_moves = board.get_legal_moves()
-    if len(legal_moves) == 0:
-        return -1 if board.white_is_active else 1
 
     return None
 

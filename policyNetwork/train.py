@@ -1,5 +1,6 @@
 import argparse
 import os
+import threading
 import time
 import numpy as np
 import torch
@@ -13,6 +14,22 @@ from self_play import generate_training_data, save_training_data, load_training_
 from generate_boards import fetch_boards
 
 
+def _timer_thread(stop_event):
+    """Background thread that prints elapsed time every minute."""
+    start_time = time.time()
+    print("    0", end='', flush=True)
+    while not stop_event.is_set():
+        time.sleep(60)
+        if stop_event.is_set():
+            break
+        elapsed_min = int((time.time() - start_time) / 60)
+        if elapsed_min % 5 == 0:
+            print(f"{elapsed_min}", end='', flush=True)
+        else:
+            print("-", end='', flush=True)
+    print()
+
+
 def train_epoch(model, dataloader, optimizer, device, train_value=True):
     model.train()
     total_policy_loss = 0
@@ -22,6 +39,10 @@ def train_epoch(model, dataloader, optimizer, device, train_value=True):
     total_samples = 0
     large_grad_count = 0
     nan_count = 0
+
+    stop_event = threading.Event()
+    timer = threading.Thread(target=_timer_thread, args=(stop_event,), daemon=True)
+    timer.start()
 
     for boards, moves, outcomes in dataloader:
         boards = boards.to(device)
@@ -72,6 +93,9 @@ def train_epoch(model, dataloader, optimizer, device, train_value=True):
         total_correct += (preds[decisive_mask] == moves[decisive_mask]).sum().item()
         total_decisive += nd
         total_samples += n
+
+    stop_event.set()
+    timer.join()
 
     if large_grad_count > 0:
         print(f"    Clipped large gradients in {large_grad_count} batches")
