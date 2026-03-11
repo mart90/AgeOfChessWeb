@@ -78,10 +78,10 @@ def index_to_move(index, is_white=True):
 
 
 def get_legal_move_mask(legal_moves):
-    """Return a float32 array of shape (NUM_ACTIONS,) with 1.0 for legal moves."""
-    mask = np.zeros(NUM_ACTIONS, dtype=np.float32)
+    """Return a float32 array of shape (NUM_ACTIONS,) with 0.0 for legal, -1e9 for illegal."""
+    mask = np.full(NUM_ACTIONS, -1e9, dtype=np.float32)
     for move in legal_moves:
-        mask[move_to_index(move)] = 1.0
+        mask[move_to_index(move)] = 0.0
     return mask
 
 
