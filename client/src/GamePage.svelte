@@ -34,7 +34,11 @@
   // Page title updates based on turn
   $effect(() => {
     if (!gameState) return;
-    document.title = isMyTurn ? 'Your move' : `${gameState.white.name} vs ${gameState.black.name}`;
+    if (gameState.gameEnded) {
+      document.title = 'Game over';
+    } else {
+      document.title = isMyTurn ? 'Your move' : `${gameState.white.name} vs ${gameState.black.name}`;
+    }
   });
   let isWhite        = $state(true);
   let statusMsg      = $state('Loading…');
