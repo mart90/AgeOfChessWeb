@@ -13,9 +13,8 @@ from self_play import generate_training_data, save_training_data, load_training_
 from generate_boards import fetch_boards
 
 
-def train_epoch(model, dataloader, optimizer, device):
+def train_epoch(model, dataloader, optimizer, device, train_value=True):
     model.train()
-    total_loss = 0
     total_policy_loss = 0
     total_value_loss = 0
     total_correct = 0
@@ -30,15 +29,22 @@ def train_epoch(model, dataloader, optimizer, device):
         outcomes = outcomes.to(device)
 
         policy_logits, value = model(boards)
-        value_loss = F.mse_loss(value.squeeze(1), outcomes)
 
         # Policy loss only on decisive positions (outcome != 0)
         decisive_mask = outcomes != 0
         if decisive_mask.any():
             policy_loss = F.cross_entropy(policy_logits[decisive_mask], moves[decisive_mask])
-            loss = policy_loss + value_loss
+            if train_value:
+                value_loss = F.mse_loss(value.squeeze(1), outcomes)
+                loss = policy_loss + value_loss
+            else:
+                value_loss = torch.tensor(0.0, device=device)
+                loss = policy_loss
         else:
+            if not train_value:
+                continue
             policy_loss = torch.tensor(0.0, device=device)
+            value_loss = F.mse_loss(value.squeeze(1), outcomes)
             loss = value_loss
 
         # Check for NaN/inf loss
@@ -60,7 +66,6 @@ def train_epoch(model, dataloader, optimizer, device):
 
         n = boards.size(0)
         nd = decisive_mask.sum().item()
-        total_loss += loss.item() * n
         total_policy_loss += policy_loss.item() * nd
         total_value_loss += value_loss.item() * n
         preds = policy_logits.argmax(dim=1)
@@ -74,8 +79,7 @@ def train_epoch(model, dataloader, optimizer, device):
         print(f"    Skipped {nan_count} batches due to NaN/inf loss")
 
     policy_acc = total_correct / total_decisive if total_decisive > 0 else 0.0
-    return (total_loss / total_samples,
-            policy_acc,
+    return (policy_acc,
             total_policy_loss / total_decisive if total_decisive > 0 else 0.0,
             total_value_loss / total_samples)
 
@@ -202,40 +206,56 @@ def run_training(board_tensors, move_indices, device, outcome_labels=None,
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    best_val_loss = float("inf")
+    best_val_ploss = float("inf")
+    best_val_vloss = float("inf")
     best_state = None
-    patience_counter = 0
+    ploss_patience_counter = 0
+    vloss_patience_counter = 0
+    train_value = True
 
     for epoch in range(1, epochs + 1):
         t0 = time.time()
-        _, _, train_ploss, train_vloss = train_epoch(model, train_dl, optimizer, device)
-        val_loss, val_acc, val_ploss, val_vloss, val_vacc = evaluate(model, val_dl, device)
+        _, train_ploss, train_vloss = train_epoch(model, train_dl, optimizer, device, train_value)
+        _, val_acc, val_ploss, val_vloss, val_vacc = evaluate(model, val_dl, device)
         elapsed = time.time() - t0
 
         vacc_str = f"{100*val_vacc:.0f}%" if val_vacc is not None else "N/A"
+        frozen_str = "  [value frozen]" if not train_value else ""
         print(f"Epoch {epoch:3d}/{epochs} | "
               f"policy={train_ploss:.4f}/{val_ploss:.4f}  "
               f"value={train_vloss:.4f}/{val_vloss:.4f}  "
               f"vacc={vacc_str}  "
-              f"pacc={100*val_acc:.1f}%  |  {elapsed:.1f}s")
+              f"pacc={100*val_acc:.1f}%  |  {elapsed:.1f}s{frozen_str}")
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # Value head: freeze when val_vloss stops improving
+        if train_value:
+            if val_vloss < best_val_vloss:
+                best_val_vloss = val_vloss
+                vloss_patience_counter = 0
+            else:
+                vloss_patience_counter += 1
+                if vloss_patience_counter >= patience:
+                    print(f"  Freezing value head (val_vloss={val_vloss:.4f} not improving)")
+                    train_value = False
+
+        # Policy head: save best and early stop
+        if val_ploss < best_val_ploss:
+            best_val_ploss = val_ploss
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
-            patience_counter = 0
+            ploss_patience_counter = 0
             if save_path:
                 torch.save(best_state, save_path)
-            print(f"  Saved best model (val_loss={val_loss:.4f})")
+            print(f"  Saved best model (val_ploss={val_ploss:.4f})")
         else:
-            patience_counter += 1
-            if patience_counter >= patience:
+            ploss_patience_counter += 1
+            if ploss_patience_counter >= patience:
                 print(f"  Early stopping after {epoch} epochs (patience={patience})")
                 break
 
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    return model, best_val_loss
+    return model, best_val_ploss
 
 
 def main():

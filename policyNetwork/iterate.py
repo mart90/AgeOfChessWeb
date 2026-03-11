@@ -240,9 +240,9 @@ def main():
             if os.path.exists(val_loss_file):
                 with open(val_loss_file, 'r') as f:
                     best_overall_val_loss = float(f.read().strip())
-                print(f"Resuming from {candidate} (val_loss={best_overall_val_loss:.4f})")
+                print(f"Resuming from {candidate} (val_ploss={best_overall_val_loss:.4f})")
             else:
-                print(f"Resuming from {candidate} (val_loss unknown, using inf)")
+                print(f"Resuming from {candidate} (val_ploss unknown, using inf)")
         else:
             print("No best_overall.pt found, starting from scratch")
 
@@ -311,10 +311,10 @@ def main():
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
         score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games)
 
-        # Check if val_loss regressed by more than 20%
+        # Check if val_ploss regressed by more than 20%
         val_loss_threshold = best_overall_val_loss * 1.2
         if val_loss > val_loss_threshold:
-            print(f"  WARNING: val_loss {val_loss:.4f} increased >20% from best {best_overall_val_loss:.4f}")
+            print(f"  WARNING: val_ploss {val_loss:.4f} increased >20% from best {best_overall_val_loss:.4f}")
             print(f"  Rejecting iteration, keeping previous model")
         else:
             overall_best = os.path.join(args.save_dir, "best_overall.pt")
@@ -324,7 +324,7 @@ def main():
 
             if val_loss < best_overall_val_loss:
                 best_overall_val_loss = val_loss
-                print(f"  New best val_loss: {val_loss:.4f}")
+                print(f"  New best val_ploss: {val_loss:.4f}")
 
             with open(val_loss_file, 'w') as f:
                 f.write(f"{best_overall_val_loss:.6f}")
