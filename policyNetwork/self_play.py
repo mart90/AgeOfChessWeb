@@ -128,21 +128,17 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
         return legal_moves[best_idx]
 
     # Standard policy sampling
-    _ta = time.time()
     if encoded is None:
         encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
-    _tb = time.time()
 
     with torch.no_grad():
         policy_logits, _ = model(board_tensor)
-    _tc = time.time()
 
     logits = policy_logits.squeeze(0)
     mask = get_legal_move_mask(legal_moves)
     mask_tensor = torch.from_numpy(mask).to(device)
     logits = logits + mask_tensor
-    _td = time.time()
 
     if temperature <= 0:
         idx = logits.argmax().item()
@@ -159,13 +155,9 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
             probs = (1 - noise_weight) * probs + noise_weight * heuristic_probs
 
         idx = torch.multinomial(probs, 1).item()
-    _te = time.time()
 
     for move in legal_moves:
         if move_to_index(move) == idx:
-            pm = policy_move
-            if not hasattr(pm, '_n'): pm._n = 0; pm._prep = pm._model = pm._mask = pm._sample = 0.0
-            pm._n += 1; pm._prep += _tb-_ta; pm._model += _tc-_tb; pm._mask += _td-_tc; pm._sample += _te-_td
             return move
 
     return pick_random_move(legal_moves, placement_bias=1.0)
@@ -208,59 +200,33 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0,
     """
     records = []
     move_count = 0
-    _t_legal = 0.0
-    _t_encode = 0.0
-    _t_policy = 0.0
-    _t_domove = 0.0
 
     while move_count < MAX_MOVES:
         result = check_victory(board, gold_victory=gold_victory)
         if result is not None:
             break
 
-        _t0 = time.time()
         legal_moves = board.get_legal_moves()
-        _t_legal += time.time() - _t0
-
         if len(legal_moves) == 0:
             result = -1 if board.white_is_active else 1
             break
 
-        _t0 = time.time()
         encoded = encode_board(board)
-        _t_encode += time.time() - _t0
-
         active_is_white = board.white_is_active
 
-        _t0 = time.time()
         if policy_fn is not None:
             move = policy_fn(board, legal_moves, temperature, encoded)
         else:
             move = pick_random_move(legal_moves, placement_bias)
-        _t_policy += time.time() - _t0
 
         move_idx = move_to_index(move)
         records.append((encoded, move_idx, active_is_white))
 
-        _t0 = time.time()
         board.do_move(move)
-        _t_domove += time.time() - _t0
-
         move_count += 1
 
     if result is None:
         result = 0  # move limit → draw
-
-    pm = policy_move
-    pm_str = ""
-    if hasattr(pm, '_n') and pm._n > 0:
-        pm_str = (f" | pm prep={pm._prep:.2f}s model={pm._model:.2f}s "
-                  f"mask={pm._mask:.2f}s sample={pm._sample:.2f}s (n={pm._n})")
-        pm._n = pm._prep = pm._model = pm._mask = pm._sample = 0.0
-
-    total = _t_legal + _t_encode + _t_policy + _t_domove
-    print(f"  [timing] moves={move_count} legal={_t_legal:.2f}s encode={_t_encode:.2f}s "
-          f"policy={_t_policy:.2f}s domove={_t_domove:.2f}s total={total:.2f}s{pm_str}", flush=True)
 
     return records, result
 
