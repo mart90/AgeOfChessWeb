@@ -25,6 +25,7 @@ class PolicyNetwork(nn.Module):
         super().__init__()
         self.board_size = board_size
 
+        # Shared trunk
         self.conv_in = nn.Sequential(
             nn.Conv2d(in_channels, num_filters, 3, padding=1),
             nn.BatchNorm2d(num_filters),
@@ -33,16 +34,31 @@ class PolicyNetwork(nn.Module):
         self.res_blocks = nn.Sequential(
             *[ResBlock(num_filters) for _ in range(num_res_blocks)]
         )
+
+        # Policy head
         self.conv_out = nn.Sequential(
             nn.Conv2d(num_filters, 32, 1),
             nn.ReLU(),
         )
-
-        flat_size = 32 * board_size * board_size
+        flat_p = 32 * board_size * board_size
         self.fc = nn.Sequential(
-            nn.Linear(flat_size, 256),
+            nn.Linear(flat_p, 256),
             nn.ReLU(),
             nn.Linear(256, num_actions),
+        )
+
+        # Value head
+        self.value_conv = nn.Sequential(
+            nn.Conv2d(num_filters, 1, 1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+        )
+        flat_v = board_size * board_size
+        self.value_fc = nn.Sequential(
+            nn.Linear(flat_v, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Tanh(),  # output in (-1, 1)
         )
 
     def forward(self, x):
@@ -50,13 +66,22 @@ class PolicyNetwork(nn.Module):
         Args:
             x: (batch, in_channels, board_size, board_size)
         Returns:
-            logits: (batch, num_actions) — raw logits, apply mask before softmax
+            policy_logits: (batch, num_actions) — raw logits, apply mask before softmax
+            value:         (batch, 1)           — win probability in (-1, 1)
         """
         x = self.conv_in(x)
         x = self.res_blocks(x)
-        x = self.conv_out(x)
-        x = x.view(x.size(0), -1)
-        return self.fc(x)
+        trunk = x
+
+        p = self.conv_out(trunk)
+        p = p.view(p.size(0), -1)
+        policy = self.fc(p)
+
+        v = self.value_conv(trunk)
+        v = v.view(v.size(0), -1)
+        value = self.value_fc(v)
+
+        return policy, value
 
     def param_count(self):
         return sum(p.numel() for p in self.parameters())
@@ -66,9 +91,8 @@ if __name__ == "__main__":
     model = PolicyNetwork()
     print(f"Parameters: {model.param_count():,}")
 
-    # Test forward pass
     dummy = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
-    out = model(dummy)
-    print(f"Input shape:  {dummy.shape}")
-    print(f"Output shape: {out.shape}")
-    print(f"Expected:     (1, {NUM_ACTIONS})")
+    policy, value = model(dummy)
+    print(f"Input shape:         {dummy.shape}")
+    print(f"Policy output shape: {policy.shape}  (expected: (1, {NUM_ACTIONS}))")
+    print(f"Value output shape:  {value.shape}   (expected: (1, 1))")

@@ -22,18 +22,20 @@ _worker_model = None
 _worker_device = None
 _worker_temperature = None
 _worker_noise_weight = 0.0
+_worker_gold_victory = False
 
 
-def check_victory(board):
+def check_victory(board, gold_victory=True):
     """
     Check if the game is over.
     Returns +1 if white wins, -1 if black wins, None if game continues.
     """
-    # Gold victory
-    if board.white_gold >= GOLD_VICTORY_THRESHOLD:
-        return 1
-    if board.black_gold >= GOLD_VICTORY_THRESHOLD:
-        return -1
+    # Gold victory (disabled during training)
+    if gold_victory:
+        if board.white_gold >= GOLD_VICTORY_THRESHOLD:
+            return 1
+        if board.black_gold >= GOLD_VICTORY_THRESHOLD:
+            return -1
 
     # Mate: active player has 0 legal moves → they lose
     legal_moves = board.get_legal_moves()
@@ -98,12 +100,13 @@ def _heuristic_score(board, move):
 
 
 def policy_move(model, board, legal_moves, device, temperature=1.0,
-                noise_weight=0.0, filter_pawns=True):
+                noise_weight=0.0, use_value_lookahead=False):
     """Pick a move using the policy network.
 
     Args:
         noise_weight: Fraction of heuristic noise to mix into policy (0-1).
-        filter_pawns: If True, filter out pawn placements (for self-play training).
+        use_value_lookahead: If True, evaluate each legal move with the value head
+                             and pick the best (1-ply lookahead). Overrides temperature sampling.
     """
     # Filter out pawn placements during self-play to prevent model from learning pawn spam
     if heuristics["pawns_disabled"]:
@@ -113,11 +116,31 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
             # Safety: if somehow all moves were pawns, allow them (shouldn't happen)
             legal_moves = board.get_legal_moves()
 
+    # 1-ply value lookahead: evaluate each move with the value head
+    if use_value_lookahead:
+        best_move = None
+        best_val = -float('inf')
+        for move in legal_moves:
+            test_board = board.clone()
+            test_board.do_move(move)
+            enc = encode_board(test_board)
+            t = torch.from_numpy(enc).unsqueeze(0).to(device)
+            with torch.no_grad():
+                _, v = model(t)
+            # Negate: after our move it's opponent's turn; their good = our bad
+            val = -v.item()
+            if val > best_val:
+                best_val = val
+                best_move = move
+        return best_move
+
+    # Standard policy sampling
     encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        logits = model(board_tensor).squeeze(0)
+        policy_logits, _ = model(board_tensor)
+    logits = policy_logits.squeeze(0)
 
     mask = get_legal_move_mask(board)
     mask_tensor = torch.from_numpy(mask).to(device)
@@ -146,15 +169,26 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
     return pick_random_move(legal_moves, placement_bias=1.0)
 
 
-def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0):
-    """Create a policy function compatible with play_game's policy_fn parameter."""
+def make_heuristic_fn():
+    """Heuristic-only policy: sample moves weighted by heuristic scores."""
     def fn(board, legal_moves, _temperature):
-        return policy_move(model, board, legal_moves, device, temperature,
-                           noise_weight=noise_weight)
+        scores = [max(0.01, _heuristic_score(board, m) + 0.1) for m in legal_moves]
+        return random.choices(legal_moves, weights=scores, k=1)[0]
     return fn
 
 
-def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0):
+def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0,
+                   use_value_lookahead=False):
+    """Create a policy function compatible with play_game's policy_fn parameter."""
+    def fn(board, legal_moves, _temperature):
+        return policy_move(model, board, legal_moves, device, temperature,
+                           noise_weight=noise_weight,
+                           use_value_lookahead=use_value_lookahead)
+    return fn
+
+
+def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0,
+              gold_victory=True):
     """
     Play a game to completion on the given board.
 
@@ -163,6 +197,7 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0):
         policy_fn: None for random play, or fn(board, legal_moves) -> move
         temperature: sampling temperature for policy_fn
         placement_bias: weight multiplier for placement moves in random play
+        gold_victory: if False, gold threshold victory is disabled (training mode)
 
     Returns:
         list of (encoded_board, move_index, active_was_white) tuples,
@@ -172,7 +207,7 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0):
     move_count = 0
 
     while move_count < MAX_MOVES:
-        result = check_victory(board)
+        result = check_victory(board, gold_victory=gold_victory)
         if result is not None:
             return records, result
 
@@ -200,28 +235,32 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0):
     return records, 0
 
 
+def _outcome_for_position(result, was_white):
+    """Compute outcome label from active player's perspective."""
+    if result == 1:
+        return 1.0 if was_white else -1.0
+    elif result == -1:
+        return -1.0 if was_white else 1.0
+    else:
+        return 0.0
+
+
 def generate_training_data(boards, games_per_board=10, policy_fn=None,
-                           temperature=1.0, placement_bias=2.0, augment=True):
+                           temperature=1.0, placement_bias=2.0, augment=True,
+                           gold_victory=True):
     """
     Generate training data from self-play on multiple boards.
 
-    Args:
-        boards: list of Board instances
-        games_per_board: number of games to play per board
-        policy_fn: None for random, or sampling function
-        temperature: for policy sampling
-        placement_bias: for random move selection
-        augment: whether to apply 180° rotation augmentation
-
     Returns:
-        (board_tensors, move_indices, masks) as numpy arrays
-        Only includes positions from the winning side.
+        (board_tensors, move_indices, outcome_labels, game_ids) as numpy arrays
+        Includes positions from BOTH sides with outcome labels (+1/-1/0).
     """
     all_boards = []
     all_moves = []
+    all_outcomes = []
     all_game_ids = []
     total_games = 0
-    wins = 0
+    decisive = 0
     draws = 0
     game_id = 0
 
@@ -233,47 +272,50 @@ def generate_training_data(boards, games_per_board=10, policy_fn=None,
                 policy_fn=policy_fn,
                 temperature=temperature,
                 placement_bias=placement_bias,
+                gold_victory=gold_victory,
             )
             total_games += 1
 
             if result == 0:
                 draws += 1
-                continue  # discard draws
 
-            wins += 1
+            if result != 0:
+                decisive += 1
 
             for encoded, move_idx, was_white in records:
-                # Keep only winning side's moves
-                if (result == 1 and was_white) or (result == -1 and not was_white):
-                    all_boards.append(encoded)
-                    all_moves.append(move_idx)
-                    all_game_ids.append(game_id)
+                outcome = _outcome_for_position(result, was_white)
+                all_boards.append(encoded)
+                all_moves.append(move_idx)
+                all_outcomes.append(outcome)
+                all_game_ids.append(game_id)
 
-                    if augment:
-                        aug_enc, aug_idx = augment_180(encoded, move_idx)
-                        all_boards.append(aug_enc)
-                        all_moves.append(aug_idx)
-                        all_game_ids.append(game_id)
+                if augment:
+                    aug_enc, aug_idx = augment_180(encoded, move_idx)
+                    all_boards.append(aug_enc)
+                    all_moves.append(aug_idx)
+                    all_outcomes.append(outcome)
+                    all_game_ids.append(game_id)
 
             game_id += 1
 
     if len(all_boards) == 0:
-        print(f"Warning: no training data generated ({total_games} games, {draws} draws)")
-        return None, None, None
+        print(f"Warning: no training data generated ({total_games} games)")
+        return None, None, None, None
 
     board_tensors = np.stack(all_boards)
     move_indices = np.array(all_moves, dtype=np.int64)
+    outcome_labels = np.array(all_outcomes, dtype=np.float32)
     game_ids = np.array(all_game_ids, dtype=np.int32)
 
-    print(f"Generated {len(all_boards)} samples from {wins} decisive games "
-          f"({draws} draws discarded, {total_games} total)")
+    print(f"Generated {len(all_boards)} samples from {total_games} games "
+          f"({decisive} decisive, {draws} draws)")
 
-    return board_tensors, move_indices, game_ids
+    return board_tensors, move_indices, outcome_labels, game_ids
 
 
-def _worker_init(model_path, temperature, noise_weight=0.0):
+def _worker_init(model_path, temperature, noise_weight=0.0, gold_victory=False):
     """Initialize a worker process with its own model."""
-    global _worker_model, _worker_device, _worker_temperature, _worker_noise_weight
+    global _worker_model, _worker_device, _worker_temperature, _worker_noise_weight, _worker_gold_victory
     # Limit intra-op threads per worker to avoid OpenMP deadlock on Linux
     torch.set_num_threads(1)
     from model import PolicyNetwork
@@ -283,20 +325,22 @@ def _worker_init(model_path, temperature, noise_weight=0.0):
     _worker_model.eval()
     _worker_temperature = temperature
     _worker_noise_weight = noise_weight
+    _worker_gold_victory = gold_victory
 
 
 def _worker_play_boards(args):
     """Worker function: play games on a chunk of boards."""
     board_chunk, games_per_board, augment = args
-    global _worker_model, _worker_device, _worker_temperature, _worker_noise_weight
+    global _worker_model, _worker_device, _worker_temperature, _worker_noise_weight, _worker_gold_victory
 
     policy_fn = make_policy_fn(_worker_model, _worker_device, _worker_temperature,
                                noise_weight=_worker_noise_weight)
 
     all_boards = []
     all_moves = []
+    all_outcomes = []
     all_game_ids = []
-    wins = 0
+    decisive = 0
     draws = 0
     game_id = 0
 
@@ -307,29 +351,32 @@ def _worker_play_boards(args):
                 game_board,
                 policy_fn=policy_fn,
                 temperature=_worker_temperature,
+                gold_victory=_worker_gold_victory,
             )
 
             if result == 0:
                 draws += 1
-                continue
+            else:
+                decisive += 1
 
-            wins += 1
             for encoded, move_idx, was_white in records:
-                if (result == 1 and was_white) or (result == -1 and not was_white):
-                    all_boards.append(encoded)
-                    all_moves.append(move_idx)
-                    all_game_ids.append(game_id)
+                outcome = _outcome_for_position(result, was_white)
+                all_boards.append(encoded)
+                all_moves.append(move_idx)
+                all_outcomes.append(outcome)
+                all_game_ids.append(game_id)
 
-                    if augment:
-                        aug_enc, aug_idx = augment_180(encoded, move_idx)
-                        all_boards.append(aug_enc)
-                        all_moves.append(aug_idx)
-                        all_game_ids.append(game_id)
+                if augment:
+                    aug_enc, aug_idx = augment_180(encoded, move_idx)
+                    all_boards.append(aug_enc)
+                    all_moves.append(aug_idx)
+                    all_outcomes.append(outcome)
+                    all_game_ids.append(game_id)
 
             game_id += 1
 
-    total = wins + draws
-    return all_boards, all_moves, all_game_ids, wins, draws, total
+    total = decisive + draws
+    return all_boards, all_moves, all_outcomes, all_game_ids, decisive, draws, total
 
 
 def _timer_thread(stop_event):
@@ -353,7 +400,7 @@ def _timer_thread(stop_event):
 
 def generate_training_data_parallel(boards, model_path, games_per_board=1,
                                      temperature=1.0, augment=True, workers=None,
-                                     noise_weight=0.0):
+                                     noise_weight=0.0, gold_victory=False):
     """Generate training data using multiple worker processes."""
     if workers is None:
         workers = max(1, os.cpu_count() - 2)
@@ -378,7 +425,7 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     # Use 'spawn' to avoid deadlock from CUDA state inherited via fork
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers, initializer=_worker_init,
-                  initargs=(model_path, temperature, noise_weight)) as pool:
+                  initargs=(model_path, temperature, noise_weight, gold_victory)) as pool:
         results = pool.map(_worker_play_boards,
                            [(chunk, games_per_board, augment) for chunk in chunks])
 
@@ -389,42 +436,45 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     # Merge results
     all_boards = []
     all_moves = []
+    all_outcomes = []
     all_game_ids = []
-    total_wins = 0
+    total_decisive = 0
     total_draws = 0
     total_games = 0
     game_id_offset = 0
 
-    for boards_chunk, moves_chunk, gids_chunk, wins, draws, total in results:
+    for boards_chunk, moves_chunk, outcomes_chunk, gids_chunk, decisive, draws, total in results:
         all_boards.extend(boards_chunk)
         all_moves.extend(moves_chunk)
+        all_outcomes.extend(outcomes_chunk)
         all_game_ids.extend([gid + game_id_offset for gid in gids_chunk])
-        total_wins += wins
+        total_decisive += decisive
         total_draws += draws
         total_games += total
         if len(gids_chunk) > 0:
             game_id_offset += max(gids_chunk) + 1
 
     if len(all_boards) == 0:
-        print(f"\nWarning: no training data generated ({total_games} games, {total_draws} draws)")
-        return None, None, None
+        print(f"\nWarning: no training data generated ({total_games} games)")
+        return None, None, None, None
 
     board_tensors = np.stack(all_boards)
     move_indices = np.array(all_moves, dtype=np.int64)
+    outcome_labels = np.array(all_outcomes, dtype=np.float32)
     game_ids = np.array(all_game_ids, dtype=np.int32)
 
-    print(f"\nGenerated {len(all_boards)} samples from {total_wins} decisive games "
-          f"({total_draws} draws discarded, {total_games} total)")
+    print(f"\nGenerated {len(all_boards)} samples from {total_games} games "
+          f"({total_decisive} decisive, {total_draws} draws)")
 
-    return board_tensors, move_indices, game_ids
+    return board_tensors, move_indices, outcome_labels, game_ids
 
 
-def save_training_data(filepath, board_tensors, move_indices, game_ids=None):
+def save_training_data(filepath, board_tensors, move_indices, outcome_labels, game_ids=None):
     """Save training data to a .npz file."""
+    arrays = dict(boards=board_tensors, moves=move_indices, outcomes=outcome_labels)
     if game_ids is not None:
-        np.savez_compressed(filepath, boards=board_tensors, moves=move_indices, game_ids=game_ids)
-    else:
-        np.savez_compressed(filepath, boards=board_tensors, moves=move_indices)
+        arrays["game_ids"] = game_ids
+    np.savez_compressed(filepath, **arrays)
     print(f"Saved {len(board_tensors)} samples to {filepath}")
 
 
@@ -432,4 +482,5 @@ def load_training_data(filepath):
     """Load training data from a .npz file."""
     data = np.load(filepath)
     game_ids = data["game_ids"] if "game_ids" in data else None
-    return data["boards"], data["moves"], game_ids
+    outcomes = data["outcomes"] if "outcomes" in data else None
+    return data["boards"], data["moves"], outcomes, game_ids

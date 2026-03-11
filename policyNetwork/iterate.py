@@ -10,8 +10,8 @@ import torch
 from model import PolicyNetwork
 from self_play import (
     generate_training_data, generate_training_data_parallel, save_training_data,
-    make_policy_fn, play_game, check_victory, pick_random_move, MAX_MOVES,
-    policy_move, GOLD_VICTORY_THRESHOLD,
+    make_heuristic_fn, check_victory, pick_random_move,
+    MAX_MOVES, policy_move, GOLD_VICTORY_THRESHOLD,
 )
 from train import run_training, export_onnx
 from generate_boards import fetch_boards
@@ -50,8 +50,12 @@ def serialize_move(move):
         return {"type": "place", "piece": move[1], "dest": move[2], "isWhite": move[3]}
 
 
-def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.0):
-    """Play model vs benchmark model and return score (wins + 0.5*draws)."""
+def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.2):
+    """Play model vs benchmark model and return score (wins + 0.5*draws).
+
+    Both models use 1-ply value lookahead for evaluation.
+    Evaluation games always use gold victory (real game conditions).
+    """
     boards = fetch_boards(amount=num_games)
     model.eval()
 
@@ -81,13 +85,13 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
     for i in range(num_games):
         board = boards[i].clone()
-        initial_board = boards[i].clone()  # Save initial state for JSON
+        initial_board = boards[i].clone()
         model_is_white = (i % 2 == 0)
         move_count = 0
         moves_list = [] if i == 0 else None  # Record first game only
 
         while move_count < MAX_MOVES:
-            result = check_victory(board)
+            result = check_victory(board, gold_victory=True)  # Always use gold victory in eval
             if result is not None:
                 break
 
@@ -98,9 +102,9 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
             is_model_turn = (board.white_is_active == model_is_white)
             if is_model_turn:
-                move = policy_move(model, board, legal_moves, device, temperature, filter_pawns=False)
+                move = policy_move(model, board, legal_moves, device,
+                                   temperature=temperature, use_value_lookahead=True)
                 model_total_moves += 1
-                # Track piece placements
                 if move[0] == P:
                     model_total_placements += 1
                     piece_type = move[1]
@@ -115,7 +119,8 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
                     elif piece_type == "q":
                         model_queen_placements += 1
             elif benchmark is not None:
-                move = policy_move(benchmark, board, legal_moves, device, temperature, filter_pawns=False)
+                move = policy_move(benchmark, board, legal_moves, device,
+                                   temperature=temperature, use_value_lookahead=True)
             else:
                 move = pick_random_move(legal_moves, placement_bias=1.0)
 
@@ -136,9 +141,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
             if not is_gold_victory:
                 mate_endings += 1
 
-        # Save first game for inspection
         if i == 0:
-            result_str = {1: "White wins", -1: "Black wins", 0: "Draw"}[result]
             recorded_game = {
                 "gameNumber": 1,
                 "initialBoard": serialize_board(initial_board),
@@ -173,7 +176,6 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     print(f"    Placements: {placement_rate:.1f}% total")
     print(f"    Pieces: {pawn_rate:.2f}% p, {knight_rate:.2f}% n, {bishop_rate:.2f}% b, {rook_rate:.2f}% r, {queen_rate:.2f}% q")
 
-    # Save first game for inspection
     if recorded_game is not None:
         os.makedirs("eval_games", exist_ok=True)
         save_path = "eval_games/last_eval_game.json"
@@ -214,10 +216,14 @@ def main():
                         help="Path to benchmark model for evaluation (falls back to random if not found)")
     parser.add_argument("--noise-weight", type=float, default=0.25,
                         help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
+    parser.add_argument("--gold-victory", action="store_true",
+                        help="Enable gold victory during training (default: disabled)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device}")
+    if not args.gold_victory:
+        print("Gold victory disabled during training (use --gold-victory to enable)")
 
     os.makedirs(args.save_dir, exist_ok=True)
 
@@ -231,7 +237,6 @@ def main():
         val_loss_file = os.path.join(args.save_dir, "best_overall_val_loss.txt")
         if os.path.exists(candidate):
             best_model_path = candidate
-            # Load the val_loss from the saved model
             if os.path.exists(val_loss_file):
                 with open(val_loss_file, 'r') as f:
                     best_overall_val_loss = float(f.read().strip())
@@ -254,29 +259,33 @@ def main():
         t0 = time.time()
         if best_model_path:
             print(f"  Using model from {best_model_path} for self-play (parallel)")
-            board_tensors, move_indices, game_ids = generate_training_data_parallel(
+            board_tensors, move_indices, outcome_labels, game_ids = generate_training_data_parallel(
                 all_boards,
                 model_path=best_model_path,
                 games_per_board=args.games_per_board,
                 temperature=args.temperature,
                 workers=args.workers,
                 noise_weight=args.noise_weight,
+                gold_victory=args.gold_victory,
             )
         else:
-            board_tensors, move_indices, game_ids = generate_training_data(
+            print("  No model yet — using heuristic policy for self-play")
+            board_tensors, move_indices, outcome_labels, game_ids = generate_training_data(
                 all_boards,
                 games_per_board=args.games_per_board,
+                policy_fn=make_heuristic_fn(),
+                gold_victory=args.gold_victory,
             )
         elapsed = time.time() - t0
         print(f"  Self-play took {elapsed:.1f}s")
 
         if board_tensors is None:
             print("  No data generated, skipping iteration")
-            results.append({"iteration": iteration, "val_loss": None, "score": 0})
+            results.append({"iteration": iteration, "val_loss": None, "score": 0, "time_min": 0})
             continue
 
         data_path = os.path.join(args.save_dir, f"iter{iteration}_data.npz")
-        save_training_data(data_path, board_tensors, move_indices, game_ids)
+        save_training_data(data_path, board_tensors, move_indices, outcome_labels, game_ids)
 
         # Train
         model = PolicyNetwork().to(device)
@@ -287,6 +296,7 @@ def main():
         iter_checkpoint = os.path.join(args.save_dir, f"iter{iteration}_model.pt")
         model, val_loss = run_training(
             board_tensors, move_indices, device,
+            outcome_labels=outcome_labels,
             game_ids=game_ids,
             model=model,
             epochs=args.epochs,
@@ -299,7 +309,7 @@ def main():
         # Evaluate
         bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
-        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, temperature=0.1)
+        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games)
 
         # Check if val_loss regressed by more than 20%
         val_loss_threshold = best_overall_val_loss * 1.2
@@ -307,7 +317,6 @@ def main():
             print(f"  WARNING: val_loss {val_loss:.4f} increased >20% from best {best_overall_val_loss:.4f}")
             print(f"  Rejecting iteration, keeping previous model")
         else:
-            # Update best_overall for next iteration
             overall_best = os.path.join(args.save_dir, "best_overall.pt")
             val_loss_file = os.path.join(args.save_dir, "best_overall_val_loss.txt")
             torch.save(model.state_dict(), overall_best)
@@ -317,7 +326,6 @@ def main():
                 best_overall_val_loss = val_loss
                 print(f"  New best val_loss: {val_loss:.4f}")
 
-            # Save val_loss to file for resuming later
             with open(val_loss_file, 'w') as f:
                 f.write(f"{best_overall_val_loss:.6f}")
 
@@ -347,7 +355,6 @@ def main():
         tm = f"{r['time_min']:.1f}m"
         print(f"{r['iteration']:4d}  {vl:>9}  {sc:>9}  {tm:>9}")
 
-    # Print total time
     total_time = sum(r['time_min'] for r in results)
     print(f"{'-'*4}  {'-'*9}  {'-'*9}  {'-'*9}")
     print(f"{'':>4}  {'':>9}  {'Total:':>9}  {total_time:.1f}m")

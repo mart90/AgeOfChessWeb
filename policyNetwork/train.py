@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 
 from model import PolicyNetwork
-from encode import NUM_PLANES, NUM_ACTIONS, BOARD_SIZE
+from encode import NUM_PLANES, BOARD_SIZE
 from self_play import generate_training_data, save_training_data, load_training_data
 from generate_boards import fetch_boards
 
@@ -16,17 +16,30 @@ from generate_boards import fetch_boards
 def train_epoch(model, dataloader, optimizer, device):
     model.train()
     total_loss = 0
+    total_policy_loss = 0
+    total_value_loss = 0
     total_correct = 0
+    total_decisive = 0
     total_samples = 0
     large_grad_count = 0
     nan_count = 0
 
-    for boards, moves in dataloader:
+    for boards, moves, outcomes in dataloader:
         boards = boards.to(device)
         moves = moves.to(device)
+        outcomes = outcomes.to(device)
 
-        logits = model(boards)
-        loss = F.cross_entropy(logits, moves)
+        policy_logits, value = model(boards)
+        value_loss = F.mse_loss(value.squeeze(1), outcomes)
+
+        # Policy loss only on decisive positions (outcome != 0)
+        decisive_mask = outcomes != 0
+        if decisive_mask.any():
+            policy_loss = F.cross_entropy(policy_logits[decisive_mask], moves[decisive_mask])
+            loss = policy_loss + value_loss
+        else:
+            policy_loss = torch.tensor(0.0, device=device)
+            loss = value_loss
 
         # Check for NaN/inf loss
         if not torch.isfinite(loss):
@@ -45,52 +58,95 @@ def train_epoch(model, dataloader, optimizer, device):
 
         optimizer.step()
 
-        total_loss += loss.item() * boards.size(0)
-        preds = logits.argmax(dim=1)
-        total_correct += (preds == moves).sum().item()
-        total_samples += boards.size(0)
+        n = boards.size(0)
+        nd = decisive_mask.sum().item()
+        total_loss += loss.item() * n
+        total_policy_loss += policy_loss.item() * nd
+        total_value_loss += value_loss.item() * n
+        preds = policy_logits.argmax(dim=1)
+        total_correct += (preds[decisive_mask] == moves[decisive_mask]).sum().item()
+        total_decisive += nd
+        total_samples += n
 
-    avg_loss = total_loss / total_samples
-    accuracy = total_correct / total_samples
-
-    # Log gradient issues if any occurred
     if large_grad_count > 0:
         print(f"    Clipped large gradients in {large_grad_count} batches")
     if nan_count > 0:
         print(f"    Skipped {nan_count} batches due to NaN/inf loss")
 
-    return avg_loss, accuracy
+    policy_acc = total_correct / total_decisive if total_decisive > 0 else 0.0
+    return (total_loss / total_samples,
+            policy_acc,
+            total_policy_loss / total_decisive if total_decisive > 0 else 0.0,
+            total_value_loss / total_samples)
 
 
 def evaluate(model, dataloader, device):
     model.eval()
     total_loss = 0
+    total_policy_loss = 0
+    total_value_loss = 0
     total_correct = 0
+    total_decisive = 0
     total_samples = 0
+    value_sign_correct = 0
 
     with torch.no_grad():
-        for boards, moves in dataloader:
+        for boards, moves, outcomes in dataloader:
             boards = boards.to(device)
             moves = moves.to(device)
+            outcomes = outcomes.to(device)
 
-            logits = model(boards)
-            loss = F.cross_entropy(logits, moves)
+            policy_logits, value = model(boards)
+            value_loss = F.mse_loss(value.squeeze(1), outcomes)
 
-            total_loss += loss.item() * boards.size(0)
-            preds = logits.argmax(dim=1)
-            total_correct += (preds == moves).sum().item()
-            total_samples += boards.size(0)
+            decisive_mask = outcomes != 0
+            if decisive_mask.any():
+                policy_loss = F.cross_entropy(policy_logits[decisive_mask], moves[decisive_mask])
+                loss = policy_loss + value_loss
+            else:
+                policy_loss = torch.tensor(0.0, device=device)
+                loss = value_loss
 
-    avg_loss = total_loss / total_samples
-    accuracy = total_correct / total_samples
-    return avg_loss, accuracy
+            n = boards.size(0)
+            nd = decisive_mask.sum().item()
+            total_loss += loss.item() * n
+            total_policy_loss += policy_loss.item() * nd
+            total_value_loss += value_loss.item() * n
+            preds = policy_logits.argmax(dim=1)
+            total_correct += (preds[decisive_mask] == moves[decisive_mask]).sum().item()
+            total_decisive += nd
+            total_samples += n
+
+            if decisive_mask.any():
+                v = value.squeeze(1)[decisive_mask]
+                o = outcomes[decisive_mask]
+                value_sign_correct += (v.sign() == o.sign()).sum().item()
+
+    policy_acc = total_correct / total_decisive if total_decisive > 0 else 0.0
+    value_sign_acc = value_sign_correct / total_decisive if total_decisive > 0 else None
+    return (total_loss / total_samples,
+            policy_acc,
+            total_policy_loss / total_decisive if total_decisive > 0 else 0.0,
+            total_value_loss / total_samples,
+            value_sign_acc)
 
 
 def export_onnx(model, filepath, device):
+    """Export only the policy head (value head not needed for deployment)."""
     model.eval()
+
+    class PolicyOnly(nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.m = m
+        def forward(self, x):
+            policy, _ = self.m(x)
+            return policy
+
+    wrapper = PolicyOnly(model).to(device)
     dummy = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE, device=device)
     torch.onnx.export(
-        model, dummy, filepath,
+        wrapper, dummy, filepath,
         input_names=["board"],
         output_names=["policy"],
         dynamic_axes={"board": {0: "batch"}, "policy": {0: "batch"}},
@@ -101,16 +157,21 @@ def export_onnx(model, filepath, device):
     print(f"Exported ONNX model to {filepath} ({size_mb:.1f} MB)")
 
 
-def run_training(board_tensors, move_indices, device, game_ids=None, model=None,
-                 epochs=20, batch_size=256, lr=1e-3, patience=2,
-                 save_path=None):
+def run_training(board_tensors, move_indices, device, outcome_labels=None,
+                 game_ids=None, model=None, epochs=20, batch_size=256, lr=1e-3,
+                 patience=2, save_path=None):
     """
-    Train a policy network on the given data with early stopping.
+    Train a policy+value network on the given data with early stopping.
 
     Returns (model, best_val_loss) with the best model weights loaded.
     """
     boards_t = torch.from_numpy(board_tensors)
     moves_t = torch.from_numpy(move_indices)
+
+    if outcome_labels is not None:
+        outcomes_t = torch.from_numpy(outcome_labels).float()
+    else:
+        outcomes_t = torch.zeros(len(boards_t))
 
     if game_ids is not None:
         # Split by game: hold out ~10% of games for validation
@@ -123,15 +184,14 @@ def run_training(board_tensors, move_indices, device, game_ids=None, model=None,
         train_idx = np.where(train_mask)[0]
         val_idx = np.where(val_mask)[0]
     else:
-        # Fallback: random sample split
         n = len(boards_t)
         val_size = max(1, n // 10)
         indices = torch.randperm(n).numpy()
         train_idx = indices[:n - val_size]
         val_idx = indices[n - val_size:]
 
-    train_ds = TensorDataset(boards_t[train_idx], moves_t[train_idx])
-    val_ds = TensorDataset(boards_t[val_idx], moves_t[val_idx])
+    train_ds = TensorDataset(boards_t[train_idx], moves_t[train_idx], outcomes_t[train_idx])
+    val_ds = TensorDataset(boards_t[val_idx], moves_t[val_idx], outcomes_t[val_idx])
 
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_ds, batch_size=batch_size)
@@ -148,13 +208,16 @@ def run_training(board_tensors, move_indices, device, game_ids=None, model=None,
 
     for epoch in range(1, epochs + 1):
         t0 = time.time()
-        train_loss, train_acc = train_epoch(model, train_dl, optimizer, device)
-        val_loss, val_acc = evaluate(model, val_dl, device)
+        _, _, train_ploss, train_vloss = train_epoch(model, train_dl, optimizer, device)
+        val_loss, val_acc, val_ploss, val_vloss, val_vacc = evaluate(model, val_dl, device)
         elapsed = time.time() - t0
 
+        vacc_str = f"{100*val_vacc:.0f}%" if val_vacc is not None else "N/A"
         print(f"Epoch {epoch:3d}/{epochs} | "
-              f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
-              f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} | {elapsed:.1f}s")
+              f"policy={train_ploss:.4f}/{val_ploss:.4f}  "
+              f"value={train_vloss:.4f}/{val_vloss:.4f}  "
+              f"vacc={vacc_str}  "
+              f"pacc={100*val_acc:.1f}%  |  {elapsed:.1f}s")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -169,7 +232,6 @@ def run_training(board_tensors, move_indices, device, game_ids=None, model=None,
                 print(f"  Early stopping after {epoch} epochs (patience={patience})")
                 break
 
-    # Load best weights back into model
     if best_state is not None:
         model.load_state_dict(best_state)
 
@@ -200,10 +262,9 @@ def main():
 
     os.makedirs(args.save_dir, exist_ok=True)
 
-    # Load or generate training data
     if args.data_file and os.path.exists(args.data_file):
         print(f"Loading training data from {args.data_file}")
-        board_tensors, move_indices, game_ids = load_training_data(args.data_file)
+        board_tensors, move_indices, outcome_labels, game_ids = load_training_data(args.data_file)
     else:
         print(f"Generating training data: {args.boards} boards x {args.games_per_board} games")
 
@@ -218,7 +279,7 @@ def main():
 
         print(f"  Playing {args.boards * args.games_per_board} games...")
         t0 = time.time()
-        board_tensors, move_indices, game_ids = generate_training_data(
+        board_tensors, move_indices, outcome_labels, game_ids = generate_training_data(
             all_boards,
             games_per_board=args.games_per_board,
             placement_bias=args.placement_bias,
@@ -231,19 +292,19 @@ def main():
             return
 
         data_path = os.path.join(args.save_dir, f"phase{args.phase}_data.npz")
-        save_training_data(data_path, board_tensors, move_indices, game_ids)
+        save_training_data(data_path, board_tensors, move_indices, outcome_labels, game_ids)
 
     print(f"Training data: {len(board_tensors)} samples")
 
-    # Load existing model if specified
     model = PolicyNetwork().to(device)
     if args.model_file and os.path.exists(args.model_file):
         model.load_state_dict(torch.load(args.model_file, map_location=device))
         print(f"Loaded weights from {args.model_file}")
 
     save_path = os.path.join(args.save_dir, f"phase{args.phase}_best.pt")
-    model, best_val_loss = run_training(
+    model, _ = run_training(
         board_tensors, move_indices, device,
+        outcome_labels=outcome_labels,
         game_ids=game_ids,
         model=model,
         epochs=args.epochs,
@@ -253,7 +314,6 @@ def main():
         save_path=save_path,
     )
 
-    # Export ONNX from best model
     onnx_path = os.path.join(args.save_dir, "policy_net.onnx")
     export_onnx(model, onnx_path, device)
 
