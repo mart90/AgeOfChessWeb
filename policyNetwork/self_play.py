@@ -200,34 +200,54 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0,
     """
     records = []
     move_count = 0
+    _t_legal = 0.0
+    _t_encode = 0.0
+    _t_policy = 0.0
+    _t_domove = 0.0
 
     while move_count < MAX_MOVES:
         result = check_victory(board, gold_victory=gold_victory)
         if result is not None:
-            return records, result
+            break
 
+        _t0 = time.time()
         legal_moves = board.get_legal_moves()
-        if len(legal_moves) == 0:
-            # Active player has no moves = they lose
-            result = -1 if board.white_is_active else 1
-            return records, result
+        _t_legal += time.time() - _t0
 
+        if len(legal_moves) == 0:
+            result = -1 if board.white_is_active else 1
+            break
+
+        _t0 = time.time()
         encoded = encode_board(board)
+        _t_encode += time.time() - _t0
+
         active_is_white = board.white_is_active
 
+        _t0 = time.time()
         if policy_fn is not None:
             move = policy_fn(board, legal_moves, temperature, encoded)
         else:
             move = pick_random_move(legal_moves, placement_bias)
+        _t_policy += time.time() - _t0
 
         move_idx = move_to_index(move)
         records.append((encoded, move_idx, active_is_white))
 
+        _t0 = time.time()
         board.do_move(move)
+        _t_domove += time.time() - _t0
+
         move_count += 1
 
-    # Move limit reached → draw
-    return records, 0
+    if result is None:
+        result = 0  # move limit → draw
+
+    total = _t_legal + _t_encode + _t_policy + _t_domove
+    print(f"  [timing] moves={move_count} legal={_t_legal:.2f}s encode={_t_encode:.2f}s "
+          f"policy={_t_policy:.2f}s domove={_t_domove:.2f}s total={total:.2f}s", flush=True)
+
+    return records, result
 
 
 def _outcome_for_position(result, was_white):
