@@ -77,10 +77,10 @@ def index_to_move(index, is_white=True):
         return (P, PLACEMENT_TYPES[piece_idx], dest_id, is_white)
 
 
-def get_legal_move_mask(board):
+def get_legal_move_mask(legal_moves):
     """Return a float32 array of shape (NUM_ACTIONS,) with 1.0 for legal moves."""
     mask = np.zeros(NUM_ACTIONS, dtype=np.float32)
-    for move in board.get_legal_moves():
+    for move in legal_moves:
         mask[move_to_index(move)] = 1.0
     return mask
 

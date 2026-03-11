@@ -96,13 +96,14 @@ def _heuristic_score(board, move):
 
 
 def policy_move(model, board, legal_moves, device, temperature=1.0,
-                noise_weight=0.0, use_value_lookahead=False):
+                noise_weight=0.0, use_value_lookahead=False, encoded=None):
     """Pick a move using the policy network.
 
     Args:
         noise_weight: Fraction of heuristic noise to mix into policy (0-1).
         use_value_lookahead: If True, evaluate each legal move with the value head
                              and pick the best (1-ply lookahead). Overrides temperature sampling.
+        encoded: Pre-computed encode_board() result; if None, will encode internally.
     """
     # Filter out pawn placements during self-play to prevent model from learning pawn spam
     if heuristics["pawns_disabled"]:
@@ -127,14 +128,15 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
         return legal_moves[best_idx]
 
     # Standard policy sampling
-    encoded = encode_board(board)
+    if encoded is None:
+        encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
 
     with torch.no_grad():
         policy_logits, _ = model(board_tensor)
     logits = policy_logits.squeeze(0)
 
-    mask = get_legal_move_mask(board)
+    mask = get_legal_move_mask(legal_moves)
     mask_tensor = torch.from_numpy(mask).to(device)
     logits = logits + mask_tensor
 
@@ -163,7 +165,7 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
 
 def make_heuristic_fn():
     """Heuristic-only policy: sample moves weighted by heuristic scores."""
-    def fn(board, legal_moves, _temperature):
+    def fn(board, legal_moves, _temperature, _encoded=None):
         scores = [max(0.01, _heuristic_score(board, m) + 0.1) for m in legal_moves]
         return random.choices(legal_moves, weights=scores, k=1)[0]
     return fn
@@ -172,10 +174,11 @@ def make_heuristic_fn():
 def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0,
                    use_value_lookahead=False):
     """Create a policy function compatible with play_game's policy_fn parameter."""
-    def fn(board, legal_moves, _temperature):
+    def fn(board, legal_moves, _temperature, encoded=None):
         return policy_move(model, board, legal_moves, device, temperature,
                            noise_weight=noise_weight,
-                           use_value_lookahead=use_value_lookahead)
+                           use_value_lookahead=use_value_lookahead,
+                           encoded=encoded)
     return fn
 
 
@@ -213,7 +216,7 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0,
         active_is_white = board.white_is_active
 
         if policy_fn is not None:
-            move = policy_fn(board, legal_moves, temperature)
+            move = policy_fn(board, legal_moves, temperature, encoded)
         else:
             move = pick_random_move(legal_moves, placement_bias)
 
