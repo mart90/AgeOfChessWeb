@@ -128,17 +128,21 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
         return legal_moves[best_idx]
 
     # Standard policy sampling
+    _ta = time.time()
     if encoded is None:
         encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
+    _tb = time.time()
 
     with torch.no_grad():
         policy_logits, _ = model(board_tensor)
-    logits = policy_logits.squeeze(0)
+    _tc = time.time()
 
+    logits = policy_logits.squeeze(0)
     mask = get_legal_move_mask(legal_moves)
     mask_tensor = torch.from_numpy(mask).to(device)
     logits = logits + mask_tensor
+    _td = time.time()
 
     if temperature <= 0:
         idx = logits.argmax().item()
@@ -155,9 +159,17 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
             probs = (1 - noise_weight) * probs + noise_weight * heuristic_probs
 
         idx = torch.multinomial(probs, 1).item()
+    _te = time.time()
 
     for move in legal_moves:
         if move_to_index(move) == idx:
+            # Accumulate timing stats (sampled every 500 calls)
+            pm = policy_move
+            if not hasattr(pm, '_n'): pm._n = 0; pm._prep = pm._model = pm._mask = pm._sample = 0.0
+            pm._n += 1; pm._prep += _tb-_ta; pm._model += _tc-_tb; pm._mask += _td-_tc; pm._sample += _te-_td
+            if pm._n % 500 == 0:
+                print(f"  [pm x{pm._n}] prep={pm._prep:.2f}s model={pm._model:.2f}s "
+                      f"mask={pm._mask:.2f}s sample={pm._sample:.2f}s", flush=True)
             return move
 
     return pick_random_move(legal_moves, placement_bias=1.0)
