@@ -163,13 +163,9 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
 
     for move in legal_moves:
         if move_to_index(move) == idx:
-            # Accumulate timing stats (sampled every 500 calls)
             pm = policy_move
             if not hasattr(pm, '_n'): pm._n = 0; pm._prep = pm._model = pm._mask = pm._sample = 0.0
             pm._n += 1; pm._prep += _tb-_ta; pm._model += _tc-_tb; pm._mask += _td-_tc; pm._sample += _te-_td
-            if pm._n % 500 == 0:
-                print(f"  [pm x{pm._n}] prep={pm._prep:.2f}s model={pm._model:.2f}s "
-                      f"mask={pm._mask:.2f}s sample={pm._sample:.2f}s", flush=True)
             return move
 
     return pick_random_move(legal_moves, placement_bias=1.0)
@@ -255,9 +251,16 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0,
     if result is None:
         result = 0  # move limit → draw
 
+    pm = policy_move
+    pm_str = ""
+    if hasattr(pm, '_n') and pm._n > 0:
+        pm_str = (f" | pm prep={pm._prep:.2f}s model={pm._model:.2f}s "
+                  f"mask={pm._mask:.2f}s sample={pm._sample:.2f}s (n={pm._n})")
+        pm._n = pm._prep = pm._model = pm._mask = pm._sample = 0.0
+
     total = _t_legal + _t_encode + _t_policy + _t_domove
     print(f"  [timing] moves={move_count} legal={_t_legal:.2f}s encode={_t_encode:.2f}s "
-          f"policy={_t_policy:.2f}s domove={_t_domove:.2f}s total={total:.2f}s", flush=True)
+          f"policy={_t_policy:.2f}s domove={_t_domove:.2f}s total={total:.2f}s{pm_str}", flush=True)
 
     return records, result
 
