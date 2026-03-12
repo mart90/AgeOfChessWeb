@@ -31,13 +31,11 @@ def check_victory(board, gold_victory=True):
     Returns +1 if white wins, -1 if black wins, None if game continues.
     Mate detection (no legal moves) is handled in play_game.
     """
-    # Gold victory (disabled during training)
     if gold_victory:
         if board.white_gold >= GOLD_VICTORY_THRESHOLD:
             return 1
         if board.black_gold >= GOLD_VICTORY_THRESHOLD:
             return -1
-
     return None
 
 
@@ -96,13 +94,11 @@ def _heuristic_score(board, move):
 
 
 def policy_move(model, board, legal_moves, device, temperature=1.0,
-                noise_weight=0.0, use_value_lookahead=False, encoded=None):
+                noise_weight=0.0, encoded=None):
     """Pick a move using the policy network.
 
     Args:
         noise_weight: Fraction of heuristic noise to mix into policy (0-1).
-        use_value_lookahead: If True, evaluate each legal move with the value head
-                             and pick the best (1-ply lookahead). Overrides temperature sampling.
         encoded: Pre-computed encode_board() result; if None, will encode internally.
     """
     # Filter out pawn placements during self-play to prevent model from learning pawn spam
@@ -113,27 +109,12 @@ def policy_move(model, board, legal_moves, device, temperature=1.0,
             # Safety: if somehow all moves were pawns, allow them (shouldn't happen)
             legal_moves = board.get_legal_moves()
 
-    # 1-ply value lookahead: evaluate all moves in a single batched forward pass
-    if use_value_lookahead:
-        encs = []
-        for move in legal_moves:
-            test_board = board.clone()
-            test_board.do_move(move)
-            encs.append(encode_board(test_board))
-        batch = torch.from_numpy(np.stack(encs)).to(device)
-        with torch.no_grad():
-            _, values = model(batch)
-        # Negate: after our move it's opponent's turn; their good = our bad
-        best_idx = (-values.squeeze(1)).argmax().item()
-        return legal_moves[best_idx]
-
-    # Standard policy sampling
     if encoded is None:
         encoded = encode_board(board)
     board_tensor = torch.from_numpy(encoded).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        policy_logits, _ = model(board_tensor)
+        policy_logits = model(board_tensor)
 
     logits = policy_logits.squeeze(0)
     mask = get_legal_move_mask(legal_moves)
@@ -171,19 +152,16 @@ def make_heuristic_fn():
     return fn
 
 
-def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0,
-                   use_value_lookahead=False):
+def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0):
     """Create a policy function compatible with play_game's policy_fn parameter."""
     def fn(board, legal_moves, _temperature, encoded=None):
         return policy_move(model, board, legal_moves, device, temperature,
                            noise_weight=noise_weight,
-                           use_value_lookahead=use_value_lookahead,
                            encoded=encoded)
     return fn
 
 
-def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0,
-              gold_victory=True):
+def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0, gold_victory=True):
     """
     Play a game to completion on the given board.
 
@@ -231,29 +209,18 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0,
     return records, result
 
 
-def _outcome_for_position(result, was_white):
-    """Compute outcome label from active player's perspective."""
-    if result == 1:
-        return 1.0 if was_white else -1.0
-    elif result == -1:
-        return -1.0 if was_white else 1.0
-    else:
-        return 0.0
-
-
 def generate_training_data(boards, games_per_board=10, policy_fn=None,
                            temperature=1.0, placement_bias=2.0, augment=True,
-                           gold_victory=True):
+                           gold_victory=False):
     """
     Generate training data from self-play on multiple boards.
+    Only keeps positions from the winning side (winner-only supervision).
 
     Returns:
-        (board_tensors, move_indices, outcome_labels, game_ids) as numpy arrays
-        Includes positions from BOTH sides with outcome labels (+1/-1/0).
+        (board_tensors, move_indices, game_ids) as numpy arrays
     """
     all_boards = []
     all_moves = []
-    all_outcomes = []
     all_game_ids = []
     total_games = 0
     decisive = 0
@@ -274,39 +241,42 @@ def generate_training_data(boards, games_per_board=10, policy_fn=None,
 
             if result == 0:
                 draws += 1
-
-            if result != 0:
+            else:
                 decisive += 1
 
             for encoded, move_idx, was_white in records:
-                outcome = _outcome_for_position(result, was_white)
+                # Winner-only: keep only the winning side's positions
+                if result == 1 and not was_white:
+                    continue
+                if result == -1 and was_white:
+                    continue
+                if result == 0:
+                    continue
+
                 all_boards.append(encoded)
                 all_moves.append(move_idx)
-                all_outcomes.append(outcome)
                 all_game_ids.append(game_id)
 
                 if augment:
                     aug_enc, aug_idx = augment_180(encoded, move_idx)
                     all_boards.append(aug_enc)
                     all_moves.append(aug_idx)
-                    all_outcomes.append(outcome)
                     all_game_ids.append(game_id)
 
             game_id += 1
 
     if len(all_boards) == 0:
         print(f"Warning: no training data generated ({total_games} games)")
-        return None, None, None, None
+        return None, None, None
 
     board_tensors = np.stack(all_boards)
     move_indices = np.array(all_moves, dtype=np.int64)
-    outcome_labels = np.array(all_outcomes, dtype=np.float32)
     game_ids = np.array(all_game_ids, dtype=np.int32)
 
     print(f"Generated {len(all_boards)} samples from {total_games} games "
           f"({decisive} decisive, {draws} draws)")
 
-    return board_tensors, move_indices, outcome_labels, game_ids
+    return board_tensors, move_indices, game_ids
 
 
 def _worker_init(model_path, temperature, noise_weight=0.0, gold_victory=False):
@@ -334,7 +304,6 @@ def _worker_play_boards(args):
 
     all_boards = []
     all_moves = []
-    all_outcomes = []
     all_game_ids = []
     decisive = 0
     draws = 0
@@ -356,23 +325,28 @@ def _worker_play_boards(args):
                 decisive += 1
 
             for encoded, move_idx, was_white in records:
-                outcome = _outcome_for_position(result, was_white)
+                # Winner-only: keep only the winning side's positions
+                if result == 1 and not was_white:
+                    continue
+                if result == -1 and was_white:
+                    continue
+                if result == 0:
+                    continue
+
                 all_boards.append(encoded)
                 all_moves.append(move_idx)
-                all_outcomes.append(outcome)
                 all_game_ids.append(game_id)
 
                 if augment:
                     aug_enc, aug_idx = augment_180(encoded, move_idx)
                     all_boards.append(aug_enc)
                     all_moves.append(aug_idx)
-                    all_outcomes.append(outcome)
                     all_game_ids.append(game_id)
 
             game_id += 1
 
     total = decisive + draws
-    return all_boards, all_moves, all_outcomes, all_game_ids, decisive, draws, total
+    return all_boards, all_moves, all_game_ids, decisive, draws, total
 
 
 def _timer_thread(stop_event):
@@ -431,17 +405,15 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     # Merge results
     all_boards = []
     all_moves = []
-    all_outcomes = []
     all_game_ids = []
     total_decisive = 0
     total_draws = 0
     total_games = 0
     game_id_offset = 0
 
-    for boards_chunk, moves_chunk, outcomes_chunk, gids_chunk, decisive, draws, total in results:
+    for boards_chunk, moves_chunk, gids_chunk, decisive, draws, total in results:
         all_boards.extend(boards_chunk)
         all_moves.extend(moves_chunk)
-        all_outcomes.extend(outcomes_chunk)
         all_game_ids.extend([gid + game_id_offset for gid in gids_chunk])
         total_decisive += decisive
         total_draws += draws
@@ -451,22 +423,21 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
 
     if len(all_boards) == 0:
         print(f"\nWarning: no training data generated ({total_games} games)")
-        return None, None, None, None
+        return None, None, None
 
     board_tensors = np.stack(all_boards)
     move_indices = np.array(all_moves, dtype=np.int64)
-    outcome_labels = np.array(all_outcomes, dtype=np.float32)
     game_ids = np.array(all_game_ids, dtype=np.int32)
 
     print(f"\nGenerated {len(all_boards)} samples from {total_games} games "
           f"({total_decisive} decisive, {total_draws} draws)")
 
-    return board_tensors, move_indices, outcome_labels, game_ids
+    return board_tensors, move_indices, game_ids
 
 
-def save_training_data(filepath, board_tensors, move_indices, outcome_labels, game_ids=None):
+def save_training_data(filepath, board_tensors, move_indices, game_ids=None):
     """Save training data to a .npz file."""
-    arrays = dict(boards=board_tensors, moves=move_indices, outcomes=outcome_labels)
+    arrays = dict(boards=board_tensors, moves=move_indices)
     if game_ids is not None:
         arrays["game_ids"] = game_ids
     np.savez_compressed(filepath, **arrays)
@@ -477,5 +448,4 @@ def load_training_data(filepath):
     """Load training data from a .npz file."""
     data = np.load(filepath)
     game_ids = data["game_ids"] if "game_ids" in data else None
-    outcomes = data["outcomes"] if "outcomes" in data else None
-    return data["boards"], data["moves"], outcomes, game_ids
+    return data["boards"], data["moves"], game_ids

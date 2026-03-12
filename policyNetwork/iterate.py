@@ -53,7 +53,6 @@ def serialize_move(move):
 def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.2):
     """Play model vs benchmark model and return score (wins + 0.5*draws).
 
-    Both models use 1-ply value lookahead for evaluation.
     Evaluation games always use gold victory (real game conditions).
     """
     boards = fetch_boards(amount=num_games)
@@ -91,7 +90,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
         moves_list = [] if i == 0 else None  # Record first game only
 
         while move_count < MAX_MOVES:
-            result = check_victory(board, gold_victory=True)  # Always use gold victory in eval
+            result = check_victory(board)
             if result is not None:
                 break
 
@@ -205,7 +204,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=20, help="Max epochs per iteration")
     parser.add_argument("--batch-size", type=int, default=256, help="Training batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--patience", type=int, default=1, help="Early stopping patience")
+    parser.add_argument("--patience", type=int, default=2, help="Early stopping patience")
     parser.add_argument("--temperature", type=float, default=1.0, help="Self-play temperature")
     parser.add_argument("--eval-games", type=int, default=100, help="Evaluation games per iteration")
     parser.add_argument("--save-dir", type=str, default="checkpoints", help="Checkpoint directory")
@@ -216,14 +215,10 @@ def main():
                         help="Path to benchmark model for evaluation (falls back to random if not found)")
     parser.add_argument("--noise-weight", type=float, default=0.25,
                         help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
-    parser.add_argument("--gold-victory", action="store_true",
-                        help="Enable gold victory during training (default: disabled)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device}")
-    if not args.gold_victory:
-        print("Gold victory disabled during training (use --gold-victory to enable)")
 
     os.makedirs(args.save_dir, exist_ok=True)
 
@@ -240,9 +235,9 @@ def main():
             if os.path.exists(val_loss_file):
                 with open(val_loss_file, 'r') as f:
                     best_overall_val_loss = float(f.read().strip())
-                print(f"Resuming from {candidate} (val_ploss={best_overall_val_loss:.4f})")
+                print(f"Resuming from {candidate} (val_loss={best_overall_val_loss:.4f})")
             else:
-                print(f"Resuming from {candidate} (val_ploss unknown, using inf)")
+                print(f"Resuming from {candidate} (val_loss unknown, using inf)")
         else:
             print("No best_overall.pt found, starting from scratch")
 
@@ -259,22 +254,22 @@ def main():
         t0 = time.time()
         if best_model_path:
             print(f"  Using model from {best_model_path} for self-play (parallel)")
-            board_tensors, move_indices, outcome_labels, game_ids = generate_training_data_parallel(
+            board_tensors, move_indices, game_ids = generate_training_data_parallel(
                 all_boards,
                 model_path=best_model_path,
                 games_per_board=args.games_per_board,
                 temperature=args.temperature,
                 workers=args.workers,
                 noise_weight=args.noise_weight,
-                gold_victory=args.gold_victory,
+                gold_victory=False,
             )
         else:
             print("  No model yet — using heuristic policy for self-play")
-            board_tensors, move_indices, outcome_labels, game_ids = generate_training_data(
+            board_tensors, move_indices, game_ids = generate_training_data(
                 all_boards,
                 games_per_board=args.games_per_board,
                 policy_fn=make_heuristic_fn(),
-                gold_victory=args.gold_victory,
+                gold_victory=False,
             )
         elapsed = time.time() - t0
         print(f"  Self-play took {elapsed:.1f}s")
@@ -285,7 +280,7 @@ def main():
             continue
 
         data_path = os.path.join(args.save_dir, f"iter{iteration}_data.npz")
-        save_training_data(data_path, board_tensors, move_indices, outcome_labels, game_ids)
+        save_training_data(data_path, board_tensors, move_indices, game_ids)
 
         # Train
         model = PolicyNetwork().to(device)
@@ -296,7 +291,6 @@ def main():
         iter_checkpoint = os.path.join(args.save_dir, f"iter{iteration}_model.pt")
         model, val_loss = run_training(
             board_tensors, move_indices, device,
-            outcome_labels=outcome_labels,
             game_ids=game_ids,
             model=model,
             epochs=args.epochs,
@@ -311,10 +305,10 @@ def main():
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
         score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games)
 
-        # Check if val_ploss regressed by more than 20%
+        # Check if val_loss regressed by more than 20%
         val_loss_threshold = best_overall_val_loss * 1.2
         if val_loss > val_loss_threshold:
-            print(f"  WARNING: val_ploss {val_loss:.4f} increased >20% from best {best_overall_val_loss:.4f}")
+            print(f"  WARNING: val_loss {val_loss:.4f} increased >20% from best {best_overall_val_loss:.4f}")
             print(f"  Rejecting iteration, keeping previous model")
         else:
             overall_best = os.path.join(args.save_dir, "best_overall.pt")
@@ -324,7 +318,7 @@ def main():
 
             if val_loss < best_overall_val_loss:
                 best_overall_val_loss = val_loss
-                print(f"  New best val_ploss: {val_loss:.4f}")
+                print(f"  New best val_loss: {val_loss:.4f}")
 
             with open(val_loss_file, 'w') as f:
                 f.write(f"{best_overall_val_loss:.6f}")
