@@ -61,7 +61,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     # Load benchmark model
     if os.path.exists(benchmark_path):
         benchmark = PolicyNetwork().to(device)
-        benchmark.load_state_dict(torch.load(benchmark_path, map_location=device))
+        benchmark.load_state_dict(torch.load(benchmark_path, map_location=device, weights_only=True))
         benchmark.eval()
         bench_label = os.path.basename(benchmark_path)
     else:
@@ -285,7 +285,7 @@ def main():
         # Train
         model = PolicyNetwork().to(device)
         if best_model_path:
-            model.load_state_dict(torch.load(best_model_path, map_location=device))
+            model.load_state_dict(torch.load(best_model_path, map_location=device, weights_only=True))
             print(f"  Fine-tuning from {best_model_path}")
 
         iter_checkpoint = os.path.join(args.save_dir, f"iter{iteration}_model.pt")
@@ -356,7 +356,7 @@ def main():
     # Export best model to ONNX
     if best_model_path:
         best_model = PolicyNetwork().to(device)
-        best_model.load_state_dict(torch.load(best_model_path, map_location=device))
+        best_model.load_state_dict(torch.load(best_model_path, map_location=device, weights_only=True))
         onnx_path = os.path.join(args.save_dir, "policy_net.onnx")
         export_onnx(best_model, onnx_path, device)
 

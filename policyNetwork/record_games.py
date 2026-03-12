@@ -100,7 +100,7 @@ def main():
         print("White: random play")
     elif os.path.exists(white_model_path):
         white_model = PolicyNetwork().to(device)
-        white_model.load_state_dict(torch.load(white_model_path, map_location=device))
+        white_model.load_state_dict(torch.load(white_model_path, map_location=device, weights_only=True))
         white_model.eval()
         print(f"White: {white_model_path}")
     else:
@@ -113,7 +113,7 @@ def main():
         print("Black: random play")
     elif os.path.exists(black_model_path):
         black_model = PolicyNetwork().to(device)
-        black_model.load_state_dict(torch.load(black_model_path, map_location=device))
+        black_model.load_state_dict(torch.load(black_model_path, map_location=device, weights_only=True))
         black_model.eval()
         print(f"Black: {black_model_path}")
     else:

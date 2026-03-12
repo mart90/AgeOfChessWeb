@@ -256,7 +256,7 @@ def main():
 
     model = PolicyNetwork().to(device)
     if args.model_file and os.path.exists(args.model_file):
-        model.load_state_dict(torch.load(args.model_file, map_location=device))
+        model.load_state_dict(torch.load(args.model_file, map_location=device, weights_only=True))
         print(f"Loaded weights from {args.model_file}")
 
     save_path = os.path.join(args.save_dir, f"phase{args.phase}_best.pt")

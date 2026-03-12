@@ -52,7 +52,7 @@ def main():
     print(f"Using {device}")
 
     model = PolicyNetwork().to(device)
-    model.load_state_dict(torch.load(args.model_file, map_location=device))
+    model.load_state_dict(torch.load(args.model_file, map_location=device, weights_only=True))
     model.eval()
     print(f"Loaded model from {args.model_file}")
 

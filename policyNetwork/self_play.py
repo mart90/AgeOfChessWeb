@@ -287,7 +287,7 @@ def _worker_init(model_path, temperature, noise_weight=0.0, gold_victory=False):
     from model import PolicyNetwork
     _worker_device = torch.device("cpu")  # workers always use CPU
     _worker_model = PolicyNetwork().to(_worker_device)
-    _worker_model.load_state_dict(torch.load(model_path, map_location=_worker_device))
+    _worker_model.load_state_dict(torch.load(model_path, map_location=_worker_device, weights_only=True))
     _worker_model.eval()
     _worker_temperature = temperature
     _worker_noise_weight = noise_weight
