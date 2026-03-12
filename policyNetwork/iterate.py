@@ -215,6 +215,8 @@ def main():
                         help="Path to benchmark model for evaluation (falls back to random if not found)")
     parser.add_argument("--noise-weight", type=float, default=0.25,
                         help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
+    parser.add_argument("--gold-victory", action="store_true",
+                        help="Enable gold victory during training (default: disabled)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -261,7 +263,7 @@ def main():
                 temperature=args.temperature,
                 workers=args.workers,
                 noise_weight=args.noise_weight,
-                gold_victory=False,
+                gold_victory=args.gold_victory,
             )
         else:
             print("  No model yet — using heuristic policy for self-play")
@@ -269,7 +271,7 @@ def main():
                 all_boards,
                 games_per_board=args.games_per_board,
                 policy_fn=make_heuristic_fn(),
-                gold_victory=False,
+                gold_victory=args.gold_victory,
             )
         elapsed = time.time() - t0
         print(f"  Self-play took {elapsed:.1f}s")
