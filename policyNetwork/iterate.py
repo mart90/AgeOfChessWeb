@@ -1,4 +1,12 @@
-# python3 iterate.py --resume --boards 900 --workers 17 --iterations 5 --noise-weight 0.25
+# python3 iterate.py --resume --boards 1000 --workers x --iterations 1 --noise-weight x --eval-games 200
+
+# curl -fsSL https://claude.ai/install.sh | bash
+# echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+# set up CUDA and install python packages for me to run AgeOfChessWeb/policyNetwork/iterate.py. Don't forget onnx
+
+# git clone https://github.com/mart90/AgeOfChessWeb.git
+# cd AgeOfChessWeb/policyNetwork
+# nano config.py
 
 """Iterative self-play training loop."""
 import argparse
