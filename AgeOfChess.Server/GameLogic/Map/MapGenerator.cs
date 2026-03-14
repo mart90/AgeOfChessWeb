@@ -226,7 +226,7 @@ public class MapGenerator
 
             if (isMirrored)
             {
-                _map.GetRandomSquareOfType(unoccupiedType, 0, _map.Height * _map.Width / 2 - 1).SetType(squareType);                
+                _map.GetRandomSquareOfType(unoccupiedType, 0, _map.Height * _map.Width / 2 - 1, squareTypeGrouped == SquareTypeGrouped.Mine).SetType(squareType);                
             }
             else // Full random
             {
@@ -246,7 +246,7 @@ public class MapGenerator
         {
             if (isMirrored)
             {
-                _map.GetRandomEmptySquare(0, _map.Height * _map.Width / 2 - 1).SetObject(new T());             
+                _map.GetRandomEmptySquare(0, _map.Height * _map.Width / 2 - 1, true).SetObject(new T());             
             }
             else // Full random
             {

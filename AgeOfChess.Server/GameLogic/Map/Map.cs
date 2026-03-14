@@ -30,7 +30,7 @@ public class Map
     public IEnumerable<Square> GetMines() =>
         GetSquaresByType(SquareType.DirtMine).Concat(GetSquaresByType(SquareType.GrassMine));
 
-    public Square GetRandomSquareOfType(SquareType squareType, int startingSquare = 0, int endingSquare = 0)
+    public Square GetRandomSquareOfType(SquareType squareType, int startingSquare = 0, int endingSquare = 0, bool excludeMiddleSquares = false)
     {
         List<Square> squares = GetSquaresByType(squareType).ToList();
 
@@ -39,13 +39,32 @@ public class Map
         if (endingSquare != 0)
             squares.RemoveAll(e => e.Id > endingSquare);
 
+        if (excludeMiddleSquares)
+        {
+            squares.RemoveAll(e => IsMiddleSquareIndex(e.Id));
+        }
+
         return squares[_random.Next(0, squares.Count - 1)];
     }
 
-    public Square GetRandomEmptySquare(int startingSquare = 0, int endingSquare = 0)
+    private bool IsMiddleSquareIndex(int index)
+    {
+        int middle = Squares.Count / 2;
+        int modifier = Width / 2;
+        int[] middleIndexes =
+        [
+            middle + modifier,
+            middle + modifier - 1,
+            middle - modifier,
+            middle - modifier - 1
+        ];
+        return middleIndexes.Contains(index);
+    }
+
+    public Square GetRandomEmptySquare(int startingSquare = 0, int endingSquare = 0, bool excludeMiddleSquares = false)
     {
         var randomEmptyType = _random.Next(0, 2) == 0 ? SquareType.Dirt : SquareType.Grass;
-        return GetRandomSquareOfType(randomEmptyType, startingSquare, endingSquare);
+        return GetRandomSquareOfType(randomEmptyType, startingSquare, endingSquare, excludeMiddleSquares);
     }
 
     public IEnumerable<Square> FindLegalDestinationsForPiece(Piece piece, Square sourceSquare) =>
