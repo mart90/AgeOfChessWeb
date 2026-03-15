@@ -8,6 +8,9 @@
   import { currentGame } from './lib/currentGame.svelte.js';
   import { playSound, stopClockSound } from './lib/sound.js';
   import { SHOP as SHOP_BASE } from './lib/constants.js';
+  import { buildFromMainline, lastMainlineNode, addChild } from './lib/moveTree.js';
+  import { applyMoveToState, moveToNotation } from './lib/boardUtils.js';
+  import { computeLegalMoves } from './lib/pathFinder.js';
 
   const { gameId } = $props();
 
@@ -169,10 +172,15 @@
   let replayIndex   = $state(null); // null = live; 0..n = replay
   let hoverSquares  = $state([]);   // squares to highlight from notation hover
 
+  // ── Variation analysis tree (built when game ends) ───────────────────────
+  let moveTree     = $state(null);  // MoveNode root; non-null when game is over
+  let currentNode  = $state(null);  // active node in tree; null = use replayIndex
+  let treeRevision = $state(0);     // bumped after each analysis move to force MoveList re-derive
+
   const displayedState = $derived(
-    replayIndex !== null && stateHistory[replayIndex]
-      ? stateHistory[replayIndex]
-      : gameState
+    currentNode !== null ? currentNode.boardState
+    : replayIndex !== null && stateHistory[replayIndex] ? stateHistory[replayIndex]
+    : gameState
   );
 
   function navigate(dir) {
@@ -348,6 +356,76 @@
     }
 
     clearDrag();
+  }
+
+  // ── Analysis mode board callbacks (game over, variation entry) ───────────
+
+  function onPieceGrabbedAnalysis(x, y, clientX, clientY) {
+    const state = displayedState;
+    if (!state) return;
+    const sq = state.squares.find(s => s.x === x && s.y === y);
+    if (!sq?.piece) return;
+
+    selectedSquare = { x, y };
+    legalDests = computeLegalMoves(sq, state.squares, null);
+
+    const pieceName = sq.piece.type.replace(/^(White|Black)/, '').toLowerCase();
+    const imgSrc = `/assets/objects/${sq.piece.isWhite ? 'w' : 'b'}_${pieceName}.png`;
+    dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
+  }
+
+  function onDropOnBoardAnalysis(toX, toY) {
+    if (!dragging || dragging.type !== 'move') { clearDrag(); return; }
+    const state = displayedState;
+    if (!state) { clearDrag(); return; }
+
+    const isLegal = legalDests.some(d => d.x === toX && d.y === toY);
+    if (!isLegal || (toX === dragging.fromX && toY === dragging.fromY)) { clearDrag(); return; }
+
+    const toSq = state.squares.find(s => s.x === toX && s.y === toY);
+    const isCapture = !!toSq?.piece;
+    const san = moveToNotation(dragging.fromX, dragging.fromY, toX, toY, isCapture);
+    const newState = applyMoveToState(state, dragging.fromX, dragging.fromY, toX, toY);
+    currentNode = addChild(currentNode, san, newState);
+    treeRevision++;
+    playSound(isCapture ? 'capture' : 'move');
+    clearDrag();
+  }
+
+  function onSquareClickAnalysis(x, y) {
+    const state = displayedState;
+    if (!state) return;
+    const sq = state.squares.find(s => s.x === x && s.y === y);
+
+    if (selectedSquare) {
+      if (selectedSquare.x === x && selectedSquare.y === y) {
+        selectedSquare = null; legalDests = []; return;
+      }
+      if (sq?.piece) {
+        // Reselect another piece
+        selectedSquare = { x, y };
+        legalDests = computeLegalMoves(sq, state.squares, null);
+        return;
+      }
+      // Click to move
+      const isLegal = legalDests.some(d => d.x === x && d.y === y);
+      if (isLegal) {
+        const fromSq = state.squares.find(s => s.x === selectedSquare.x && s.y === selectedSquare.y);
+        const isCapture = !!sq?.piece;
+        const san = moveToNotation(selectedSquare.x, selectedSquare.y, x, y, isCapture);
+        const newState = applyMoveToState(state, selectedSquare.x, selectedSquare.y, x, y);
+        currentNode = addChild(currentNode, san, newState);
+        treeRevision++;
+        playSound(isCapture ? 'capture' : 'move');
+      }
+      selectedSquare = null; legalDests = [];
+      return;
+    }
+
+    if (sq?.piece) {
+      selectedSquare = { x, y };
+      legalDests = computeLegalMoves(sq, state.squares, null);
+    }
   }
 
   function onSquareClick(x, y) {
@@ -560,6 +638,8 @@
         gameState    = snapshots[snapshots.length - 1];
         replayIndex  = stateHistory.length - 1;
         statusMsg    = formatResult(gameState.result);
+        moveTree = buildFromMainline(gameState.moves, stateHistory);
+        currentNode = lastMainlineNode(moveTree);
       } catch {
         statusMsg = 'Replay not available for this game.';
       }
@@ -672,6 +752,9 @@
       statusMsg = formatResult(state.result); clearDrag();
       replayIndex = stateHistory.length - 1;  // enable replayer
       localStorage.removeItem(`inviteUrl_${gameId}`);
+      // Build variation tree from mainline
+      moveTree = buildFromMainline(state.moves, stateHistory);
+      currentNode = lastMainlineNode(moveTree);
     });
     hub.on('Error', (msg) => {
       console.warn('[GameHub]', msg);
@@ -749,6 +832,12 @@
   }
 
   function handleKeydown(e) {
+    if (currentNode !== null) {
+      // Tree mode navigation
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); if (currentNode.parent) currentNode = currentNode.parent; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); if (currentNode.children[0]) currentNode = currentNode.children[0]; }
+      return;
+    }
     if (replayIndex === null) return;
     if (e.key === 'ArrowLeft')  { e.preventDefault(); navigate('prev'); }
     if (e.key === 'ArrowRight') { e.preventDefault(); navigate('next'); }
@@ -815,9 +904,9 @@
         {#if displayedState}
           <Board
             squares={displayedState.squares}
-            selectedSquare={replayIndex !== null ? null : selectedSquare}
-            legalDests={replayIndex !== null ? [] : legalDests}
-            dragOverSquare={replayIndex !== null ? null : dragOverSquare}
+            selectedSquare={(!moveTree && replayIndex !== null) ? null : selectedSquare}
+            legalDests={(!moveTree && replayIndex !== null) ? [] : legalDests}
+            dragOverSquare={(!moveTree && replayIndex !== null) ? null : dragOverSquare}
             {hoverSquares}
             premoveSquares={replayIndex === null && premove
               ? (premove.type === 'move'
@@ -828,10 +917,10 @@
             showCoords={settings.showCoordinates}
             {mapSize}
             {isWhite}
-            onPieceGrabbed={replayIndex !== null ? null : onPieceGrabbed}
-            onDropOnBoard={replayIndex !== null ? null : onDropOnBoard}
-            onHoverSquare={replayIndex !== null ? null : onHoverSquare}
-            onSquareClick={replayIndex !== null ? null : onSquareClick}
+            onPieceGrabbed={moveTree ? onPieceGrabbedAnalysis : (replayIndex !== null ? null : onPieceGrabbed)}
+            onDropOnBoard={moveTree ? onDropOnBoardAnalysis  : (replayIndex !== null ? null : onDropOnBoard)}
+            onHoverSquare={moveTree ? null                   : (replayIndex !== null ? null : onHoverSquare)}
+            onSquareClick={moveTree ? onSquareClickAnalysis  : (replayIndex !== null ? null : onSquareClick)}
             onCanvasReady={(el) => { boardCanvas = el; }}
           />
         {:else}
@@ -913,13 +1002,24 @@
           </button>
         </div>
         {#if activeTab === 'moves'}
-          <MoveList
-            moves={gameState?.moves ?? []}
-            activeIndex={replayIndex !== null ? replayIndex - 1 : (gameState?.moves?.length ?? 0) - 1}
-            replayMode={true}
-            onHoverMove={handleHoverMove}
-            onNavigate={navigate}
-          />
+          {#if moveTree}
+            <MoveList
+              rootNode={moveTree}
+              activeNode={currentNode}
+              {treeRevision}
+              replayMode={true}
+              onHoverMove={handleHoverMove}
+              onNavigate={(node) => { currentNode = node; }}
+            />
+          {:else}
+            <MoveList
+              moves={gameState?.moves ?? []}
+              activeIndex={replayIndex !== null ? replayIndex - 1 : (gameState?.moves?.length ?? 0) - 1}
+              replayMode={true}
+              onHoverMove={handleHoverMove}
+              onNavigate={navigate}
+            />
+          {/if}
         {:else}
           <div class="chat-messages" bind:this={chatEl}>
             {#each chatMessages as msg}

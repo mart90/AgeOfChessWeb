@@ -53,7 +53,6 @@ def _heuristic_score(board, move):
     score = 0.0
 
     if move[0] == M:
-        pass
         dest_sq = board.squares[move[2]]
         # Capturing an enemy piece
         if dest_sq.piece_type is not None and dest_sq.piece_is_white != board.white_is_active:
@@ -71,6 +70,14 @@ def _heuristic_score(board, move):
     else: # Placement
         score += heuristics["placement"]
         piece = move[1]
+
+        uniformity_penalty = heuristics["uniformity_penalty"]
+        if uniformity_penalty > 0 and piece != "q":
+            uniformity_penalty_threshold = heuristics["uniformity_penalty_threshold"]
+            current_count = board.count_by_piece_type(piece)
+            if current_count > uniformity_penalty_threshold:
+                score -= uniformity_penalty * (current_count - uniformity_penalty_threshold)
+
         if piece == "p":
             score += heuristics["pawn"]
         if piece == "n":

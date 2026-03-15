@@ -5,6 +5,8 @@
   import { generateSandboxBoard } from './lib/api.js';
   import { playSound } from './lib/sound.js';
   import { computeLegalMoves, isRealPiece, basePieceType, isRocks } from './lib/pathFinder.js';
+  import MoveList from './MoveList.svelte';
+  import { MoveNode, addChild } from './lib/moveTree.js';
   import { getBestMove } from './lib/analysis.js'
   import { SHOP, MINE_INCOME } from './lib/constants.js'
   import AnalysisWorker from './lib/analysisWorker.js?worker';
@@ -47,6 +49,10 @@
   let redoStack = $state([]);
   const canUndo = $derived(undoStack.length > 0);
   const canRedo = $derived(redoStack.length > 0);
+
+  // ── Move tree (for move list display + navigation) ───────────────────────
+  let moveTree    = $state(null);
+  let currentNode = $state(null);
 
   // ── Map generation controls ─────────────────────────────────────────────────
   let genSize    = $state(settings.analyzeMapSize);
@@ -285,6 +291,17 @@
     clearSelection();
   }
 
+  function navigateToNode(node) {
+    if (!node?.boardState) return;
+    restoreSnapshot(node.boardState);
+    currentNode = node;
+    if (analyzing && analysisWorker) {
+      analysisResults = [];
+      depthTimings = [];
+      analysisWorker.postMessage({ type: 'update', payload: getCurrentPosition() });
+    }
+  }
+
   function undo() {
     if (!undoStack.length) return;
     redoStack = [...redoStack, snapshot()];
@@ -337,6 +354,8 @@
       undoStack     = [];
       redoStack     = [];
       clearSelection();
+      moveTree    = new MoveNode(null, snapshot(), null);
+      currentNode = moveTree;
 
       if (analyzing && analysisWorker) {
         analysisWorker.postMessage({
@@ -391,12 +410,16 @@
     const toSq   = sqAt(toPos);
     if (!fromSq?.piece || !isRealPiece(fromSq.piece)) return false;
 
+    // Compute notation before mutations (capture detection needs current board)
+    const isSameSquare = fromPos.x === toPos.x && fromPos.y === toPos.y;
+    const isCapture = toSq?.piece != null && !isSameSquare;
+    const _col = x => String.fromCharCode(97 + x);
+    const moveSan = `${_col(fromPos.x)}${fromPos.y+1}${isCapture ? 'x' : '-'}${_col(toPos.x)}${toPos.y+1}`;
+
     pushHistory();
     const piece = fromSq.piece;
     let wg = whiteGold, bg = blackGold;
 
-    const isSameSquare = fromPos.x === toPos.x && fromPos.y === toPos.y;
-    let isCapture = toSq?.piece != null && !isSameSquare;
     if (toSq?.piece) {
       if (toSq.piece.type == "Treasure") {
         if (piece.isWhite) wg += 20; else bg += 20;
@@ -444,6 +467,11 @@
       });
     }
 
+    // Tree tracking
+    if (moveTree && currentNode) {
+      currentNode = addChild(currentNode, moveSan, snapshot());
+    }
+
     return true;
   }
 
@@ -453,6 +481,10 @@
     const cost = SHOP.find(s => s.type === pieceType)?.cost ?? 0;
     if (isWhitePiece && whiteGold < cost) return;
     if (!isWhitePiece && blackGold < cost) return;
+
+    // Compute placement notation (before mutations)
+    const pieceCodeMap = { Pawn: 'p', Queen: 'Q', Rook: 'R', Bishop: 'B', Knight: 'N' };
+    const placeSan = `${String.fromCharCode(97 + pos.x)}${pos.y + 1}=${pieceCodeMap[pieceType] ?? pieceType[0].toUpperCase()}`;
 
     pushHistory();
     if (isWhitePiece) whiteGold -= cost;
@@ -491,6 +523,11 @@
         type: 'update',
         payload: getCurrentPosition()
       });
+    }
+
+    // Tree tracking
+    if (moveTree && currentNode) {
+      currentNode = addChild(currentNode, placeSan, snapshot());
     }
   }
 
@@ -686,6 +723,20 @@
       </div>
     </div>
 
+    <!-- Move list (shown once moves have been made) -->
+    {#if moveTree && currentNode !== moveTree}
+      <div class="section">
+        <div class="section-label">Moves</div>
+        <div class="analysis-move-list">
+          <MoveList
+            rootNode={moveTree}
+            activeNode={currentNode}
+            onNavigate={navigateToNode}
+          />
+        </div>
+      </div>
+    {/if}
+
     <!-- Turn + board controls -->
     <div class="ctrl-row">
       <button class="ctrl-btn" onclick={passTurn} disabled={!squares.length}>Pass turn</button>
@@ -804,6 +855,15 @@
 </div>
 
 <style>
+  .analysis-move-list {
+    max-height: 220px;
+    overflow-y: auto;
+    background: #1a1a30;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+  }
+
   .drag-ghost {
     position: fixed;
     width: 56px; height: 56px;

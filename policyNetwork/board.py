@@ -69,6 +69,12 @@ class Board(object):
         self.mines_owned_by_black = 0
         self._neighbors = _build_neighbor_table(self.size)
         self._knight_jumps = _build_knight_table(self.size)
+        self.white_piece_counts = {}
+        self.black_piece_counts = {}
+        for sq in self.squares:
+            if sq.piece_type is not None:
+                counts = self.white_piece_counts if sq.piece_is_white else self.black_piece_counts
+                counts[sq.piece_type] = counts.get(sq.piece_type, 0) + 1
 
     def clone(self):
         """Create an independent copy of this board."""
@@ -81,6 +87,8 @@ class Board(object):
         b.black_gold = self.black_gold
         b.mines_owned_by_white = self.mines_owned_by_white
         b.mines_owned_by_black = self.mines_owned_by_black
+        b.white_piece_counts = dict(self.white_piece_counts)
+        b.black_piece_counts = dict(self.black_piece_counts)
         b._neighbors = self._neighbors  # shared (immutable)
         b._knight_jumps = self._knight_jumps  # shared (immutable)
         b.white_king_square = new_squares[self.white_king_square.id] if self.white_king_square else None
@@ -286,6 +294,10 @@ class Board(object):
         dest_square = self.squares[dest_id]
         if move[0] == M:
             source_square = self.squares[source_id]
+            # Capture: remove the enemy piece from its count
+            if dest_square.piece_type is not None:
+                opp_counts = self.black_piece_counts if self.white_is_active else self.white_piece_counts
+                opp_counts[dest_square.piece_type] -= 1
             dest_square.piece_type = source_square.piece_type
             dest_square.piece_is_white = source_square.piece_is_white
             if dest_square.has_treasure:
@@ -307,8 +319,10 @@ class Board(object):
             cost = next(pc["cost"] for pc in PIECE_COSTS if pc["type"] == move[1])
             if self.white_is_active:
                 self.white_gold -= cost
+                self.white_piece_counts[move[1]] = self.white_piece_counts.get(move[1], 0) + 1
             else:
                 self.black_gold -= cost
+                self.black_piece_counts[move[1]] = self.black_piece_counts.get(move[1], 0) + 1
 
         if dest_square.terrain_type == "m" and not ((dest_square.owned_by == 0 and self.white_is_active) or (dest_square.owned_by == 1 and not self.white_is_active)):
             if dest_square.owned_by == 1 and self.white_is_active:
@@ -359,6 +373,11 @@ class Board(object):
 
     def active_king_square(self):
         return self.white_king_square if self.white_is_active else self.black_king_square
+    
+    # Returns the amount of pieces of this type the active player currently controls
+    def count_by_piece_type(self, piece_type):
+        counts = self.white_piece_counts if self.white_is_active else self.black_piece_counts
+        return counts.get(piece_type, 0)
 
     # Direction 0 is north, then it continues clockwise
     # Returns true if we discover an enemy piece that could capture the source square
