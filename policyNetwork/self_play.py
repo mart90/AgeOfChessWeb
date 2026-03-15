@@ -75,8 +75,8 @@ def _heuristic_score(board, move):
         if uniformity_penalty > 0 and piece != "q":
             uniformity_penalty_threshold = heuristics["uniformity_penalty_threshold"]
             current_count = board.count_by_piece_type(piece)
-            if current_count > uniformity_penalty_threshold:
-                score -= uniformity_penalty * (current_count - uniformity_penalty_threshold)
+            if current_count >= uniformity_penalty_threshold:
+                score -= uniformity_penalty * (current_count - uniformity_penalty_threshold + 1)
 
         if piece == "p":
             score += heuristics["pawn"]
