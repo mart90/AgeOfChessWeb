@@ -67,17 +67,34 @@
     return line;
   }
 
-  /** Whether to show the move number prefix for this mainline node. */
-  function showMainlineNum(node) {
-    if (node.isWhiteMove) return true;
-    // Show "N..." after a white move that had variations (to re-orient reader)
-    return (node.parent?.children.length ?? 1) > 1;
+  /** Group a node array into {moveNum, white, black} pairs for grid-row rendering. */
+  function pairsFromNodes(nodes) {
+    const result = [];
+    const ns = nodes.filter(n => n.san);
+    for (let i = 0; i < ns.length; ) {
+      const node = ns[i];
+      if (node.isWhiteMove) {
+        const next = ns[i + 1];
+        if (next && !next.isWhiteMove && next.moveNum === node.moveNum) {
+          result.push({ moveNum: node.moveNum, white: node, black: next });
+          i += 2;
+        } else {
+          result.push({ moveNum: node.moveNum, white: node, black: null });
+          i++;
+        }
+      } else {
+        result.push({ moveNum: node.moveNum, white: null, black: node });
+        i++;
+      }
+    }
+    return result;
   }
 
-  /** Whether to show move number in a variation line. */
-  function showVarNum(varNode, idx) {
-    return idx === 0 || varNode.isWhiteMove;
-  }
+  const mainlinePairs = $derived.by(() => {
+    void treeRevision;
+    if (!rootNode) return [];
+    return pairsFromNodes(mainlineNodes);
+  });
 
   // ── Scroll active move into view ──────────────────────────────────────────
 
@@ -130,6 +147,47 @@
   </div>
 {/if}
 
+<!-- ── Recursive variation renderer ─────────────────────────────────────── -->
+<!--
+  Renders a variation line starting from startNode (follows children[0] chain).
+  For each node, sub-variations (children[1..]) are rendered recursively.
+  Move numbers are shown at the first node, every white move, and any node
+  whose predecessor had sub-variations (to re-orient the reader after a branch).
+-->
+{#snippet renderVarLine(startNode)}
+  {#each pairsFromNodes(getVarLine(startNode)) as pair}
+    <div class="tree-row">
+      <span class="num-n">{pair.moveNum}.</span>
+      {#if pair.white}
+        <button
+          class="move-token variation-move"
+          class:active={pair.white === activeNode}
+          onmouseenter={() => onHoverMove?.(parseMove(pair.white.san))}
+          onmouseleave={() => onHoverMove?.(null)}
+          onclick={() => onNavigate?.(pair.white)}
+        >{pair.white.san}</button>
+      {:else}
+        <span class="move-dots">...</span>
+      {/if}
+      {#if pair.black}
+        <button
+          class="move-token variation-move"
+          class:active={pair.black === activeNode}
+          onmouseenter={() => onHoverMove?.(parseMove(pair.black.san))}
+          onmouseleave={() => onHoverMove?.(null)}
+          onclick={() => onNavigate?.(pair.black)}
+        >{pair.black.san}</button>
+      {/if}
+    </div>
+    {#each (pair.white?.children.slice(1) ?? []) as subVarRoot}
+      <div class="var-block">{@render renderVarLine(subVarRoot)}</div>
+    {/each}
+    {#each (pair.black?.children.slice(1) ?? []) as subVarRoot}
+      <div class="var-block">{@render renderVarLine(subVarRoot)}</div>
+    {/each}
+  {/each}
+{/snippet}
+
 <!-- ── Move list ─────────────────────────────────────────────────────────── -->
 <div class="move-list" bind:this={listEl}>
 
@@ -140,42 +198,36 @@
     {:else}
       {#key treeRevision}
       <div class="tree-flow">
-        {#each mainlineNodes as node}
-          {#if node.san}
-            {#if showMainlineNum(node)}
-              <span class="move-num">{node.moveNum}{node.isWhiteMove ? '.' : '...'}</span>
+        {#each mainlinePairs as pair}
+          <div class="tree-row">
+            <span class="num-n">{pair.moveNum}.</span>
+            {#if pair.white}
+              <button
+                class="move-token"
+                class:active={pair.white === activeNode}
+                onmouseenter={() => onHoverMove?.(parseMove(pair.white.san))}
+                onmouseleave={() => onHoverMove?.(null)}
+                onclick={() => onNavigate?.(pair.white)}
+              >{pair.white.san}</button>
+            {:else}
+              <span class="move-dots">...</span>
             {/if}
-            <button
-              class="move-token"
-              class:active={node === activeNode}
-              onmouseenter={() => onHoverMove?.(parseMove(node.san))}
-              onmouseleave={() => onHoverMove?.(null)}
-              onclick={() => onNavigate?.(node)}
-            >{node.san}</button>
-          {/if}
-
-          <!-- Variation blocks: alternatives to this node (siblings[1..]) -->
-          {#each (node.parent?.children.slice(1) ?? []) as varRoot}
-            <div class="var-block">
-              {#each getVarLine(varRoot) as varNode, vi}
-                {#if showVarNum(varNode, vi)}
-                  <span class="move-num">{varNode.moveNum}{varNode.isWhiteMove ? '.' : '...'}</span>
-                {/if}
-                <button
-                  class="move-token variation-move"
-                  class:active={varNode === activeNode}
-                  onmouseenter={() => onHoverMove?.(parseMove(varNode.san))}
-                  onmouseleave={() => onHoverMove?.(null)}
-                  onclick={() => onNavigate?.(varNode)}
-                >{varNode.san}</button>
-              {/each}
-            </div>
+            {#if pair.black}
+              <button
+                class="move-token"
+                class:active={pair.black === activeNode}
+                onmouseenter={() => onHoverMove?.(parseMove(pair.black.san))}
+                onmouseleave={() => onHoverMove?.(null)}
+                onclick={() => onNavigate?.(pair.black)}
+              >{pair.black.san}</button>
+            {/if}
+          </div>
+          {#each (pair.white?.children.slice(1) ?? []) as varRoot}
+            <div class="var-block">{@render renderVarLine(varRoot)}</div>
           {/each}
-
-          <!-- Line break after each black move to keep pairs on their own row -->
-          {#if node.san && !node.isWhiteMove}
-            <br>
-          {/if}
+          {#each (pair.black?.children.slice(1) ?? []) as varRoot}
+            <div class="var-block">{@render renderVarLine(varRoot)}</div>
+          {/each}
         {/each}
       </div>
       {/key}
@@ -250,7 +302,26 @@
   /* ── Tree mode ── */
   .tree-flow {
     padding: 0 0.3rem;
-    line-height: 1.8;
+  }
+
+  .tree-row {
+    display: grid;
+    grid-template-columns: 2.4em 1fr 1fr;
+    align-items: center;
+    line-height: 1.9;
+  }
+  .tree-row:hover { background: rgba(255,255,255,0.04); }
+
+  .num-n {
+    color: #666;
+    user-select: none;
+    text-align: right;
+    padding-right: 0.3em;
+  }
+  .move-dots {
+    color: #555;
+    user-select: none;
+    padding: 0.12rem 0.35rem;
   }
 
   .var-block {
@@ -281,14 +352,6 @@
     text-align: right;
     flex-shrink: 0;
   }
-  /* In tree/var flow, move-num is inline — override flex props */
-  .tree-flow .move-num,
-  .var-block .move-num {
-    min-width: unset;
-    text-align: unset;
-    flex-shrink: unset;
-  }
-
   .move-token {
     padding: 0.12rem 0.35rem;
     border-radius: 3px;

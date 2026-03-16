@@ -9,8 +9,10 @@
   import { playSound, stopClockSound } from './lib/sound.js';
   import { SHOP as SHOP_BASE } from './lib/constants.js';
   import { buildFromMainline, lastMainlineNode, addChild } from './lib/moveTree.js';
-  import { applyMoveToState, moveToNotation } from './lib/boardUtils.js';
+  import { serializeTree, getNodePath } from './lib/treeStorage.js';
+  import { applyMoveToState, moveToNotation, applyPlacementToState, placementToNotation } from './lib/boardUtils.js';
   import { computeLegalMoves } from './lib/pathFinder.js';
+  import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js';
 
   const { gameId } = $props();
 
@@ -178,9 +180,9 @@
   let treeRevision = $state(0);     // bumped after each analysis move to force MoveList re-derive
 
   const displayedState = $derived(
-    currentNode !== null ? currentNode.boardState
-    : replayIndex !== null && stateHistory[replayIndex] ? stateHistory[replayIndex]
-    : gameState
+    currentNode?.boardState
+    ?? (replayIndex !== null ? stateHistory[replayIndex] : undefined)
+    ?? gameState
   );
 
   function navigate(dir) {
@@ -365,6 +367,7 @@
     if (!state) return;
     const sq = state.squares.find(s => s.x === x && s.y === y);
     if (!sq?.piece) return;
+    if (sq.piece.isWhite !== state.white.isActive) return; // wrong side's turn
 
     selectedSquare = { x, y };
     legalDests = computeLegalMoves(sq, state.squares, null);
@@ -375,21 +378,51 @@
   }
 
   function onDropOnBoardAnalysis(toX, toY) {
-    if (!dragging || dragging.type !== 'move') { clearDrag(); return; }
+    if (!dragging) { clearDrag(); return; }
     const state = displayedState;
     if (!state) { clearDrag(); return; }
 
-    const isLegal = legalDests.some(d => d.x === toX && d.y === toY);
-    if (!isLegal || (toX === dragging.fromX && toY === dragging.fromY)) { clearDrag(); return; }
-
-    const toSq = state.squares.find(s => s.x === toX && s.y === toY);
-    const isCapture = !!toSq?.piece;
-    const san = moveToNotation(dragging.fromX, dragging.fromY, toX, toY, isCapture);
-    const newState = applyMoveToState(state, dragging.fromX, dragging.fromY, toX, toY);
-    currentNode = addChild(currentNode, san, newState);
-    treeRevision++;
-    playSound(isCapture ? 'capture' : 'move');
+    if (dragging.type === 'move') {
+      const isLegal = legalDests.some(d => d.x === toX && d.y === toY);
+      if (!isLegal || (toX === dragging.fromX && toY === dragging.fromY)) { clearDrag(); return; }
+      const toSq = state.squares.find(s => s.x === toX && s.y === toY);
+      const isCapture = !!toSq?.piece;
+      const san = moveToNotation(dragging.fromX, dragging.fromY, toX, toY, isCapture);
+      const newState = applyMoveToState(state, dragging.fromX, dragging.fromY, toX, toY);
+      currentNode = addChild(currentNode, san, newState);
+      treeRevision++;
+      playSound(isCapture ? 'capture' : 'move');
+    } else if (dragging.type === 'place') {
+      const isLegal = legalDests.some(d => d.x === toX && d.y === toY);
+      if (!isLegal) { clearDrag(); return; }
+      const item = SHOP.find(s => s.code === dragging.code);
+      if (!item) { clearDrag(); return; }
+      const san = placementToNotation(toX, toY, item.name);
+      const newState = applyPlacementToState(state, toX, toY, item.name, item.cost);
+      currentNode = addChild(currentNode, san, newState);
+      treeRevision++;
+      playSound('move');
+    }
     clearDrag();
+  }
+
+  function shopPointerDownAnalysis(e, code) {
+    const state = displayedState;
+    if (!state) return;
+    const item = SHOP.find(s => s.code === code);
+    if (!item) return;
+    const activeGold = state.white.isActive ? state.white.gold : state.black.gold;
+    if (activeGold < item.cost) return;
+    e.preventDefault();
+    const internalState = createBoardState(state.squares, state.white.gold, state.black.gold, state.white.isActive);
+    const placements = getAllLegalNewPiecePlacements(internalState);
+    legalDests = placements.filter(p => p.pieceType === item.name).map(p => p.toPos);
+    const placingWhite = state.white.isActive;
+    dragging = {
+      type: 'place', code,
+      imgSrc: `/assets/objects/${placingWhite ? 'w' : 'b'}_${item.name.toLowerCase()}.png`,
+      ghostX: e.clientX, ghostY: e.clientY,
+    };
   }
 
   function onSquareClickAnalysis(x, y) {
@@ -401,8 +434,8 @@
       if (selectedSquare.x === x && selectedSquare.y === y) {
         selectedSquare = null; legalDests = []; return;
       }
-      if (sq?.piece) {
-        // Reselect another piece
+      if (sq?.piece && sq.piece.isWhite === state.white.isActive) {
+        // Reselect another piece (same side only)
         selectedSquare = { x, y };
         legalDests = computeLegalMoves(sq, state.squares, null);
         return;
@@ -422,7 +455,7 @@
       return;
     }
 
-    if (sq?.piece) {
+    if (sq?.piece && sq.piece.isWhite === state.white.isActive) {
       selectedSquare = { x, y };
       legalDests = computeLegalMoves(sq, state.squares, null);
     }
@@ -568,11 +601,14 @@
   function globalPointerUp(e) {
     if (!dragging) return;
     stopAutoScroll();
-    // Shop piece dropped anywhere on the board
     if (dragging.type === 'place') {
       const sq = globalCursorToBoard(e.clientX, e.clientY);
       if (sq) {
-        if (isMyTurn) {
+        if (moveTree) {
+          // Analysis mode — route through analysis handler (handles legality check)
+          onDropOnBoardAnalysis(sq.x, sq.y);
+          return;
+        } else if (isMyTurn) {
           // Clear premove if making manual move
           if (premove) {
             premove = null;
@@ -820,6 +856,19 @@
     hub.invoke('RequestRematch', playerToken, sameSeedRematch);
   }
 
+  function openAnalyzePage() {
+    if (!moveTree) return;
+    const data = {
+      format:      'gamepage',
+      mapSize,
+      mapSeed:     gameState?.mapSeed ?? '',
+      treeData:    serializeTree(moveTree),
+      currentPath: currentNode ? getNodePath(moveTree, currentNode) : [],
+    };
+    try { localStorage.setItem('analyze_pending_import', JSON.stringify(data)); } catch {}
+    window.open('/analyze', '_blank');
+  }
+
   function copyInvite() {
     navigator.clipboard.writeText(inviteUrl).catch(() => {});
   }
@@ -986,6 +1035,26 @@
         {/each}
       </div>
     </div>
+  {:else if moveTree && displayedState}
+    {@const analysisWhite = displayedState.white.isActive}
+    {@const analysisGold  = analysisWhite ? displayedState.white.gold : displayedState.black.gold}
+    <div class="controls">
+      <div class="shop">
+        {#each SHOP as item}
+          {@const canAfford = analysisGold >= item.cost}
+          <button
+            class="shop-piece"
+            class:active={dragging?.type === 'place' && dragging.code === item.code}
+            disabled={!canAfford}
+            title="{item.name} — {item.cost}g"
+            onpointerdown={(e) => shopPointerDownAnalysis(e, item.code)}
+          >
+            <img src={`/assets/objects/${analysisWhite ? 'w' : 'b'}_${item.name.toLowerCase()}.png`} alt={item.name} width="44" height="44" draggable="false" />
+            <span class="cost" class:dim={!canAfford}>{item.cost}g</span>
+          </button>
+        {/each}
+      </div>
+    </div>
   {/if}
       </div><!-- /.board-main -->
 
@@ -1045,6 +1114,11 @@
               <button class="chat-send-btn" onclick={sendChat}>Send</button>
             </div>
           {/if}
+        {/if}
+        {#if moveTree}
+          <div class="movelist-footer">
+            <button class="analyze-icon-btn" onclick={openAnalyzePage} title="Analyze game">🔍</button>
+          </div>
         {/if}
       </div>
     {/if}
@@ -1474,4 +1548,25 @@
   }
   .rematch-btn.accept:hover { background: #224060; border-color: #4a84aa; color: #80c4e0; }
   .rematch-waiting { font-size: 0.85rem; color: #aaa; font-style: italic; }
+
+  /* ── Analyze icon button (bottom of move list) ── */
+  .movelist-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.15rem 0.25rem;
+    border-top: 1px solid #2a2a4a;
+    flex-shrink: 0;
+  }
+  .analyze-icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.3rem;
+    line-height: 1;
+    padding: 0.25rem 0.35rem;
+    border-radius: 4px;
+    opacity: 0.45;
+    transition: opacity 0.15s;
+  }
+  .analyze-icon-btn:hover { opacity: 1; background: #2a2a4a; }
 </style>

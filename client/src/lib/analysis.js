@@ -128,7 +128,7 @@ function computeFullHash(lookup, whiteIsActive, keys) {
 
 // ── Board state ──────────────────────────────────────────────────────────────
 
-function createBoardState(position, whiteGold, blackGold, whiteIsActive) {
+export function createBoardState(position, whiteGold, blackGold, whiteIsActive) {
     const ctx = buildContext(position);
     const { lookup, size } = ctx;
 
@@ -352,7 +352,7 @@ const VALID_PLACEMENT_TYPES = new Set([
     'Dirt', 'DirtTrees', 'DirtMine'
 ]);
 
-function getAllLegalNewPiecePlacements(state) {
+export function getAllLegalNewPiecePlacements(state) {
     const { ctx, whiteIsActive } = state;
     const gold = whiteIsActive ? state.whiteGold : state.blackGold;
     const { lookup, neighbors } = ctx;

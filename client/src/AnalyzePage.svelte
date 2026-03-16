@@ -7,7 +7,8 @@
   import { computeLegalMoves, isRealPiece, basePieceType, isRocks } from './lib/pathFinder.js';
   import MoveList from './MoveList.svelte';
   import { MoveNode, addChild } from './lib/moveTree.js';
-  import { getBestMove } from './lib/analysis.js'
+  import { serializeTree, deserializeTree, getNodePath, nodeAtPath } from './lib/treeStorage.js';
+  import { getBestMove, createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js'
   import { SHOP, MINE_INCOME } from './lib/constants.js'
   import AnalysisWorker from './lib/analysisWorker.js?worker';
   import { settings, persistSettings } from './lib/settings.svelte.js';
@@ -51,8 +52,25 @@
   const canRedo = $derived(redoStack.length > 0);
 
   // ── Move tree (for move list display + navigation) ───────────────────────
-  let moveTree    = $state(null);
-  let currentNode = $state(null);
+  let moveTree      = $state(null);
+  let currentNode   = $state(null);
+  let treeRevision  = $state(0);
+
+  // ── State persistence ────────────────────────────────────────────────────
+  let _persistenceReady = $state(false);
+
+  $effect(() => {
+    if (!_persistenceReady || !moveTree || !mapSize) return;
+    treeRevision; // track tree mutations
+    const data = {
+      mapSize,
+      mapSeed,
+      viewAsWhite,
+      treeData:    serializeTree(moveTree),
+      currentPath: currentNode ? getNodePath(moveTree, currentNode) : [],
+    };
+    try { localStorage.setItem('analyze_board_state', JSON.stringify(data)); } catch {}
+  });
 
   // ── Map generation controls ─────────────────────────────────────────────────
   let genSize    = $state(settings.analyzeMapSize);
@@ -291,6 +309,63 @@
     clearSelection();
   }
 
+  // ── Import / restore helpers ─────────────────────────────────────────────
+
+  function parseSanNotation(san) {
+    if (!san) return null;
+    const lx = c => c.charCodeAt(0) - 97;
+    const mv = san.match(/^([a-z])(\d+)[x-]([a-z])(\d+)$/);
+    if (mv) return {
+      from: { x: lx(mv[1]), y: parseInt(mv[2]) - 1 },
+      to:   { x: lx(mv[3]), y: parseInt(mv[4]) - 1 },
+    };
+    const pl = san.match(/^([a-z])(\d+)=/);
+    if (pl) return { from: null, to: { x: lx(pl[1]), y: parseInt(pl[2]) - 1 } };
+    return null;
+  }
+
+  // Convert a GameStateDto-shaped boardState to an AnalyzePage snapshot
+  function gameDtoToSnapshot(dto, san) {
+    const parsed = parseSanNotation(san);
+    return {
+      squares:      dto.squares,
+      whiteGold:    dto.white.gold,
+      blackGold:    dto.black.gold,
+      whiteIsActive: dto.white.isActive,
+      lastMoveFrom: parsed?.from ?? null,
+      lastMoveTo:   parsed?.to   ?? null,
+    };
+  }
+
+  function applyLoadedTree(rawTree, path, size, seed, flip) {
+    mapSize       = size;
+    mapSeed       = seed ?? '';
+    viewAsWhite   = flip ?? true;
+    undoStack     = [];
+    redoStack     = [];
+    dragging      = null;
+    clearSelection();
+    moveTree      = rawTree;
+    currentNode   = nodeAtPath(rawTree, path ?? []);
+    if (currentNode?.boardState) restoreSnapshot(currentNode.boardState);
+  }
+
+  function loadImportedGameTree(data) {
+    const rawTree = deserializeTree(data.treeData);
+    // Convert every node's boardState from GameStateDto to AnalyzePage snapshot
+    function walk(node) {
+      if (node.boardState) node.boardState = gameDtoToSnapshot(node.boardState, node.san);
+      for (const child of node.children) walk(child);
+    }
+    walk(rawTree);
+    applyLoadedTree(rawTree, data.currentPath, data.mapSize, data.mapSeed, true);
+  }
+
+  function loadSavedAnalyzeState(data) {
+    const rawTree = deserializeTree(data.treeData);
+    applyLoadedTree(rawTree, data.currentPath, data.mapSize, data.mapSeed, data.viewAsWhite);
+  }
+
   function navigateToNode(node) {
     if (!node?.boardState) return;
     restoreSnapshot(node.boardState);
@@ -470,6 +545,7 @@
     // Tree tracking
     if (moveTree && currentNode) {
       currentNode = addChild(currentNode, moveSan, snapshot());
+      treeRevision++;
     }
 
     return true;
@@ -528,6 +604,7 @@
     // Tree tracking
     if (moveTree && currentNode) {
       currentNode = addChild(currentNode, placeSan, snapshot());
+      treeRevision++;
     }
   }
 
@@ -566,9 +643,8 @@
   function handleSquareClick(x, y) {
     if (!squares.length) return;
 
-    // Click on selected square → remove the piece
+    // Click on selected square → deselect
     if (selectedSqPos && x === selectedSqPos.x && y === selectedSqPos.y) {
-      removePieceAt({ x, y });
       clearSelection();
       return;
     }
@@ -584,9 +660,9 @@
       // Not legal — fall through to reselect if there's a piece
     }
 
-    // Select a piece
+    // Select a piece (only the active side's pieces)
     const sq = sqAt({ x, y });
-    if (sq?.piece && isRealPiece(sq.piece)) {
+    if (sq?.piece && isRealPiece(sq.piece) && sq.piece.isWhite === whiteIsActive) {
       selectedSqPos = { x, y };
       legalDests    = computeLegalMoves(sq, squares);
     } else {
@@ -597,6 +673,7 @@
   function handleGrab(x, y, clientX, clientY) {
     const sq = sqAt({ x, y });
     if (!sq?.piece || !isRealPiece(sq.piece)) return;
+    if (sq.piece.isWhite !== whiteIsActive) return; // wrong side's turn
     selectedSqPos = { x, y };
     legalDests    = computeLegalMoves(sq, squares);
     const imgSrc  = pieceImgSrc(sq.piece.type, sq.piece.isWhite);
@@ -609,7 +686,8 @@
       const isLegal = legalDests.some(d => d.x === x && d.y === y);
       if (isLegal) applyMove({ x: dragging.fromX, y: dragging.fromY }, { x, y });
     } else if (dragging.type === 'place') {
-      placePieceAt({ x, y }, dragging.pieceType, dragging.isWhitePiece);
+      if (legalDests.some(d => d.x === x && d.y === y))
+        placePieceAt({ x, y }, dragging.pieceType, dragging.isWhitePiece);
     }
     dragging = null;
     clearSelection();
@@ -627,6 +705,9 @@
     if (!isWhitePiece && blackGold < cost) return;
     e.preventDefault();
     clearSelection();
+    const internalState = createBoardState(squares, whiteGold, blackGold, isWhitePiece);
+    const placements = getAllLegalNewPiecePlacements(internalState);
+    legalDests = placements.filter(p => p.pieceType === pieceType).map(p => p.toPos);
     dragging = {
       type: 'place', pieceType, isWhitePiece,
       imgSrc: pieceImgSrc(pieceType, isWhitePiece),
@@ -645,7 +726,8 @@
     if (!dragging) return;
     if (dragging.type === 'place') {
       const sq = globalCursorToBoard(e.clientX, e.clientY);
-      if (sq) placePieceAt(sq, dragging.pieceType, dragging.isWhitePiece);
+      if (sq && legalDests.some(d => d.x === sq.x && d.y === sq.y))
+        placePieceAt(sq, dragging.pieceType, dragging.isWhitePiece);
     }
     dragging = null;
     clearSelection();
@@ -654,6 +736,24 @@
   onMount(() => {
     window.addEventListener('pointermove', globalPointerMove);
     window.addEventListener('pointerup',   globalPointerUp);
+
+    // Load a game imported from GamePage, or restore a previously saved session
+    const pendingRaw = localStorage.getItem('analyze_pending_import');
+    if (pendingRaw) {
+      localStorage.removeItem('analyze_pending_import');
+      try {
+        const data = JSON.parse(pendingRaw);
+        if (data.format === 'gamepage') loadImportedGameTree(data);
+      } catch (e) { console.error('Failed to load game import', e); }
+    } else {
+      const savedRaw = localStorage.getItem('analyze_board_state');
+      if (savedRaw) {
+        try { loadSavedAnalyzeState(JSON.parse(savedRaw)); }
+        catch (e) { console.error('Failed to restore analyze state', e); }
+      }
+    }
+    _persistenceReady = true;
+
     return () => {
       window.removeEventListener('pointermove', globalPointerMove);
       window.removeEventListener('pointerup',   globalPointerUp);
@@ -673,25 +773,39 @@
 {/if}
 
 <div class="sandbox-wrap">
-  <!-- Left: board -->
+  <!-- Board column: centers the board+movelist unit -->
   <div class="board-col">
     {#if squares.length > 0}
-      <div class="board-wrap">
-        <Board
-          squares={squares}
-          mapSize={mapSize}
-          isWhite={viewAsWhite}
-          selectedSquare={selectedSquare}
-          {legalDests}
-          dragOverSquare={dragOverSq}
-          {hoverSquares}
-          lastMoveSquares={lastMoveSquares}
-          onPieceGrabbed={handleGrab}
-          onDropOnBoard={handleDrop}
-          onHoverSquare={handleHover}
-          onSquareClick={handleSquareClick}
-          onCanvasReady={(el) => { boardCanvas = el; }}
-        />
+      <!-- board-and-list keeps board and move list flush together as one unit -->
+      <div class="board-and-list">
+        <div class="board-wrap">
+          <Board
+            squares={squares}
+            mapSize={mapSize}
+            isWhite={viewAsWhite}
+            selectedSquare={selectedSquare}
+            {legalDests}
+            dragOverSquare={dragOverSq}
+            {hoverSquares}
+            lastMoveSquares={lastMoveSquares}
+            onPieceGrabbed={handleGrab}
+            onDropOnBoard={handleDrop}
+            onHoverSquare={handleHover}
+            onSquareClick={handleSquareClick}
+            onCanvasReady={(el) => { boardCanvas = el; }}
+          />
+        </div>
+        {#if moveTree}
+          <div class="movelist-col">
+            <MoveList
+              rootNode={moveTree}
+              activeNode={currentNode}
+              {treeRevision}
+              replayMode={true}
+              onNavigate={navigateToNode}
+            />
+          </div>
+        {/if}
       </div>
     {:else}
       <div class="empty-board">
@@ -723,30 +837,11 @@
       </div>
     </div>
 
-    <!-- Move list (shown once moves have been made) -->
-    {#if moveTree && currentNode !== moveTree}
-      <div class="section">
-        <div class="section-label">Moves</div>
-        <div class="analysis-move-list">
-          <MoveList
-            rootNode={moveTree}
-            activeNode={currentNode}
-            onNavigate={navigateToNode}
-          />
-        </div>
-      </div>
-    {/if}
-
     <!-- Turn + board controls -->
     <div class="ctrl-row">
       <button class="ctrl-btn" onclick={passTurn} disabled={!squares.length}>Pass turn</button>
       <button class="ctrl-btn" onclick={() => viewAsWhite = !viewAsWhite} disabled={!squares.length}>Flip</button>
     </div>
-    <div class="ctrl-row">
-      <button class="ctrl-btn" onclick={undo} disabled={!canUndo}>← Undo</button>
-      <button class="ctrl-btn" onclick={redo} disabled={!canRedo}>Redo →</button>
-    </div>
-
     <!-- Shop: place pieces -->
     <div class="section">
       <div class="section-label">Place piece</div>
@@ -782,7 +877,7 @@
           </button>
         {/each}
       </div>
-      <p class="shop-hint">Drag a piece onto the board to place it. Click a piece to select it, then click its square again to remove it.</p>
+      <p class="shop-hint">Drag a piece onto the board to place it.</p>
     </div>
 
     <!-- Map generation -->
@@ -855,15 +950,6 @@
 </div>
 
 <style>
-  .analysis-move-list {
-    max-height: 220px;
-    overflow-y: auto;
-    background: #1a1a30;
-    border-radius: 4px;
-    display: flex;
-    flex-direction: column;
-  }
-
   .drag-ghost {
     position: fixed;
     width: 56px; height: 56px;
@@ -881,7 +967,7 @@
     height: calc(100vh - 46px);
   }
 
-  /* ── Board column ── */
+  /* ── Board column: centers the board+movelist unit ── */
   .board-col {
     flex: 1;
     min-width: 0;
@@ -893,9 +979,21 @@
     padding: 0.75rem;
   }
 
-  /* Constrain board to fit within the column — square, never taller than the viewport */
+  /* board-and-list: board and move list as one flush unit, centered in board-col */
+  .board-and-list {
+    display: flex;
+    align-items: center;
+    height: 100%;       /* fill board-col inner height */
+    max-width: 100%;    /* don't overflow board-col */
+  }
+
+  /* Board: height-based square. flex-shrink lets it compress when
+     board + movelist would exceed the available column width. */
   .board-wrap {
-    width: min(100%, calc(100vh - 46px - 1.5rem));
+    height: 100%;
+    aspect-ratio: 1;
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   .empty-board {
@@ -909,6 +1007,17 @@
     border-radius: 8px;
     color: #555;
     font-size: 0.95rem;
+  }
+
+  /* ── Move list column ── */
+  .movelist-col {
+    width: 280px;
+    flex-shrink: 0;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    background: #1e1e38;
+    overflow: hidden;
   }
 
   /* ── Side panel ── */
@@ -1075,8 +1184,18 @@
       min-height: unset;
       padding: 0.5rem;
     }
+    .board-and-list {
+      flex-direction: column;
+      height: auto;
+      align-items: stretch;
+    }
     /* On mobile the board is constrained by width, not height */
-    .board-wrap { width: 100%; }
+    .board-wrap { height: auto; width: 100%; }
+    .movelist-col {
+      width: 100%;
+      max-height: 240px;
+      border-top: 1px solid #2a2a4a;
+    }
     .side-panel {
       width: 100%;
       border-left: none;
