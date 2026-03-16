@@ -186,7 +186,7 @@
     {#if moves.length === 0}
       <span class="empty">No moves yet</span>
     {/if}
-    {#each pairs() as { num, w, b }}
+    {#each pairs as { num, w, b }}
       <div class="move-row">
         <span class="move-num">{num}.</span>
         <button
