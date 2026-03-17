@@ -1,4 +1,4 @@
-# python3 iterate.py --resume --boards 1000 --workers x --iterations 1 --noise-weight x --eval-games 200
+# python3 iterate.py --boards 3000 --workers 12 --iterations 1 --noise-weight 0.5 --eval-games 200
 
 # curl -fsSL https://claude.ai/install.sh | bash
 # echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
@@ -10,7 +10,10 @@
 
 """Iterative self-play training loop."""
 import argparse
+import glob
 import json
+import math
+import numpy as np
 import os
 import time
 import torch
@@ -58,11 +61,8 @@ def serialize_move(move):
         return {"type": "place", "piece": move[1], "dest": move[2], "isWhite": move[3]}
 
 
-def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.2):
-    """Play model vs benchmark model and return score (wins + 0.5*draws).
-
-    Evaluation games always use gold victory (real game conditions).
-    """
+def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperature=0.2, gold_victory=False):
+    """Play model vs benchmark model and return score (wins + 0.5*draws)."""
     boards = fetch_boards(amount=num_games)
     model.eval()
 
@@ -98,7 +98,7 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
         moves_list = [] if i == 0 else None  # Record first game only
 
         while move_count < MAX_MOVES:
-            result = check_victory(board)
+            result = check_victory(board, gold_victory=gold_victory)
             if result is not None:
                 break
 
@@ -225,6 +225,8 @@ def main():
                         help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
     parser.add_argument("--gold-victory", action="store_true",
                         help="Enable gold victory during training (default: disabled)")
+    parser.add_argument("--pool-fraction", type=float, default=0.25,
+                        help="Fraction of self-play boards to generate using pool opponents (0-1, default: 0.25)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -236,6 +238,28 @@ def main():
     best_overall_score = 0
     best_overall_val_loss = float('inf')
     best_model_path = None
+
+    # Opponent pool
+    pool_dir = os.path.join(args.save_dir, "pool")
+    os.makedirs(pool_dir, exist_ok=True)
+
+    # Benchmark Elo — set manually by the user in benchmark_elo.txt
+    benchmark_elo = None
+    benchmark_elo_file = os.path.join(args.save_dir, "benchmark_elo.txt")
+    if os.path.exists(benchmark_elo_file):
+        try:
+            benchmark_elo = float(open(benchmark_elo_file).read().strip())
+            print(f"Benchmark Elo: {benchmark_elo:.0f}")
+        except ValueError:
+            print("Warning: could not parse benchmark_elo.txt")
+
+    best_pool_elo = float('-inf')
+    best_pool_elo_file = os.path.join(pool_dir, "best_elo.txt")
+    if os.path.exists(best_pool_elo_file):
+        try:
+            best_pool_elo = float(open(best_pool_elo_file).read().strip())
+        except ValueError:
+            pass
 
     if args.resume:
         candidate = os.path.join(args.save_dir, "best_overall.pt")
@@ -263,16 +287,50 @@ def main():
 
         t0 = time.time()
         if best_model_path:
-            print(f"  Using model from {best_model_path} for self-play (parallel)")
-            board_tensors, move_indices, game_ids = generate_training_data_parallel(
-                all_boards,
-                model_path=best_model_path,
-                games_per_board=args.games_per_board,
-                temperature=args.temperature,
-                workers=args.workers,
-                noise_weight=args.noise_weight,
-                gold_victory=args.gold_victory,
-            )
+            pool_models = sorted(glob.glob(os.path.join(pool_dir, "*.pt")))
+            n_pool = int(len(all_boards) * args.pool_fraction) if pool_models else 0
+            boards_per_pool_model = n_pool // len(pool_models) if pool_models else 0
+            n_pool_actual = boards_per_pool_model * len(pool_models)
+            main_boards = all_boards[n_pool_actual:]
+
+            tensors_list, indices_list, ids_list = [], [], []
+
+            if main_boards:
+                print(f"  Self-play: {len(main_boards)} boards (current model)")
+                bt, mi, gi = generate_training_data_parallel(
+                    main_boards,
+                    model_path=best_model_path,
+                    games_per_board=args.games_per_board,
+                    temperature=args.temperature,
+                    workers=args.workers,
+                    noise_weight=args.noise_weight,
+                    gold_victory=args.gold_victory,
+                )
+                if bt is not None:
+                    tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
+
+            for i, pm in enumerate(pool_models):
+                pm_boards = all_boards[i * boards_per_pool_model : (i + 1) * boards_per_pool_model]
+                print(f"  Pool play:  {len(pm_boards)} boards vs {os.path.basename(pm)}")
+                bt, mi, gi = generate_training_data_parallel(
+                    pm_boards,
+                    model_path=best_model_path,
+                    opponent_path=pm,
+                    games_per_board=args.games_per_board,
+                    temperature=args.temperature,
+                    workers=args.workers,
+                    noise_weight=args.noise_weight,
+                    gold_victory=args.gold_victory,
+                )
+                if bt is not None:
+                    tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
+
+            if tensors_list:
+                board_tensors = np.concatenate(tensors_list, axis=0)
+                move_indices  = np.concatenate(indices_list, axis=0)
+                game_ids      = np.concatenate(ids_list,    axis=0)
+            else:
+                board_tensors = move_indices = game_ids = None
         else:
             print("  No model yet — using heuristic policy for self-play")
             board_tensors, move_indices, game_ids = generate_training_data(
@@ -313,7 +371,7 @@ def main():
         # Evaluate
         bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
-        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games)
+        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, gold_victory=args.gold_victory)
 
         # Check if val_loss regressed by more than 20%
         val_loss_threshold = best_overall_val_loss * 1.2
@@ -336,6 +394,19 @@ def main():
             if score > best_overall_score:
                 best_overall_score = score
                 print(f"  New best score: {100*score:.0f}%")
+
+            # Elo estimation and pool save
+            if benchmark_elo is not None:
+                s = max(0.01, min(0.99, score))
+                model_elo = benchmark_elo + 400 * math.log10(s / (1 - s))
+                print(f"  Estimated Elo: {model_elo:.0f}  (benchmark: {benchmark_elo:.0f})")
+                if model_elo > best_pool_elo:
+                    pool_path = os.path.join(pool_dir, f"iter{iteration}_elo{model_elo:.0f}.pt")
+                    torch.save(model.state_dict(), pool_path)
+                    best_pool_elo = model_elo
+                    with open(best_pool_elo_file, 'w') as f:
+                        f.write(f"{best_pool_elo:.1f}")
+                    print(f"  New best pool Elo → saved to {os.path.basename(pool_path)}")
 
         iteration_time = time.time() - iteration_start
         print(f"  Iteration {iteration} completed in {iteration_time/60:.1f} minutes")

@@ -19,6 +19,7 @@ PIECE_VALUES = {p["type"]: p["cost"] for p in PIECE_COSTS}
 
 # Worker globals (set by _worker_init)
 _worker_model = None
+_worker_opponent_model = None
 _worker_device = None
 _worker_temperature = None
 _worker_noise_weight = 0.0
@@ -168,13 +169,17 @@ def make_policy_fn(model, device, temperature=1.0, noise_weight=0.0):
     return fn
 
 
-def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0, gold_victory=True):
+def play_game(board, policy_fn=None, opponent_fn=None, main_is_white=True,
+              temperature=1.0, placement_bias=2.0, gold_victory=True):
     """
     Play a game to completion on the given board.
 
     Args:
         board: Board instance (will be mutated)
         policy_fn: None for random play, or fn(board, legal_moves) -> move
+        opponent_fn: if provided, policy_fn plays as main_is_white side and
+                     opponent_fn plays the other side
+        main_is_white: which color policy_fn plays when opponent_fn is set
         temperature: sampling temperature for policy_fn
         placement_bias: weight multiplier for placement moves in random play
         gold_victory: if False, gold threshold victory is disabled (training mode)
@@ -200,7 +205,12 @@ def play_game(board, policy_fn=None, temperature=1.0, placement_bias=2.0, gold_v
         active_is_white = board.white_is_active
 
         if policy_fn is not None:
-            move = policy_fn(board, legal_moves, temperature, encoded)
+            if opponent_fn is not None:
+                is_main_turn = (board.white_is_active == main_is_white)
+                active_fn = policy_fn if is_main_turn else opponent_fn
+            else:
+                active_fn = policy_fn
+            move = active_fn(board, legal_moves, temperature, encoded)
         else:
             move = pick_random_move(legal_moves, placement_bias)
 
@@ -286,9 +296,9 @@ def generate_training_data(boards, games_per_board=10, policy_fn=None,
     return board_tensors, move_indices, game_ids
 
 
-def _worker_init(model_path, temperature, noise_weight=0.0, gold_victory=False):
-    """Initialize a worker process with its own model."""
-    global _worker_model, _worker_device, _worker_temperature, _worker_noise_weight, _worker_gold_victory
+def _worker_init(model_path, temperature, noise_weight=0.0, gold_victory=False, opponent_path=None):
+    """Initialize a worker process with its own model (and optional pool opponent)."""
+    global _worker_model, _worker_opponent_model, _worker_device, _worker_temperature, _worker_noise_weight, _worker_gold_victory
     # Limit intra-op threads per worker to avoid OpenMP deadlock on Linux
     torch.set_num_threads(1)
     from model import PolicyNetwork
@@ -299,15 +309,27 @@ def _worker_init(model_path, temperature, noise_weight=0.0, gold_victory=False):
     _worker_temperature = temperature
     _worker_noise_weight = noise_weight
     _worker_gold_victory = gold_victory
+    if opponent_path is not None:
+        _worker_opponent_model = PolicyNetwork().to(_worker_device)
+        _worker_opponent_model.load_state_dict(torch.load(opponent_path, map_location=_worker_device, weights_only=True))
+        _worker_opponent_model.eval()
+    else:
+        _worker_opponent_model = None
 
 
 def _worker_play_boards(args):
     """Worker function: play games on a chunk of boards."""
     board_chunk, games_per_board, augment = args
-    global _worker_model, _worker_device, _worker_temperature, _worker_noise_weight, _worker_gold_victory
+    global _worker_model, _worker_opponent_model, _worker_device, _worker_temperature, _worker_noise_weight, _worker_gold_victory
 
     policy_fn = make_policy_fn(_worker_model, _worker_device, _worker_temperature,
                                noise_weight=_worker_noise_weight)
+
+    opponent_fn = None
+    if _worker_opponent_model is not None:
+        # Opponent plays at the same temperature but without noise (it's not being trained)
+        opponent_fn = make_policy_fn(_worker_opponent_model, _worker_device,
+                                     _worker_temperature, noise_weight=0.0)
 
     all_boards = []
     all_moves = []
@@ -322,6 +344,8 @@ def _worker_play_boards(args):
             records, result = play_game(
                 game_board,
                 policy_fn=policy_fn,
+                opponent_fn=opponent_fn,
+                main_is_white=(game_id % 2 == 0),
                 temperature=_worker_temperature,
                 gold_victory=_worker_gold_victory,
             )
@@ -377,8 +401,13 @@ def _timer_thread(stop_event):
 
 def generate_training_data_parallel(boards, model_path, games_per_board=1,
                                      temperature=1.0, augment=True, workers=None,
-                                     noise_weight=0.0, gold_victory=False):
-    """Generate training data using multiple worker processes."""
+                                     noise_weight=0.0, gold_victory=False,
+                                     opponent_path=None):
+    """Generate training data using multiple worker processes.
+
+    If opponent_path is set, each game pits model_path against opponent_path,
+    alternating colors. Training data comes from the winner's positions.
+    """
     if workers is None:
         workers = max(1, os.cpu_count() - 2)
 
@@ -401,7 +430,7 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     # Use 'spawn' to avoid deadlock from CUDA state inherited via fork
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers, initializer=_worker_init,
-                  initargs=(model_path, temperature, noise_weight, gold_victory)) as pool:
+                  initargs=(model_path, temperature, noise_weight, gold_victory, opponent_path)) as pool:
         results = pool.map(_worker_play_boards,
                            [(chunk, games_per_board, augment) for chunk in chunks])
 
