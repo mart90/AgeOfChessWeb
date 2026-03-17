@@ -26,7 +26,6 @@ from self_play import (
 )
 from train import run_training, export_onnx
 from generate_boards import fetch_boards
-from encode import encode_board, move_to_index, get_legal_move_mask
 from board import M, P
 
 
@@ -143,8 +142,8 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
 
         # Track mate endings (not gold victory, not draw)
         if result != 0:
-            is_gold_victory = (board.white_gold >= GOLD_VICTORY_THRESHOLD or
-                             board.black_gold >= GOLD_VICTORY_THRESHOLD)
+            is_gold_victory = gold_victory and (board.white_gold >= GOLD_VICTORY_THRESHOLD or
+                                                board.black_gold >= GOLD_VICTORY_THRESHOLD)
             if not is_gold_victory:
                 mate_endings += 1
 
