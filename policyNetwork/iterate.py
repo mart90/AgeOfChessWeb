@@ -176,6 +176,9 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
     queen_rate = 100 * model_queen_placements / model_total_moves if model_total_moves > 0 else 0
     placement_rate = 100 * model_total_placements / model_total_moves if model_total_moves > 0 else 0
 
+    draws_pct = 100 * draws / total if total > 0 else 0
+    mates_pct = 100 * mate_endings / num_games if num_games > 0 else 0
+
     print(f"  Eval vs {bench_label}:")
     print(f"    Result: {model_wins}W / {bench_wins}L / {draws}D ({100*score:.0f}% score)")
     print(f"    Games: {num_games} total, {avg_moves:.1f} avg moves, {mate_endings} mates")
@@ -189,7 +192,18 @@ def evaluate_vs_benchmark(model, device, benchmark_path, num_games=30, temperatu
             json.dump(recorded_game, f, indent=2)
         print(f"  Saved eval game to {save_path}")
 
-    return score
+    return {
+        "score": score,
+        "avg_moves": avg_moves,
+        "draws_pct": draws_pct,
+        "mates_pct": mates_pct,
+        "placement_pct": placement_rate,
+        "pawn_pct": pawn_rate,
+        "knight_pct": knight_rate,
+        "bishop_pct": bishop_rate,
+        "rook_pct": rook_rate,
+        "queen_pct": queen_rate,
+    }
 
 
 def fetch_all_boards(count):
@@ -293,10 +307,11 @@ def main():
             main_boards = all_boards[n_pool_actual:]
 
             tensors_list, indices_list, ids_list = [], [], []
+            decisive_total = 0
 
             if main_boards:
                 print(f"  Self-play: {len(main_boards)} boards (current model)")
-                bt, mi, gi = generate_training_data_parallel(
+                bt, mi, gi, dec = generate_training_data_parallel(
                     main_boards,
                     model_path=best_model_path,
                     games_per_board=args.games_per_board,
@@ -307,11 +322,12 @@ def main():
                 )
                 if bt is not None:
                     tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
+                decisive_total += dec
 
             for i, pm in enumerate(pool_models):
                 pm_boards = all_boards[i * boards_per_pool_model : (i + 1) * boards_per_pool_model]
                 print(f"  Pool play:  {len(pm_boards)} boards vs {os.path.basename(pm)}")
-                bt, mi, gi = generate_training_data_parallel(
+                bt, mi, gi, dec = generate_training_data_parallel(
                     pm_boards,
                     model_path=best_model_path,
                     opponent_path=pm,
@@ -323,6 +339,7 @@ def main():
                 )
                 if bt is not None:
                     tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
+                decisive_total += dec
 
             if tensors_list:
                 board_tensors = np.concatenate(tensors_list, axis=0)
@@ -332,7 +349,7 @@ def main():
                 board_tensors = move_indices = game_ids = None
         else:
             print("  No model yet — using heuristic policy for self-play")
-            board_tensors, move_indices, game_ids = generate_training_data(
+            board_tensors, move_indices, game_ids, decisive_total = generate_training_data(
                 all_boards,
                 games_per_board=args.games_per_board,
                 policy_fn=make_heuristic_fn(),
@@ -356,7 +373,7 @@ def main():
             print(f"  Fine-tuning from {best_model_path}")
 
         iter_checkpoint = os.path.join(args.save_dir, f"iter{iteration}_model.pt")
-        model, val_loss = run_training(
+        model, val_loss, val_acc = run_training(
             board_tensors, move_indices, device,
             game_ids=game_ids,
             model=model,
@@ -370,7 +387,15 @@ def main():
         # Evaluate
         bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
         print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
-        score = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, gold_victory=args.gold_victory)
+        eval_stats = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, gold_victory=args.gold_victory)
+        score = eval_stats["score"]
+
+        # Elo estimate (always compute if benchmark elo is available)
+        model_elo = None
+        if benchmark_elo is not None:
+            s = max(0.01, min(0.99, score))
+            model_elo = benchmark_elo + 400 * math.log10(s / (1 - s))
+            print(f"  Estimated Elo: {model_elo:.0f}  (benchmark: {benchmark_elo:.0f})")
 
         # Check if val_loss regressed by more than 20%
         val_loss_threshold = best_overall_val_loss * 1.2
@@ -394,26 +419,45 @@ def main():
                 best_overall_score = score
                 print(f"  New best score: {100*score:.0f}%")
 
-            # Elo estimation and pool save
-            if benchmark_elo is not None:
-                s = max(0.01, min(0.99, score))
-                model_elo = benchmark_elo + 400 * math.log10(s / (1 - s))
-                print(f"  Estimated Elo: {model_elo:.0f}  (benchmark: {benchmark_elo:.0f})")
-                if model_elo > best_pool_elo:
-                    pool_path = os.path.join(pool_dir, f"iter{iteration}_elo{model_elo:.0f}.pt")
-                    torch.save(model.state_dict(), pool_path)
-                    best_pool_elo = model_elo
-                    with open(best_pool_elo_file, 'w') as f:
-                        f.write(f"{best_pool_elo:.1f}")
-                    print(f"  New best pool Elo → saved to {os.path.basename(pool_path)}")
+            # Pool save if new best elo
+            if model_elo is not None and model_elo > best_pool_elo:
+                pool_path = os.path.join(pool_dir, f"iter{iteration}_elo{model_elo:.0f}.pt")
+                torch.save(model.state_dict(), pool_path)
+                best_pool_elo = model_elo
+                with open(best_pool_elo_file, 'w') as f:
+                    f.write(f"{best_pool_elo:.1f}")
+                print(f"  New best pool Elo → saved to {os.path.basename(pool_path)}")
 
         iteration_time = time.time() - iteration_start
-        print(f"  Iteration {iteration} completed in {iteration_time/60:.1f} minutes")
+
+        elo_str = f"{model_elo:.0f}" if model_elo is not None else "N/A"
+        print(f"\n{'='*40}")
+        print(f"  Iteration {iteration} — spreadsheet summary")
+        print(f"{'='*40}")
+        print(f"  Val loss:              {val_loss:.4f}")
+        print(f"  Val accuracy:          {100*val_acc:.1f}%")
+        print(f"  Decisive (self-play):  {decisive_total}")
+        print(f"  Time (min):            {iteration_time/60:.1f}")
+        print(f"  Score vs benchmark:    {100*score:.0f}%")
+        print(f"  Elo estimate:          {elo_str}")
+        print(f"  Avg moves (eval):      {eval_stats['avg_moves']:.1f}")
+        print(f"  Draws % (eval):        {eval_stats['draws_pct']:.1f}%")
+        print(f"  Mates % (eval):        {eval_stats['mates_pct']:.1f}%")
+        print(f"  Placements %:          {eval_stats['placement_pct']:.1f}%")
+        print(f"  Pawn placements %:     {eval_stats['pawn_pct']:.2f}%")
+        print(f"  Knight placements %:   {eval_stats['knight_pct']:.2f}%")
+        print(f"  Bishop placements %:   {eval_stats['bishop_pct']:.2f}%")
+        print(f"  Rook placements %:     {eval_stats['rook_pct']:.2f}%")
+        print(f"  Queen placements %:    {eval_stats['queen_pct']:.2f}%")
+        print(f"{'='*40}")
 
         results.append({
             "iteration": iteration,
             "val_loss": val_loss,
+            "val_acc": val_acc,
+            "decisive": decisive_total,
             "score": score,
+            "elo": model_elo,
             "time_min": iteration_time / 60,
         })
 
@@ -421,17 +465,20 @@ def main():
     print(f"\n{'='*60}")
     print("Summary")
     print(f"{'='*60}")
-    print(f"{'Iter':>4}  {'Val Loss':>9}  {'Score':>9}  {'Time':>9}")
-    print(f"{'-'*4}  {'-'*9}  {'-'*9}  {'-'*9}")
+    print(f"{'Iter':>4}  {'Val Loss':>9}  {'Val Acc':>8}  {'Decisive':>9}  {'Score':>6}  {'Elo':>6}  {'Time':>7}")
+    print(f"{'-'*4}  {'-'*9}  {'-'*8}  {'-'*9}  {'-'*6}  {'-'*6}  {'-'*7}")
     for r in results:
-        vl = f"{r['val_loss']:.4f}" if r['val_loss'] is not None else "   N/A"
-        sc = f"{100*r['score']:.0f}%"
-        tm = f"{r['time_min']:.1f}m"
-        print(f"{r['iteration']:4d}  {vl:>9}  {sc:>9}  {tm:>9}")
+        vl  = f"{r['val_loss']:.4f}" if r['val_loss'] is not None else "N/A"
+        acc = f"{100*r['val_acc']:.1f}%" if r.get('val_acc') is not None else "N/A"
+        dec = str(r['decisive'])
+        sc  = f"{100*r['score']:.0f}%"
+        elo = f"{r['elo']:.0f}" if r.get('elo') is not None else "N/A"
+        tm  = f"{r['time_min']:.1f}m"
+        print(f"{r['iteration']:4d}  {vl:>9}  {acc:>8}  {dec:>9}  {sc:>6}  {elo:>6}  {tm:>7}")
 
     total_time = sum(r['time_min'] for r in results)
-    print(f"{'-'*4}  {'-'*9}  {'-'*9}  {'-'*9}")
-    print(f"{'':>4}  {'':>9}  {'Total:':>9}  {total_time:.1f}m")
+    print(f"{'-'*4}  {'-'*9}  {'-'*8}  {'-'*9}  {'-'*6}  {'-'*6}  {'-'*7}")
+    print(f"{'':>4}  {'':>9}  {'':>8}  {'':>9}  {'Total:':>6}  {'':>6}  {total_time:.1f}m")
 
     # Export best model to ONNX
     if best_model_path:

@@ -164,6 +164,7 @@ def run_training(board_tensors, move_indices, device, game_ids=None,
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     best_val_loss = float("inf")
+    best_val_acc = 0.0
     best_state = None
     patience_counter = 0
 
@@ -179,6 +180,7 @@ def run_training(board_tensors, move_indices, device, game_ids=None,
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            best_val_acc = val_acc
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
             patience_counter = 0
             if save_path:
@@ -193,7 +195,7 @@ def run_training(board_tensors, move_indices, device, game_ids=None,
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    return model, best_val_loss
+    return model, best_val_loss, best_val_acc
 
 
 def main():
@@ -260,7 +262,7 @@ def main():
         print(f"Loaded weights from {args.model_file}")
 
     save_path = os.path.join(args.save_dir, f"phase{args.phase}_best.pt")
-    model, _ = run_training(
+    model, _, _ = run_training(
         board_tensors, move_indices, device,
         game_ids=game_ids,
         model=model,
