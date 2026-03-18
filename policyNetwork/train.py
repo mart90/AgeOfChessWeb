@@ -16,7 +16,6 @@ from generate_boards import fetch_boards
 def _timer_thread(stop_event):
     """Background thread that prints elapsed time every minute."""
     start_time = time.time()
-    print("    0", end='', flush=True)
     while not stop_event.is_set():
         time.sleep(60)
         if stop_event.is_set():

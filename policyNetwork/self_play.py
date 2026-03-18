@@ -422,21 +422,25 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
 
-    # Start timer thread
+    # Create pool first — all worker spawning and model loading happens here.
+    # Timer starts only after workers are ready to avoid spawn activity
+    # writing to stdout mid-line and breaking the timer output.
+    ctx = mp.get_context("spawn")
+    pool = ctx.Pool(workers, initializer=_worker_init,
+                    initargs=(model_path, temperature, noise_weight, gold_victory, opponent_path))
+
     stop_event = threading.Event()
     timer = threading.Thread(target=_timer_thread, args=(stop_event,), daemon=True)
     timer.start()
 
-    # Use 'spawn' to avoid deadlock from CUDA state inherited via fork
-    ctx = mp.get_context("spawn")
-    with ctx.Pool(workers, initializer=_worker_init,
-                  initargs=(model_path, temperature, noise_weight, gold_victory, opponent_path)) as pool:
+    try:
         results = pool.map(_worker_play_boards,
                            [(chunk, games_per_board, augment) for chunk in chunks])
-
-    # Stop timer thread
-    stop_event.set()
-    timer.join(timeout=1.0)
+    finally:
+        stop_event.set()
+        timer.join(timeout=1.0)
+        pool.close()
+        pool.join()
 
     # Merge results
     all_boards = []
