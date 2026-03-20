@@ -309,10 +309,11 @@ def main():
 
             tensors_list, indices_list, ids_list = [], [], []
             decisive_total = 0
+            games_total = 0
 
             if main_boards:
                 print(f"  Self-play: {len(main_boards)} boards (current model)")
-                bt, mi, gi, dec = generate_training_data_parallel(
+                bt, mi, gi, dec, tot = generate_training_data_parallel(
                     main_boards,
                     model_path=best_model_path,
                     games_per_board=args.games_per_board,
@@ -324,11 +325,12 @@ def main():
                 if bt is not None:
                     tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
                 decisive_total += dec
+                games_total += tot
 
             for i, pm in enumerate(pool_models):
                 pm_boards = all_boards[i * boards_per_pool_model : (i + 1) * boards_per_pool_model]
                 print(f"  Pool play:  {len(pm_boards)} boards vs {os.path.basename(pm)}")
-                bt, mi, gi, dec = generate_training_data_parallel(
+                bt, mi, gi, dec, tot = generate_training_data_parallel(
                     pm_boards,
                     model_path=best_model_path,
                     opponent_path=pm,
@@ -341,6 +343,7 @@ def main():
                 if bt is not None:
                     tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
                 decisive_total += dec
+                games_total += tot
 
             if tensors_list:
                 board_tensors = np.concatenate(tensors_list, axis=0)
@@ -350,7 +353,7 @@ def main():
                 board_tensors = move_indices = game_ids = None
         else:
             print("  No model yet — using heuristic policy for self-play")
-            board_tensors, move_indices, game_ids, decisive_total = generate_training_data(
+            board_tensors, move_indices, game_ids, decisive_total, games_total = generate_training_data(
                 all_boards,
                 games_per_board=args.games_per_board,
                 policy_fn=make_heuristic_fn(),
@@ -440,7 +443,8 @@ def main():
         print(f"{'='*40}")
         print(f"  Val loss:              {val_loss:.4f}")
         print(f"  Val accuracy:          {100*val_acc:.1f}%")
-        print(f"  Decisive (self-play):  {decisive_total}")
+        decisive_pct = 100 * decisive_total / games_total if games_total > 0 else 0
+        print(f"  Decisive (self-play):  {decisive_total} ({decisive_pct:.1f}%)")
         print(f"  Time (min):            {iteration_time/60:.1f}")
         print(f"  Score vs benchmark:    {100*score:.0f}%")
         print(f"  Elo estimate:          {elo_str}")
@@ -460,6 +464,7 @@ def main():
             "val_loss": val_loss,
             "val_acc": val_acc,
             "decisive": decisive_total,
+            "decisive_pct": decisive_pct,
             "score": score,
             "elo": model_elo,
             "time_min": iteration_time / 60,
@@ -474,7 +479,7 @@ def main():
     for r in results:
         vl  = f"{r['val_loss']:.4f}" if r['val_loss'] is not None else "N/A"
         acc = f"{100*r['val_acc']:.1f}%" if r.get('val_acc') is not None else "N/A"
-        dec = str(r['decisive'])
+        dec = f"{r['decisive']} ({r.get('decisive_pct', 0):.1f}%)"
         sc  = f"{100*r['score']:.0f}%"
         elo = f"{r['elo']:.0f}" if r.get('elo') is not None else "N/A"
         tm  = f"{r['time_min']:.1f}m"

@@ -284,7 +284,7 @@ def generate_training_data(boards, games_per_board=10, policy_fn=None,
 
     if len(all_boards) == 0:
         print(f"Warning: no training data generated ({total_games} games)")
-        return None, None, None, 0
+        return None, None, None, 0, 0
 
     board_tensors = np.stack(all_boards)
     move_indices = np.array(all_moves, dtype=np.int64)
@@ -293,7 +293,7 @@ def generate_training_data(boards, games_per_board=10, policy_fn=None,
     print(f"Generated {len(all_boards)} samples from {total_games} games "
           f"({decisive} decisive, {draws} draws)")
 
-    return board_tensors, move_indices, game_ids, decisive
+    return board_tensors, move_indices, game_ids, decisive, total_games
 
 
 def _worker_init(model_path, temperature, noise_weight=0.0, gold_victory=False, opponent_path=None):
@@ -463,7 +463,7 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
 
     if len(all_boards) == 0:
         print(f"\nWarning: no training data generated ({total_games} games)")
-        return None, None, None, 0
+        return None, None, None, 0, 0
 
     board_tensors = np.stack(all_boards)
     move_indices = np.array(all_moves, dtype=np.int64)
@@ -472,7 +472,7 @@ def generate_training_data_parallel(boards, model_path, games_per_board=1,
     print(f"\nGenerated {len(all_boards)} samples from {total_games} games "
           f"({total_decisive} decisive, {total_draws} draws)")
 
-    return board_tensors, move_indices, game_ids, total_decisive
+    return board_tensors, move_indices, game_ids, total_decisive, total_games
 
 
 def save_training_data(filepath, board_tensors, move_indices, game_ids=None):
