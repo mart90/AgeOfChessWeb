@@ -11,6 +11,7 @@
 """Iterative self-play training loop."""
 import argparse
 import glob
+import shutil
 import json
 import math
 import numpy as np
@@ -404,7 +405,10 @@ def main():
             print(f"  Rejecting iteration, keeping previous model")
         else:
             overall_best = os.path.join(args.save_dir, "best_overall.pt")
+            overall_best_bak = os.path.join(args.save_dir, "best_overall_bak.pt")
             val_loss_file = os.path.join(args.save_dir, "best_overall_val_loss.txt")
+            if os.path.exists(overall_best):
+                shutil.copy2(overall_best, overall_best_bak)
             torch.save(model.state_dict(), overall_best)
             best_model_path = overall_best
 
