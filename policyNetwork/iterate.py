@@ -276,14 +276,6 @@ def main():
         best_overall_elo = 100.0
         print("No Elo seed found — assuming random = 100 for first iteration")
 
-    best_pool_elo = float('-inf')
-    best_pool_elo_file = os.path.join(pool_dir, "best_elo.txt")
-    if os.path.exists(best_pool_elo_file):
-        try:
-            best_pool_elo = float(open(best_pool_elo_file).read().strip())
-        except ValueError:
-            pass
-
     if args.resume:
         candidate = os.path.join(args.save_dir, "best_overall.pt")
         val_loss_file = os.path.join(args.save_dir, "best_overall_val_loss.txt")
@@ -432,15 +424,6 @@ def main():
                 best_overall_elo = model_elo
                 with open(best_overall_elo_file, 'w') as f:
                     f.write(f"{best_overall_elo:.1f}")
-
-            # Pool save if new best elo
-            if model_elo is not None and model_elo > best_pool_elo:
-                pool_path = os.path.join(pool_dir, f"iter{iteration}_elo{model_elo:.0f}.pt")
-                torch.save(model.state_dict(), pool_path)
-                best_pool_elo = model_elo
-                with open(best_pool_elo_file, 'w') as f:
-                    f.write(f"{best_pool_elo:.1f}")
-                print(f"  New best pool Elo → saved to {os.path.basename(pool_path)}")
         else:
             print(f"  Rejected: score {100*score:.0f}% < 50%, keeping previous model")
 
