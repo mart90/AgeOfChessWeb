@@ -271,6 +271,10 @@ def main():
             print(f"Seeding Elo from benchmark_elo.txt: {best_overall_elo:.0f}")
         except ValueError:
             print("Warning: could not parse benchmark_elo.txt")
+    else:
+        # No Elo seed found — assume random opponent (Elo 100) for first iteration
+        best_overall_elo = 100.0
+        print("No Elo seed found — assuming random = 100 for first iteration")
 
     best_pool_elo = float('-inf')
     best_pool_elo_file = os.path.join(pool_dir, "best_elo.txt")
@@ -393,25 +397,23 @@ def main():
             save_path=iter_checkpoint,
         )
 
-        # Evaluate vs current best_overall (skip on first iteration — nothing to compare to)
-        eval_stats = None
-        score = None
-        if best_model_path:
-            print(f"Evaluating vs best_overall.pt ({args.eval_games} games)...")
-            eval_stats = evaluate_vs_benchmark(model, device, best_model_path, num_games=args.eval_games, gold_victory=args.gold_victory)
-            score = eval_stats["score"]
-        else:
-            print("No previous model — first iteration, accepting unconditionally")
+        # Evaluate — always runs; first iteration uses random as opponent
+        is_first_iteration = best_model_path is None
+        benchmark_for_eval = best_model_path or ""
+        bench_label = "best_overall.pt" if best_model_path else "random"
+        print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
+        eval_stats = evaluate_vs_benchmark(model, device, benchmark_for_eval, num_games=args.eval_games, gold_victory=args.gold_victory)
+        score = eval_stats["score"]
 
         # Elo estimate
         model_elo = None
-        if best_overall_elo is not None and score is not None:
+        if best_overall_elo is not None:
             s = max(0.01, min(0.99, score))
             model_elo = best_overall_elo + 400 * math.log10(s / (1 - s))
             print(f"  Estimated Elo: {model_elo:.0f}  (current best: {best_overall_elo:.0f})")
 
-        # Accept if first iteration or score >= 50%
-        accepted = score is None or score >= 0.5
+        # Accept if first iteration (unconditional) or score >= 50%
+        accepted = is_first_iteration or score >= 0.5
         if accepted:
             overall_best = os.path.join(args.save_dir, "best_overall.pt")
             overall_best_bak = os.path.join(args.save_dir, "best_overall_bak.pt")
@@ -445,7 +447,7 @@ def main():
         iteration_time = time.time() - iteration_start
 
         elo_str   = f"{model_elo:.0f}" if model_elo is not None else "N/A"
-        score_str = f"{100*score:.0f}%" if score is not None else "N/A"
+        score_str = f"{100*score:.0f}%"
         decisive_pct = 100 * decisive_total / games_total if games_total > 0 else 0
         print(f"\n{'='*40}")
         print(f"  Iteration {iteration} — spreadsheet summary")
@@ -474,7 +476,7 @@ def main():
             "val_acc": val_acc,
             "decisive": decisive_total,
             "decisive_pct": decisive_pct,
-            "score": score if score is not None else 0,
+            "score": score,
             "elo": model_elo,
             "time_min": iteration_time / 60,
         })
