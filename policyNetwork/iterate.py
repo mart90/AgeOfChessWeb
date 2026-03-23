@@ -228,13 +228,11 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--patience", type=int, default=1, help="Early stopping patience")
     parser.add_argument("--temperature", type=float, default=1.0, help="Self-play temperature")
-    parser.add_argument("--eval-games", type=int, default=100, help="Evaluation games per iteration")
+    parser.add_argument("--eval-games", type=int, default=500, help="Evaluation games per iteration")
     parser.add_argument("--save-dir", type=str, default="checkpoints", help="Checkpoint directory")
     parser.add_argument("--resume", action="store_true", help="Resume from best_overall.pt")
     parser.add_argument("--workers", type=int, default=16,
                         help="Number of worker processes for self-play (default: cpu_count - 2)")
-    parser.add_argument("--benchmark", type=str, default="checkpoints/benchmark.pt",
-                        help="Path to benchmark model for evaluation (falls back to random if not found)")
     parser.add_argument("--noise-weight", type=float, default=0.25,
                         help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
     parser.add_argument("--gold-victory", action="store_true",
@@ -249,7 +247,6 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
 
     results = []
-    best_overall_score = 0
     best_overall_val_loss = float('inf')
     best_model_path = None
 
@@ -257,13 +254,21 @@ def main():
     pool_dir = os.path.join(args.save_dir, "pool")
     os.makedirs(pool_dir, exist_ok=True)
 
-    # Benchmark Elo — set manually by the user in benchmark_elo.txt
-    benchmark_elo = None
+    # Running Elo for best_overall — loaded from best_overall_elo.txt if it exists,
+    # otherwise seeded from benchmark_elo.txt (set manually by the user).
+    best_overall_elo = None
+    best_overall_elo_file = os.path.join(args.save_dir, "best_overall_elo.txt")
     benchmark_elo_file = os.path.join(args.save_dir, "benchmark_elo.txt")
-    if os.path.exists(benchmark_elo_file):
+    if os.path.exists(best_overall_elo_file):
         try:
-            benchmark_elo = float(open(benchmark_elo_file).read().strip())
-            print(f"Benchmark Elo: {benchmark_elo:.0f}")
+            best_overall_elo = float(open(best_overall_elo_file).read().strip())
+            print(f"Current best Elo: {best_overall_elo:.0f}")
+        except ValueError:
+            print("Warning: could not parse best_overall_elo.txt")
+    elif os.path.exists(benchmark_elo_file):
+        try:
+            best_overall_elo = float(open(benchmark_elo_file).read().strip())
+            print(f"Seeding Elo from benchmark_elo.txt: {best_overall_elo:.0f}")
         except ValueError:
             print("Warning: could not parse benchmark_elo.txt")
 
@@ -388,25 +393,26 @@ def main():
             save_path=iter_checkpoint,
         )
 
-        # Evaluate
-        bench_label = "benchmark" if os.path.exists(args.benchmark) else "random"
-        print(f"Evaluating vs {bench_label} ({args.eval_games} games)...")
-        eval_stats = evaluate_vs_benchmark(model, device, args.benchmark, num_games=args.eval_games, gold_victory=args.gold_victory)
-        score = eval_stats["score"]
-
-        # Elo estimate (always compute if benchmark elo is available)
-        model_elo = None
-        if benchmark_elo is not None:
-            s = max(0.01, min(0.99, score))
-            model_elo = benchmark_elo + 400 * math.log10(s / (1 - s))
-            print(f"  Estimated Elo: {model_elo:.0f}  (benchmark: {benchmark_elo:.0f})")
-
-        # Check if val_loss regressed by more than 20%
-        val_loss_threshold = best_overall_val_loss * 1.2
-        if val_loss > val_loss_threshold:
-            print(f"  WARNING: val_loss {val_loss:.4f} increased >20% from best {best_overall_val_loss:.4f}")
-            print(f"  Rejecting iteration, keeping previous model")
+        # Evaluate vs current best_overall (skip on first iteration — nothing to compare to)
+        eval_stats = None
+        score = None
+        if best_model_path:
+            print(f"Evaluating vs best_overall.pt ({args.eval_games} games)...")
+            eval_stats = evaluate_vs_benchmark(model, device, best_model_path, num_games=args.eval_games, gold_victory=args.gold_victory)
+            score = eval_stats["score"]
         else:
+            print("No previous model — first iteration, accepting unconditionally")
+
+        # Elo estimate
+        model_elo = None
+        if best_overall_elo is not None and score is not None:
+            s = max(0.01, min(0.99, score))
+            model_elo = best_overall_elo + 400 * math.log10(s / (1 - s))
+            print(f"  Estimated Elo: {model_elo:.0f}  (current best: {best_overall_elo:.0f})")
+
+        # Accept if first iteration or score >= 50%
+        accepted = score is None or score >= 0.5
+        if accepted:
             overall_best = os.path.join(args.save_dir, "best_overall.pt")
             overall_best_bak = os.path.join(args.save_dir, "best_overall_bak.pt")
             val_loss_file = os.path.join(args.save_dir, "best_overall_val_loss.txt")
@@ -417,14 +423,13 @@ def main():
 
             if val_loss < best_overall_val_loss:
                 best_overall_val_loss = val_loss
-                print(f"  New best val_loss: {val_loss:.4f}")
-
             with open(val_loss_file, 'w') as f:
                 f.write(f"{best_overall_val_loss:.6f}")
 
-            if score > best_overall_score:
-                best_overall_score = score
-                print(f"  New best score: {100*score:.0f}%")
+            if model_elo is not None:
+                best_overall_elo = model_elo
+                with open(best_overall_elo_file, 'w') as f:
+                    f.write(f"{best_overall_elo:.1f}")
 
             # Pool save if new best elo
             if model_elo is not None and model_elo > best_pool_elo:
@@ -434,29 +439,33 @@ def main():
                 with open(best_pool_elo_file, 'w') as f:
                     f.write(f"{best_pool_elo:.1f}")
                 print(f"  New best pool Elo → saved to {os.path.basename(pool_path)}")
+        else:
+            print(f"  Rejected: score {100*score:.0f}% < 50%, keeping previous model")
 
         iteration_time = time.time() - iteration_start
 
-        elo_str = f"{model_elo:.0f}" if model_elo is not None else "N/A"
+        elo_str   = f"{model_elo:.0f}" if model_elo is not None else "N/A"
+        score_str = f"{100*score:.0f}%" if score is not None else "N/A"
+        decisive_pct = 100 * decisive_total / games_total if games_total > 0 else 0
         print(f"\n{'='*40}")
         print(f"  Iteration {iteration} — spreadsheet summary")
         print(f"{'='*40}")
         print(f"  Val loss:              {val_loss:.4f}")
         print(f"  Val accuracy:          {100*val_acc:.1f}%")
-        decisive_pct = 100 * decisive_total / games_total if games_total > 0 else 0
         print(f"  Decisive (self-play):  {decisive_total} ({decisive_pct:.1f}%)")
         print(f"  Time (min):            {iteration_time/60:.1f}")
-        print(f"  Score vs benchmark:    {100*score:.0f}%")
+        print(f"  Score vs best_overall: {score_str}")
         print(f"  Elo estimate:          {elo_str}")
-        print(f"  Avg moves (eval):      {eval_stats['avg_moves']:.1f}")
-        print(f"  Draws % (eval):        {eval_stats['draws_pct']:.1f}%")
-        print(f"  Mates % (eval):        {eval_stats['mates_pct']:.1f}%")
-        print(f"  Placements %:          {eval_stats['placement_pct']:.1f}%")
-        print(f"  Pawn placements %:     {eval_stats['pawn_pct']:.2f}%")
-        print(f"  Knight placements %:   {eval_stats['knight_pct']:.2f}%")
-        print(f"  Bishop placements %:   {eval_stats['bishop_pct']:.2f}%")
-        print(f"  Rook placements %:     {eval_stats['rook_pct']:.2f}%")
-        print(f"  Queen placements %:    {eval_stats['queen_pct']:.2f}%")
+        if eval_stats:
+            print(f"  Avg moves (eval):      {eval_stats['avg_moves']:.1f}")
+            print(f"  Draws % (eval):        {eval_stats['draws_pct']:.1f}%")
+            print(f"  Mates % (eval):        {eval_stats['mates_pct']:.1f}%")
+            print(f"  Placements %:          {eval_stats['placement_pct']:.1f}%")
+            print(f"  Pawn placements %:     {eval_stats['pawn_pct']:.2f}%")
+            print(f"  Knight placements %:   {eval_stats['knight_pct']:.2f}%")
+            print(f"  Bishop placements %:   {eval_stats['bishop_pct']:.2f}%")
+            print(f"  Rook placements %:     {eval_stats['rook_pct']:.2f}%")
+            print(f"  Queen placements %:    {eval_stats['queen_pct']:.2f}%")
         print(f"{'='*40}")
 
         results.append({
@@ -465,7 +474,7 @@ def main():
             "val_acc": val_acc,
             "decisive": decisive_total,
             "decisive_pct": decisive_pct,
-            "score": score,
+            "score": score if score is not None else 0,
             "elo": model_elo,
             "time_min": iteration_time / 60,
         })
