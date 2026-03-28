@@ -1,4 +1,4 @@
-# python3 iterate.py --boards 3000 --workers 12 --iterations 1 --noise-weight 0.5 --eval-games 200
+# python3 iterate.py --resume --boards 3500 --workers 23 --iterations 5 --noise-weight 0.1
 
 # curl -fsSL https://claude.ai/install.sh | bash
 # echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
@@ -239,6 +239,12 @@ def main():
                         help="Enable gold victory during training (default: disabled)")
     parser.add_argument("--pool-fraction", type=float, default=0.25,
                         help="Fraction of self-play boards to generate using pool opponents (0-1, default: 0.25)")
+    parser.add_argument("--mcts-simulations", type=int, default=10,
+                        help="MCTS simulations per move during self-play (default: 10)")
+    parser.add_argument("--c-puct", type=float, default=1.5,
+                        help="PUCT exploration constant (default: 1.5)")
+    parser.add_argument("--gamma", type=float, default=0.99,
+                        help="Value target discount factor (default: 0.99)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -308,30 +314,33 @@ def main():
             n_pool_actual = boards_per_pool_model * len(pool_models)
             main_boards = all_boards[n_pool_actual:]
 
-            tensors_list, indices_list, ids_list = [], [], []
+            tensors_list, pol_idx_list, pol_cnt_list, val_tgt_list, ids_list = [], [], [], [], []
             decisive_total = 0
             games_total = 0
 
             if main_boards:
-                print(f"  Self-play: {len(main_boards)} boards (current model)")
-                bt, mi, gi, dec, tot = generate_training_data_parallel(
+                print(f"  Self-play: {len(main_boards)} boards (current model, MCTS n={args.mcts_simulations})")
+                bt, pi, pc, vt, gi, dec, tot = generate_training_data_parallel(
                     main_boards,
                     model_path=best_model_path,
                     games_per_board=args.games_per_board,
-                    temperature=args.temperature,
                     workers=args.workers,
-                    noise_weight=args.noise_weight,
                     gold_victory=args.gold_victory,
+                    n_simulations=args.mcts_simulations,
+                    c_puct=args.c_puct,
+                    gamma=args.gamma,
                 )
                 if bt is not None:
-                    tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
+                    tensors_list.append(bt); pol_idx_list.append(pi)
+                    pol_cnt_list.append(pc); val_tgt_list.append(vt)
+                    ids_list.append(gi)
                 decisive_total += dec
                 games_total += tot
 
             for i, pm in enumerate(pool_models):
                 pm_boards = all_boards[i * boards_per_pool_model : (i + 1) * boards_per_pool_model]
                 print(f"  Pool play:  {len(pm_boards)} boards vs {os.path.basename(pm)}")
-                bt, mi, gi, dec, tot = generate_training_data_parallel(
+                bt, pi, pc, vt, gi, dec, tot = generate_training_data_parallel(
                     pm_boards,
                     model_path=best_model_path,
                     opponent_path=pm,
@@ -340,26 +349,44 @@ def main():
                     workers=args.workers,
                     noise_weight=args.noise_weight,
                     gold_victory=args.gold_victory,
+                    n_simulations=args.mcts_simulations,
+                    c_puct=args.c_puct,
+                    gamma=args.gamma,
                 )
                 if bt is not None:
-                    tensors_list.append(bt); indices_list.append(mi); ids_list.append(gi)
+                    tensors_list.append(bt); pol_idx_list.append(pi)
+                    pol_cnt_list.append(pc); val_tgt_list.append(vt)
+                    ids_list.append(gi)
                 decisive_total += dec
                 games_total += tot
 
             if tensors_list:
-                board_tensors = np.concatenate(tensors_list, axis=0)
-                move_indices  = np.concatenate(indices_list, axis=0)
-                game_ids      = np.concatenate(ids_list,    axis=0)
+                # Pad policy arrays to the same width before concatenating
+                max_w = max(a.shape[1] for a in pol_idx_list)
+                padded_pi, padded_pc = [], []
+                for pi, pc in zip(pol_idx_list, pol_cnt_list):
+                    w = pi.shape[1]
+                    if w < max_w:
+                        pi = np.pad(pi, ((0, 0), (0, max_w - w)), constant_values=-1)
+                        pc = np.pad(pc, ((0, 0), (0, max_w - w)), constant_values=0)
+                    padded_pi.append(pi); padded_pc.append(pc)
+                board_tensors  = np.concatenate(tensors_list,  axis=0)
+                policy_indices = np.concatenate(padded_pi,     axis=0)
+                policy_counts  = np.concatenate(padded_pc,     axis=0)
+                value_targets  = np.concatenate(val_tgt_list,  axis=0)
+                game_ids       = np.concatenate(ids_list,      axis=0)
             else:
-                board_tensors = move_indices = game_ids = None
+                board_tensors = policy_indices = policy_counts = value_targets = game_ids = None
         else:
             print("  No model yet — using heuristic policy for self-play")
-            board_tensors, move_indices, game_ids, decisive_total, games_total = generate_training_data(
-                all_boards,
-                games_per_board=args.games_per_board,
-                policy_fn=make_heuristic_fn(),
-                gold_victory=args.gold_victory,
-            )
+            board_tensors, policy_indices, policy_counts, value_targets, game_ids, \
+                decisive_total, games_total = generate_training_data(
+                    all_boards,
+                    games_per_board=args.games_per_board,
+                    policy_fn=make_heuristic_fn(),
+                    gold_victory=args.gold_victory,
+                    gamma=args.gamma,
+                )
         elapsed = time.time() - t0
         print(f"  Self-play took {elapsed:.1f}s")
 
@@ -369,7 +396,8 @@ def main():
             continue
 
         data_path = os.path.join(args.save_dir, f"iter{iteration}_data.npz")
-        save_training_data(data_path, board_tensors, move_indices, game_ids)
+        save_training_data(data_path, board_tensors, policy_indices, policy_counts,
+                           value_targets, game_ids)
 
         # Train
         model = PolicyNetwork().to(device)
@@ -379,7 +407,7 @@ def main():
 
         iter_checkpoint = os.path.join(args.save_dir, f"iter{iteration}_model.pt")
         model, val_loss, val_acc = run_training(
-            board_tensors, move_indices, device,
+            board_tensors, policy_indices, policy_counts, value_targets, device,
             game_ids=game_ids,
             model=model,
             epochs=args.epochs,

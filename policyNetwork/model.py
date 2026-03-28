@@ -36,23 +36,42 @@ class PolicyNetwork(nn.Module):
         )
 
         # Policy head
-        self.conv_out = nn.Sequential(
+        self.policy_conv = nn.Sequential(
             nn.Conv2d(num_filters, 32, 1),
             nn.ReLU(),
         )
         flat_p = 32 * board_size * board_size
-        self.fc = nn.Sequential(
+        self.policy_fc = nn.Sequential(
             nn.Linear(flat_p, 256),
             nn.ReLU(),
             nn.Linear(256, num_actions),
         )
 
+        # Value head
+        self.value_conv = nn.Sequential(
+            nn.Conv2d(num_filters, 8, 1),
+            nn.ReLU(),
+        )
+        flat_v = 8 * board_size * board_size
+        self.value_fc = nn.Sequential(
+            nn.Linear(flat_v, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Tanh(),
+        )
+
     def forward(self, x):
         x = self.conv_in(x)
         x = self.res_blocks(x)
-        p = self.conv_out(x)
+        # Policy head
+        p = self.policy_conv(x)
         p = p.view(p.size(0), -1)
-        return self.fc(p)
+        p = self.policy_fc(p)
+        # Value head
+        v = self.value_conv(x)
+        v = v.view(v.size(0), -1)
+        v = self.value_fc(v).squeeze(1)
+        return p, v
 
     def param_count(self):
         return sum(p.numel() for p in self.parameters())
@@ -63,6 +82,7 @@ if __name__ == "__main__":
     print(f"Parameters: {model.param_count():,}")
 
     dummy = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
-    policy = model(dummy)
+    policy, value = model(dummy)
     print(f"Input shape:         {dummy.shape}")
     print(f"Policy output shape: {policy.shape}  (expected: (1, {NUM_ACTIONS}))")
+    print(f"Value output shape:  {value.shape}   (expected: (1,))")

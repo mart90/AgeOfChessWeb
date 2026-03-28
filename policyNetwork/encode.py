@@ -125,3 +125,39 @@ def augment_180(encoded, move_idx):
         aug_idx = NUM_MOVE_ACTIONS + piece_idx * NUM_SQUARES + (NUM_SQUARES - 1 - dest_id)
 
     return aug, aug_idx
+
+
+def augment_180_multi(encoded, indices, counts):
+    """Rotate 180° and swap colors for a visit distribution (list of move indices + counts).
+    Returns (aug_encoded, aug_indices, counts). Counts are unchanged.
+    """
+    aug = encoded.copy()
+    aug = np.flip(np.flip(aug, axis=1), axis=2).copy()
+
+    white_planes = aug[0:6].copy()
+    aug[0:6] = aug[6:12]
+    aug[6:12] = white_planes
+
+    mine_white = aug[16].copy()
+    aug[16] = aug[17]
+    aug[17] = mine_white
+
+    aug[18] = 1.0 - aug[18]
+
+    gold_white = aug[19].copy()
+    aug[19] = aug[20]
+    aug[20] = gold_white
+
+    aug_indices = []
+    for move_idx in indices:
+        if move_idx < NUM_MOVE_ACTIONS:
+            from_id = move_idx // NUM_SQUARES
+            to_id = move_idx % NUM_SQUARES
+            aug_indices.append((NUM_SQUARES - 1 - from_id) * NUM_SQUARES + (NUM_SQUARES - 1 - to_id))
+        else:
+            offset = move_idx - NUM_MOVE_ACTIONS
+            piece_idx = offset // NUM_SQUARES
+            dest_id = offset % NUM_SQUARES
+            aug_indices.append(NUM_MOVE_ACTIONS + piece_idx * NUM_SQUARES + (NUM_SQUARES - 1 - dest_id))
+
+    return aug, aug_indices, list(counts)
