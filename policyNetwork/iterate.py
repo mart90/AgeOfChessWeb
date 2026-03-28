@@ -237,7 +237,7 @@ def main():
                         help="Fraction of heuristic noise to mix into policy (0-1, 0 = off)")
     parser.add_argument("--gold-victory", action="store_true",
                         help="Enable gold victory during training (default: disabled)")
-    parser.add_argument("--pool-fraction", type=float, default=0.25,
+    parser.add_argument("--pool-fraction", type=float, default=0,
                         help="Fraction of self-play boards to generate using pool opponents (0-1, default: 0.25)")
     parser.add_argument("--mcts-simulations", type=int, default=10,
                         help="MCTS simulations per move during self-play (default: 10)")
