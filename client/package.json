@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:engine": "cd ../engine && cargo build --release --lib --target wasm32-unknown-unknown && node -e \"require('fs').copyFileSync('target/wasm32-unknown-unknown/release/goldrush_engine.wasm', '../client/src/lib/engine/goldrush_engine.wasm')\"",
     "preview": "vite preview"
   },
   "devDependencies": {

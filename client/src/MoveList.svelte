@@ -12,6 +12,7 @@
    *     onHoverMove – ({from?,to}|null) => void
    *     onNavigate  – tree mode: (MoveNode) => void
    *                   flat mode: ('start'|'prev'|'next'|'end'|number) => void
+   *     belowNav    – optional snippet rendered between the nav buttons and the list
    */
   let {
     rootNode     = null,
@@ -22,6 +23,7 @@
     replayMode   = false,
     onHoverMove  = null,
     onNavigate   = null,
+    belowNav     = null,
   } = $props();
 
   // ── Notation parsing (flat mode + hover) ─────────────────────────────────
@@ -118,10 +120,9 @@
 
   // ── Tree mode nav helpers ─────────────────────────────────────────────────
 
+  // The root node holds the starting position (before the first move)
   function treeNavStart() {
-    let n = rootNode;
-    if (n?.children[0]) n = n.children[0];
-    onNavigate?.(n);
+    onNavigate?.(rootNode);
   }
   function treeNavEnd() {
     let n = activeNode ?? rootNode;
@@ -146,6 +147,7 @@
     {/if}
   </div>
 {/if}
+{#if belowNav}{@render belowNav()}{/if}
 
 <!-- ── Recursive variation renderer ─────────────────────────────────────── -->
 <!--
@@ -270,34 +272,35 @@
     display: flex;
     gap: 0.25rem;
     padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid #2a2a4a;
-    background: #1e1e38;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
     flex-shrink: 0;
   }
   .nav-btn {
     flex: 1;
     padding: 0.4rem 0;
-    background: #2d2d4a;
-    border: 1px solid #3a3a5a;
-    color: #ccc;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    color: var(--fg-2);
     border-radius: 4px;
     font-size: 0.9rem;
   }
-  .nav-btn:hover { background: #3a3a6a; color: #fff; }
+  .nav-btn:hover { background: var(--surface-3); color: #fff; }
 
   .move-list {
     flex: 1;
     overflow-y: auto;
     padding: 0.4rem 0;
     font-size: 0.88rem;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     scrollbar-width: thin;
-    scrollbar-color: #3a3a6a #1a1a30;
+    scrollbar-color: var(--surface-3) var(--bg);
   }
   .move-list::-webkit-scrollbar { width: 6px; }
-  .move-list::-webkit-scrollbar-track { background: #1a1a30; }
-  .move-list::-webkit-scrollbar-thumb { background: #3a3a6a; border-radius: 3px; }
-  .move-list::-webkit-scrollbar-thumb:hover { background: #5a5a9a; }
+  .move-list::-webkit-scrollbar-track { background: var(--bg); }
+  .move-list::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 3px; }
+  .move-list::-webkit-scrollbar-thumb:hover { background: var(--faint); }
 
   /* ── Tree mode ── */
   .tree-flow {
@@ -313,21 +316,21 @@
   .tree-row:hover { background: rgba(255,255,255,0.04); }
 
   .num-n {
-    color: #666;
+    color: var(--faint);
     user-select: none;
     text-align: right;
     padding-right: 0.3em;
   }
   .move-dots {
-    color: #555;
+    color: var(--faint);
     user-select: none;
     padding: 0.12rem 0.35rem;
   }
 
   .var-block {
     display: block;
-    background: #252545;
-    border-left: 2px solid #3a3a6a;
+    background: var(--surface-2);
+    border-left: 2px solid var(--accent);
     padding: 0.1rem 0.4rem;
     margin: 0.15rem 0.2rem;
     border-radius: 2px;
@@ -344,7 +347,7 @@
 
   /* ── Shared ── */
   .move-num {
-    color: #666;
+    color: var(--faint);
     user-select: none;
     margin-right: 0.1em;
     /* flat mode */
@@ -356,21 +359,22 @@
     padding: 0.12rem 0.35rem;
     border-radius: 3px;
     cursor: pointer;
-    color: #ccc;
+    color: var(--fg-2);
     white-space: nowrap;
     background: none;
     border: none;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: inherit;
     text-align: left;
   }
   /* flat mode: tokens fill their column */
   .move-row .move-token { flex: 1; }
 
-  .move-token:hover         { background: rgba(123, 140, 222, 0.25); color: #fff; }
-  .move-token.active        { background: rgba(123, 140, 222, 0.4);  color: #fff; font-weight: 600; }
-  .move-token.variation-move { color: #aaa; }
+  .move-token:hover         { background: rgba(216, 166, 74, 0.25); color: #fff; }
+  .move-token.active        { background: rgba(216, 166, 74, 0.4);  color: #fff; font-weight: 600; }
+  .move-token.variation-move { color: var(--muted); }
   .move-token.variation-move:hover { color: #fff; }
 
-  .empty { padding: 0.5rem 0.75rem; color: #555; font-style: italic; display: block; }
+  .empty { padding: 0.5rem 0.75rem; color: var(--faint); font-style: italic; display: block; }
 </style>

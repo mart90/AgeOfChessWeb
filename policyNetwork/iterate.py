@@ -243,8 +243,8 @@ def main():
                         help="MCTS simulations per move during self-play (default: 10)")
     parser.add_argument("--c-puct", type=float, default=1.5,
                         help="PUCT exploration constant (default: 1.5)")
-    parser.add_argument("--gamma", type=float, default=0.99,
-                        help="Value target discount factor (default: 0.99)")
+    parser.add_argument("--gamma", type=float, default=1.0,
+                        help="Value target discount factor (default: 1.0, no discounting)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { createGame, getMyGames, getGameToken, cancelChallenge, getOpenLobbies, joinLobby } from './lib/api.js';
+  import { createGame, createComputerGame, getMyGames, getGameToken, cancelChallenge, getOpenLobbies, joinLobby } from './lib/api.js';
+  import { COMPUTER_LEVELS } from './lib/engine/levels.js';
   import { navigate }   from './lib/navigate.js';
   import { startMatchmakingHub, stopMatchmakingHub } from './lib/matchmakingHub.js';
   import { authState } from './lib/auth.svelte.js';
@@ -38,8 +39,9 @@
   }
   const _ap = getStored('autopair_settings', {});
   const _lb = getStored('lobby_settings', {});
+  const _cp = getStored('computer_settings', {});
 
-  let tab           = $state(authState.token ? 'autopair' : 'lobby');  // 'autopair' | 'lobby'
+  let tab           = $state(authState.token ? 'autopair' : 'lobby');  // 'autopair' | 'lobby' | 'computer'
   let selectedMode  = $state(_lb.selectedMode ?? 5);
   let boardSize     = $state(_lb.boardSize ?? 10);
   let boardSizeMin  = $state(_ap.boardSizeMin ?? 8);
@@ -49,13 +51,14 @@
 
   const trackGradient = $derived.by(() => {
     const pct = (v) => ((v - 6) / 10) * 100;
-    return `background: linear-gradient(to right, #3a3a5a ${pct(boardSizeMin)}%, #7b8cde ${pct(boardSizeMin)}%, #7b8cde ${pct(boardSizeMax)}%, #3a3a5a ${pct(boardSizeMax)}%)`;
+    return `background: linear-gradient(to right, var(--line-strong) ${pct(boardSizeMin)}%, var(--accent) ${pct(boardSizeMin)}%, var(--accent) ${pct(boardSizeMax)}%, var(--line-strong) ${pct(boardSizeMax)}%)`;
   });
 
   // ── Create lobby ─────────────────────────────────────────────────────────
 
   let biddingEnabled = $state(_lb.biddingEnabled ?? false);
   let isPrivate      = $state(_lb.isPrivate ?? false);
+  let isRanked       = $state(_lb.isRanked ?? true);
   let mapSeed        = $state('');
   let creating       = $state(false);
   let lobbyError     = $state('');
@@ -81,7 +84,7 @@
     try {
       const modeSettings = MODES[selectedMode].settings;
       const trimmedSeed = mapSeed.trim() || null;
-      const settings = { ...modeSettings, boardSize, biddingEnabled, mapMode, mapSeed: trimmedSeed, isPrivate: authState.token ? isPrivate : false };
+      const settings = { ...modeSettings, boardSize, biddingEnabled, mapMode, mapSeed: trimmedSeed, isPrivate: authState.token ? isPrivate : false, isRanked };
       const { gameId, whitePlayerToken, inviteUrl: serverInviteUrl } = await createGame(settings);
       const serverUrl = new URL(serverInviteUrl);
       const inviteUrl = window.location.origin + serverUrl.pathname + serverUrl.search;
@@ -93,6 +96,36 @@
       lobbyError = String(e.message ?? e);
     } finally {
       creating = false;
+    }
+  }
+
+  // ── Play vs computer ───────────────────────────────────────────────────────
+  // Board settings are shared with the "Create lobby" tab. Always unranked and untimed.
+
+  let computerLevel = $state(_cp.level ?? 3);
+  let computerColor = $state(_cp.color ?? 'white');  // the player's colour: 'white' | 'black' | 'random'
+  let computerBidding = $state(_cp.bidding ?? false);  // bid for colours (decides colours instead of computerColor)
+  let startingComputerGame = $state(false);
+  let computerError = $state('');
+
+  $effect(() => {
+    localStorage.setItem('computer_settings', JSON.stringify({ level: computerLevel, color: computerColor, bidding: computerBidding }));
+  });
+
+  async function handlePlayComputer() {
+    startingComputerGame = true;
+    computerError = '';
+    try {
+      const { gameId, playerToken, isWhite } = await createComputerGame({
+        boardSize, mapMode, mapSeed: mapSeed.trim() || null, level: computerLevel, color: computerColor, biddingEnabled: computerBidding,
+      });
+      localStorage.setItem(`token_${gameId}`, playerToken);
+      localStorage.setItem(`color_${gameId}`, isWhite ? 'white' : 'black');
+      navigate(`/game/${gameId}`);
+    } catch (e) {
+      computerError = String(e.message ?? e);
+    } finally {
+      startingComputerGame = false;
     }
   }
 
@@ -114,7 +147,7 @@
     localStorage.setItem('autopair_settings', JSON.stringify({ autoTimeSel, biddingPref, boardSizeMin, boardSizeMax, mapModePref }));
   });
   $effect(() => {
-    localStorage.setItem('lobby_settings', JSON.stringify({ selectedMode, boardSize, biddingEnabled, mapMode, isPrivate }));
+    localStorage.setItem('lobby_settings', JSON.stringify({ selectedMode, boardSize, biddingEnabled, mapMode, isPrivate, isRanked }));
   });
   let queueing      = $state(false);
   let queueCount    = $state(0);
@@ -171,8 +204,9 @@
   onMount(async () => {
     if (authState.token) {
       try { myGames = await getMyGames(); } catch { /* ignore */ }
-      try { openLobbies = await getOpenLobbies(); } catch { /* ignore */ }
     }
+    // Everyone sees unranked public lobbies; logged-in users also ranked ones (server decides)
+    try { openLobbies = await getOpenLobbies(); } catch { /* ignore */ }
   });
 
   async function handleJoinLobby(lobby) {
@@ -272,10 +306,29 @@
       class:active={tab === 'lobby'}
       onclick={() => { if (queueing) cancelQueue(); tab = 'lobby'; }}
     >Create lobby</button>
+    <button
+      class="tab"
+      class:active={tab === 'computer'}
+      onclick={() => { if (queueing) cancelQueue(); tab = 'computer'; }}
+    >Play vs computer</button>
   </div>
 
   <!-- Settings panel (shared) -->
   <div class="panel">
+    <!-- Computer level (replaces time control on the computer tab) -->
+    {#if tab === 'computer'}
+      <div class="tc-group">
+        <div class="section-label">Computer level</div>
+        <div class="modes">
+          {#each COMPUTER_LEVELS as l}
+            <button class="mode-btn level-btn" class:selected={computerLevel === l.level} onclick={() => computerLevel = l.level}>
+              <span>Level {l.level}</span>
+              <span class="level-elo">~{l.elo}</span>
+            </button>
+          {/each}
+        </div>
+      </div>
+    {:else}
     <!-- Time control -->
     <div class="time-control-grid">
       {#each MODE_GROUPS as group}
@@ -294,6 +347,8 @@
       {/each}
     </div>
 
+    {/if}
+
     <!-- Time control category flexibility (autopair only) -->
     {#if tab === 'autopair'}
       <div class="tc-group">
@@ -307,7 +362,7 @@
     {/if}
 
     <!-- Board size -->
-    {#if tab === 'lobby'}
+    {#if tab !== 'autopair'}
       <div class="option-row">
         <label for="board-size">Board size: <strong>{boardSize}×{boardSize}</strong></label>
         <input id="board-size" type="range" min="6" max="16" step="2" bind:value={boardSize} disabled={seedActive && seedValid} />
@@ -337,11 +392,32 @@
           Bid for colors
         </label>
         {#if authState.token}
-          <label class="checkbox-label">
-            <input type="checkbox" bind:checked={isPrivate} />
-            Private
-          </label>
+          <span class="checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" bind:checked={isRanked} />
+              Ranked
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" bind:checked={isPrivate} />
+              Private
+            </label>
+          </span>
         {/if}
+      </div>
+    {:else if tab === 'computer'}
+      <div class="option-row">
+        <label class="checkbox-label">
+          <input type="checkbox" bind:checked={computerBidding} />
+          Bid for colors
+        </label>
+      </div>
+      <div class="option-row">
+        <label for="computer-color">Your color</label>
+        <select id="computer-color" bind:value={computerColor} disabled={computerBidding} title={computerBidding ? 'Decided by bidding' : ''}>
+          <option value="white">White</option>
+          <option value="black">Black</option>
+          <option value="random">Random</option>
+        </select>
       </div>
     {:else}
       <div class="option-row">
@@ -355,7 +431,7 @@
     {/if}
 
     <!-- Map layout -->
-    {#if tab === 'lobby'}
+    {#if tab !== 'autopair'}
       <div class="option-row">
         <label for="map-mode">Board generation</label>
         <select id="map-mode" bind:value={mapMode} disabled={seedActive && seedValid}>
@@ -395,6 +471,13 @@
         {creating ? 'Creating…' : 'Create game'}
       </button>
 
+    {:else if tab === 'computer'}
+      {#if computerError}<p class="error">{computerError}</p>{/if}
+      <p class="hint">Games against the computer are unranked and have no timer.</p>
+      <button class="action-btn" onclick={handlePlayComputer} disabled={startingComputerGame || !seedValid}>
+        {startingComputerGame ? 'Starting…' : 'Play'}
+      </button>
+
     {:else}
       {#if !authState.token}
         <p class="login-prompt">
@@ -419,8 +502,8 @@
     {/if}
   </div>
 
-  <!-- Open lobbies (for logged-in users) -->
-  {#if authState.token && openLobbies.length > 0}
+  <!-- Open lobbies (unranked: everyone; ranked: logged-in users; private: never) -->
+  {#if openLobbies.length > 0}
     <div class="ongoing-section open-lobbies-section">
       <div class="ongoing-label">Open lobbies</div>
       <div class="ongoing-list">
@@ -432,6 +515,7 @@
             <span class="lobby-meta">
               <span class="ongoing-tc">{lobbyTimeLabel(lobby)}</span>
               <span class="ongoing-tc">{lobby.boardSize}×{lobby.boardSize}</span>
+              {#if lobby.isRanked === false}<span class="unranked-tag">Unranked</span>{/if}
               {#if lobby.isFullRandom}<span class="map-icon" title="Full random">🎲</span>{/if}
               {#if lobby.mapSeed}
                 <button
@@ -462,7 +546,7 @@
   /* ── Tabs ── */
   .tabs {
     display: flex;
-    border-bottom: 2px solid #2a2a4a;
+    border-bottom: 2px solid var(--line);
     width: 100%;
     max-width: 660px;
   }
@@ -471,16 +555,16 @@
     padding: 0.75rem 1rem;
     background: none;
     border: none;
-    color: #888;
+    color: var(--muted);
     font-size: 1rem;
     border-bottom: 2px solid transparent;
     margin-bottom: -2px;
   }
   .tab.active {
-    color: #eee;
-    border-bottom-color: #7b8cde;
+    color: var(--fg);
+    border-bottom-color: var(--accent);
   }
-  .tab:hover:not(.active) { color: #ccc; }
+  .tab:hover:not(.active) { color: var(--fg-2); }
 
   /* ── Settings panel ── */
   .panel {
@@ -490,8 +574,8 @@
     width: 100%;
     max-width: 660px;
     padding: 1.75rem 2rem 1.5rem;
-    background: #22223a;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-top: none;
     border-radius: 0 0 8px 8px;
   }
@@ -510,24 +594,26 @@
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.07em;
-    color: #666;
+    color: var(--faint);
   }
 
   .modes {
     display: flex;
+    flex-wrap: wrap;   /* narrow screens: extra buttons go to a second row */
     gap: 0.4rem;
   }
   .mode-btn {
-    flex: 1;
+    flex: 1 1 0;              /* equal widths when they fit… */
+    min-width: max-content;   /* …and wrap instead of overflowing when they don't */
     padding: 0.55rem 0.5rem;
-    background: #2d2d4a;
-    border: 2px solid #3a3a5a;
-    color: #ccc;
+    background: var(--surface-2);
+    border: 2px solid var(--line-strong);
+    color: var(--fg-2);
     border-radius: 6px;
     font-size: 0.95rem;
     white-space: nowrap;
   }
-  .mode-btn.selected { border-color: #7b8cde; background: #3a3a6a; color: #eee; }
+  .mode-btn.selected { border-color: var(--accent); background: var(--surface-3); color: var(--fg); }
 
   .option-row {
     display: flex;
@@ -535,9 +621,9 @@
     justify-content: space-between;
     gap: 0.75rem;
   }
-  .option-row label { font-size: 0.95rem; color: #ccc; white-space: nowrap; }
-  .option-row input[type="range"] { flex: 1; accent-color: #7b8cde; }
-  .board-range-label { font-size: 0.95rem; color: #ccc; white-space: nowrap; }
+  .option-row label { font-size: 0.95rem; color: var(--fg-2); white-space: nowrap; }
+  .option-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .board-range-label { font-size: 0.95rem; color: var(--fg-2); white-space: nowrap; }
 
   .dual-range {
     position: relative;
@@ -572,33 +658,41 @@
     pointer-events: all;
     width: 16px; height: 16px;
     border-radius: 50%;
-    background: #7b8cde;
+    background: var(--accent);
     cursor: pointer;
     margin-top: -6px;
     border: none;
-    box-shadow: 0 0 0 2px #22223a;
+    box-shadow: 0 0 0 2px var(--surface);
   }
   .dual-range input[type="range"]::-moz-range-thumb {
     pointer-events: all;
     width: 12px; height: 12px;
     border-radius: 50%;
-    background: #7b8cde;
+    background: var(--accent);
     cursor: pointer;
-    border: 2px solid #22223a;
+    border: 2px solid var(--surface);
+  }
+  .checkbox-group { display: flex; gap: 1rem; }
+  .level-btn { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; white-space: nowrap; }
+  .level-elo { font-size: 0.75rem; color: var(--muted); }
+  .mode-btn.selected .level-elo { color: var(--fg-2); }
+  .hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  .unranked-tag {
+    font-size: 0.72rem; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 0.35rem;
   }
   .checkbox-label {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     font-size: 0.95rem;
-    color: #ccc;
+    color: var(--fg-2);
     cursor: pointer;
   }
 
   select {
-    background: #2d2d4a;
-    border: 1px solid #3a3a5a;
-    color: #eee;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    color: var(--fg);
     border-radius: 5px;
     padding: 0.35rem 0.6rem;
     font-size: 0.95rem;
@@ -607,7 +701,7 @@
   .action-btn {
     padding: 0.8rem;
     font-size: 1.05rem;
-    background: #4a6fa5;
+    background: var(--button);
     color: #fff;
     border: none;
     border-radius: 7px;
@@ -628,17 +722,17 @@
     display: flex;
     align-items: center;
     gap: 0.7rem;
-    color: #ccc;
+    color: var(--fg-2);
     font-size: 0.9rem;
     flex-wrap: wrap;
   }
-  .queue-count { color: #7b8cde; font-size: 0.85rem; }
+  .queue-count { color: var(--accent); font-size: 0.85rem; }
 
   .spinner {
     width: 18px;
     height: 18px;
-    border: 2px solid #444;
-    border-top-color: #7b8cde;
+    border: 2px solid var(--line-strong);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     flex-shrink: 0;
@@ -647,10 +741,10 @@
 
   .seed-row input[type="text"] {
     flex: 1;
-    background: #2d2d4a;
-    border: 1px solid #3a3a5a;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
     border-radius: 5px;
-    color: #eee;
+    color: var(--fg);
     padding: 0.35rem 0.6rem;
     font-size: 0.88rem;
     font-family: monospace;
@@ -666,14 +760,14 @@
   .error { color: #e07070; font-size: 0.85rem; margin: 0; }
 
   .login-prompt {
-    color: #888;
+    color: var(--muted);
     font-size: 0.9rem;
     margin: 0.25rem 0;
   }
   .link-btn {
     background: none;
     border: none;
-    color: #7b8cde;
+    color: var(--accent);
     text-decoration: underline;
     font-size: inherit;
     padding: 0;
@@ -690,7 +784,7 @@
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.07em;
-    color: #666;
+    color: var(--faint);
     margin-bottom: 0.4rem;
   }
   .ongoing-list {
@@ -705,14 +799,14 @@
     gap: 0.75rem;
     width: 100%;
     padding: 0.65rem 1rem;
-    background: #22223a;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 7px;
-    color: #eee;
+    color: var(--fg);
     font-size: 0.92rem;
     text-align: left;
   }
-  .ongoing-card:hover { background: #2a2a4a; }
+  .ongoing-card:hover { background: var(--line); }
   .ongoing-opp { font-weight: 600; }
   .ongoing-right {
     display: flex;
@@ -720,7 +814,7 @@
     gap: 0.6rem;
     flex-shrink: 0;
   }
-  .ongoing-tc { color: #888; font-size: 0.85rem; }
+  .ongoing-tc { color: var(--muted); font-size: 0.85rem; }
   .your-turn {
     font-size: 0.78rem;
     color: #7cfc00;
@@ -759,25 +853,25 @@
   }
   .seed-copy-btn {
     font-size: 0.75rem;
-    color: #666;
+    color: var(--faint);
     background: none;
-    border: 1px solid #3a3a5a;
+    border: 1px solid var(--line-strong);
     border-radius: 4px;
     padding: 0.1rem 0.4rem;
     cursor: pointer;
     font-family: monospace;
   }
-  .seed-copy-btn:hover { color: #aaa; border-color: #5a5a7a; }
+  .seed-copy-btn:hover { color: var(--muted); border-color: var(--line-strong); }
   .join-lobby-btn {
     font-size: 0.78rem;
-    color: #7b8cde;
-    background: rgba(123, 140, 222, 0.1);
-    border: 1px solid rgba(123, 140, 222, 0.35);
+    color: var(--accent);
+    background: rgba(216, 166, 74, 0.1);
+    border: 1px solid rgba(216, 166, 74, 0.35);
     border-radius: 4px;
     padding: 0.1rem 0.55rem;
     flex-shrink: 0;
   }
   .join-lobby-btn:hover {
-    background: rgba(123, 140, 222, 0.22);
+    background: rgba(216, 166, 74, 0.22);
   }
 </style>

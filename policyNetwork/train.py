@@ -262,7 +262,7 @@ def main():
     parser.add_argument("--model-file", type=str, default=None)
     parser.add_argument("--save-dir", type=str, default="checkpoints")
     parser.add_argument("--placement-bias", type=float, default=1.0)
-    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gamma", type=float, default=1.0)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -23,7 +23,17 @@ public record GameStateDto(
     /// 0 if the first move has not yet been made (clocks not running).
     /// </summary>
     long TurnStartedAt,
-    bool TimeControlEnabled
+    bool TimeControlEnabled,
+    bool IsRanked,
+    /// <summary>Computer opponent: level, side and node budget per move (null/false for human games).</summary>
+    int? ComputerLevel,
+    bool ComputerIsWhite,
+    int? ComputerNodes,
+    /// <summary>Weak computer levels: chance to play the second-best move, and the max loss (gold) allowed.</summary>
+    double ComputerMistakeRate,
+    double ComputerMistakeMaxLoss,
+    bool BiddingEnabled,
+    bool BiddingInProgress
 );
 
 public record SquareDto(
@@ -71,6 +81,14 @@ public static class GameStateDtoBuilder
             game.LastMoveTimestamp.HasValue
                 ? new DateTimeOffset(game.LastMoveTimestamp.Value, TimeSpan.Zero).ToUnixTimeMilliseconds()
                 : 0L,
-            game.TimeControlEnabled
+            game.TimeControlEnabled,
+            game.Settings.IsRanked,
+            game.Settings.ComputerLevel,
+            game.Settings.ComputerIsWhite,
+            ComputerLevels.Get(game.Settings.ComputerLevel)?.Nodes,
+            ComputerLevels.Get(game.Settings.ComputerLevel)?.MistakeRate ?? 0,
+            ComputerLevels.Get(game.Settings.ComputerLevel)?.MistakeMaxLoss ?? 0,
+            game.BiddingEnabled,
+            game.Bidding != null && !game.Bidding.BothBid
         );
 }

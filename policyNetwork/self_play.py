@@ -65,10 +65,11 @@ def check_victory(board, gold_victory=True):
     Mate detection (no legal moves) is handled separately.
     """
     if gold_victory:
-        if board.white_gold >= GOLD_VICTORY_THRESHOLD:
-            return 1
-        if board.black_gold >= GOLD_VICTORY_THRESHOLD:
-            return -1
+        # Only the player whose turn is starting can win by gold, and not while in check.
+        active_white = board.white_is_active
+        gold = board.white_gold if active_white else board.black_gold
+        if gold >= GOLD_VICTORY_THRESHOLD and not board.is_capturable(board.active_king_square(), not active_white):
+            return 1 if active_white else -1
     return None
 
 

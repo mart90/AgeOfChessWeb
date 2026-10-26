@@ -210,9 +210,12 @@ class Board(object):
                     continue
                 possible_placements.append((P, piece, dest_id, self.white_is_active))
                 squares_visited.append(dest_id)
-            if piece == "p":
+            # Pawns: also next to any non-pawn piece. Rooks, bishops, knights: also next to a queen.
+            if piece in ("p", "r", "b", "n"):
                 for piece_square in piece_squares:
                     if piece_square.piece_type == "p" or piece_square.piece_type == "k":
+                        continue
+                    if piece != "p" and piece_square.piece_type != "q":
                         continue
                     ps_neighbors = self._neighbors[piece_square.id]
                     for direction in range(8):
@@ -222,7 +225,7 @@ class Board(object):
                         dest_square = self.squares[dest_id]
                         if dest_square.terrain_type == "r" or dest_square.piece_type is not None or dest_square.has_treasure:
                             continue
-                        possible_placements.append((P, "p", dest_id, self.white_is_active))
+                        possible_placements.append((P, piece, dest_id, self.white_is_active))
                         squares_visited.append(dest_id)
 
         for placement in possible_placements:

@@ -24,6 +24,16 @@ export async function createGame(options = {}) {
   return res.json(); // { gameId, whitePlayerToken, inviteUrl }
 }
 
+/** Start a game vs the computer: { boardSize, mapMode, mapSeed, level, color: 'white'|'black'|'random' }. */
+export async function createComputerGame(options = {}) {
+  const res = await authFetch('/api/game/computer', {
+    method: 'POST',
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json(); // { gameId, playerToken, isWhite }
+}
+
 export async function getMyGames() {
   const res = await authFetch('/api/game/my');
   if (!res.ok) return [];

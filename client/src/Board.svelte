@@ -1,6 +1,10 @@
 <script>
   import { onMount } from 'svelte';
-  import { MINE_INCOME } from './lib/constants.js';
+  import { settings } from './lib/settings.svelte.js';
+  import {
+    getBoardTheme, pieceSrc, themeImageSrcs,
+    drawSquare, drawTerrain, drawTreasure, drawMineBadge,
+  } from './lib/boardTheme.js';
 
   /**
    * Props:
@@ -16,6 +20,8 @@
    *   onDropOnBoard(x, y)                     – pointer-up anywhere on canvas
    *   onHoverSquare(x, y | null)              – pointer-move (null = left canvas)
    *   onSquareClick(x, y)                     – tap/click without drag
+   *
+   * The look (square theme, artwork) comes from lib/boardTheme.js and settings.boardTheme.
    */
   let {
     squares       = [],
@@ -24,9 +30,10 @@
     selectedSquare  = null,
     legalDests      = [],
     dragOverSquare  = null,
-    hoverSquares    = [],   // {x,y}[] highlighted from move-list hover
-    premoveSquares  = [],   // {x,y}[] highlighted for premove
+    hoverSquares    = [],   // {x,y}[] from move-list hover: [from, to] → black arrow, [to] (placement) → black ring
+    premoveSquares  = [],   // premove: [from, to] → yellow arrow, [to] (placement) → yellow ring
     lastMoveSquares = [],   // {x,y}[] from/to of the last move played
+    suggestion      = null, // engine move to show: { type:'m', fromPos, toPos } | { type:'p', pieceType, toPos, isWhite }
     showCoords      = true,
     onPieceGrabbed  = null,
     onDropOnBoard   = null,
@@ -36,38 +43,27 @@
   } = $props();
 
   let canvas = $state(null);
-  const images = new Map();
-
-  // ── Sprite helpers ──────────────────────────────────────────────────────
-
-  function getPieceSprite(piece) {
-    if (piece.type === 'Treasure') return '/assets/objects/treasure.png';
-    const c = piece.isWhite ? 'w' : 'b';
-    const n = piece.type.replace(/^(White|Black)/, '').toLowerCase();
-    return `/assets/objects/${c}_${n}.png`;
-  }
-
-  function getSquareSprite(type) {
-    return `/assets/squares/${type.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '')}.png`;
-  }
+  const theme = $derived(getBoardTheme(settings.boardTheme));
 
   // ── Image cache ─────────────────────────────────────────────────────────
+
+  const images = new Map();   // src → Image | null (failed)
+  const img = (src) => images.get(src) ?? null;
 
   function loadImage(src) {
     if (images.has(src)) return Promise.resolve(images.get(src));
     return new Promise(resolve => {
-      const img = new Image();
-      img.onload  = () => { images.set(src, img);  resolve(img);  };
-      img.onerror = () => { images.set(src, null); resolve(null); };
-      img.src = src;
+      const im = new Image();
+      im.onload  = () => { images.set(src, im);   resolve(im);   };
+      im.onerror = () => { images.set(src, null); resolve(null); };
+      im.src = src;
     });
   }
 
   async function preloadAll() {
-    const srcs = new Set();
+    const srcs = new Set(themeImageSrcs(theme));
     for (const sq of squares) {
-      srcs.add(getSquareSprite(sq.type));
-      if (sq.piece) srcs.add(getPieceSprite(sq.piece));
+      if (sq.piece && sq.piece.type !== 'Treasure') srcs.add(pieceSrc(sq.piece.type, sq.piece.isWhite));
     }
     await Promise.all([...srcs].map(loadImage));
   }
@@ -75,7 +71,7 @@
   // ── Highlights ──────────────────────────────────────────────────────────
 
   const SERVER_HIGHLIGHTS = {
-    Red:    'rgba(220,  50,  50, 0.85)',
+    Red:    'rgba(220,  50,  50, 0.75)',
     Green:  'rgba( 50, 200,  50, 0.50)',
     Blue:   'rgba( 50, 100, 255, 0.45)',
     Purple: 'rgba(160,  50, 220, 0.50)',
@@ -83,8 +79,6 @@
   };
 
   const legalSet    = $derived(new Set(legalDests.map(d => `${d.x},${d.y}`)));
-  const hoverSet    = $derived(new Set(hoverSquares.map(d => `${d.x},${d.y}`)));
-  const premoveSet  = $derived(new Set(premoveSquares.map(d => `${d.x},${d.y}`)));
   const lastMoveSet = $derived(new Set(lastMoveSquares.map(d => `${d.x},${d.y}`)));
 
   // ── Draw ────────────────────────────────────────────────────────────────
@@ -101,7 +95,8 @@
     canvas.height = Math.round(cssW * dpr);
 
     const ctx  = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
     // Integer pixel rect for grid cell — compute each edge independently so
     // adjacent cells share exactly one pixel boundary (no gaps, no overlaps).
@@ -117,99 +112,78 @@
       const px = ex(dx), py = ey(dy);
       const cw = ex(dx + 1) - px;   // this cell's pixel width
       const ch = ey(dy + 1) - py;   // this cell's pixel height (may differ by 1px from cw)
+      const key = `${sq.x},${sq.y}`;
 
-      // Background tile
-      const img = images.get(getSquareSprite(sq.type));
-      if (img) ctx.drawImage(img, px, py, cw, ch);
-      else { ctx.fillStyle = '#556677'; ctx.fillRect(px, py, cw, ch); }
+      // Square background (a1 is dark)
+      drawSquare(ctx, theme, img, (sq.x + sq.y) % 2 === 0, sq.x, sq.y, px, py, cw, ch);
 
       // Last-move highlight (subtle warm yellow, drawn early so other overlays sit on top)
-      if (lastMoveSet.has(`${sq.x},${sq.y}`)) {
-        ctx.fillStyle = 'rgba(200, 175, 0, 0.45)';
-        ctx.fillRect(px, py, cw, ch);
-      }
-
-      // Premove highlight (blue)
-      if (premoveSet.has(`${sq.x},${sq.y}`)) {
-        ctx.fillStyle = 'rgba(50, 100, 255, 0.45)';
+      if (lastMoveSet.has(key)) {
+        ctx.fillStyle = 'rgba(220, 190, 40, 0.42)';
         ctx.fillRect(px, py, cw, ch);
       }
 
       // Server highlight (check, etc.)
-      let sc = SERVER_HIGHLIGHTS[sq.highlight];
-      if (sc && sq.highlight === 'Red') {
-        const isDirt = sq.type.includes('Dirt');
-        if (isDirt) {
-          // Less intense red on dirt squares
-          sc = 'rgba(220, 50, 50, 0.55)';
-        }
-      }
+      const sc = SERVER_HIGHLIGHTS[sq.highlight];
       if (sc) { ctx.fillStyle = sc; ctx.fillRect(px, py, cw, ch); }
 
-      // Legal destination hint (green dot)
-      if (legalSet.has(`${sq.x},${sq.y}`)) {
-        ctx.fillStyle = 'rgba(50, 220, 50, 0.45)';
+      // Legal destination tint (the dot is drawn above the terrain icon, below)
+      if (legalSet.has(key)) {
+        ctx.fillStyle = 'rgba(50, 220, 50, 0.35)';
         ctx.fillRect(px, py, cw, ch);
-        if (!sq.piece) {
-          ctx.fillStyle = 'rgba(30, 180, 30, 0.7)';
-          ctx.beginPath();
-          ctx.arc(px + cw / 2, py + ch / 2, Math.min(cw, ch) * 0.18, 0, Math.PI * 2);
-          ctx.fill();
-        }
       }
 
       // Selected square (yellow)
       if (selectedSquare && sq.x === selectedSquare.x && sq.y === selectedSquare.y) {
-        ctx.fillStyle = 'rgba(255, 220, 0, 0.55)';
+        ctx.fillStyle = 'rgba(255, 220, 0, 0.5)';
         ctx.fillRect(px, py, cw, ch);
       }
 
       // Drag-over target (bright yellow outline)
       if (dragOverSquare && sq.x === dragOverSquare.x && sq.y === dragOverSquare.y) {
-        ctx.fillStyle = 'rgba(255, 255, 80, 0.45)';
+        ctx.fillStyle = 'rgba(255, 255, 80, 0.4)';
         ctx.fillRect(px, py, cw, ch);
         ctx.strokeStyle = 'rgba(255, 230, 0, 0.9)';
         ctx.lineWidth = Math.round(3 * dpr);
         ctx.strokeRect(px + 1, py + 1, cw - 2, ch - 2);
       }
 
-      // Move-list hover highlight (blue tint + outline)
-      if (hoverSet.has(`${sq.x},${sq.y}`)) {
-        ctx.fillStyle = 'rgba(60, 140, 255, 0.35)';
-        ctx.fillRect(px, py, cw, ch);
-        ctx.strokeStyle = 'rgba(80, 160, 255, 0.75)';
-        ctx.lineWidth = Math.round(2 * dpr);
-        ctx.strokeRect(px + 1, py + 1, cw - 2, ch - 2);
+      // Terrain: mountains, forests, mines
+      drawTerrain(ctx, img, sq.type, px, py, cw);
+
+      // Legal destination dot on empty squares
+      if (legalSet.has(key) && !sq.piece) {
+        ctx.fillStyle = 'rgba(30, 150, 30, 0.75)';
+        ctx.beginPath();
+        ctx.arc(px + cw / 2, py + ch / 2, Math.min(cw, ch) * 0.15, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      // Piece sprite with inset so pieces don't fill the entire cell
+      // Treasure or piece
       const isGrabbed = selectedSquare && sq.x === selectedSquare.x && sq.y === selectedSquare.y && _dragging;
-      if (sq.piece) {
-        const pi = images.get(getPieceSprite(sq.piece));
+      if (sq.piece?.type === 'Treasure') {
+        drawTreasure(ctx, img, px, py, cw);
+      } else if (sq.piece) {
+        const pi = img(pieceSrc(sq.piece.type, sq.piece.isWhite));
         if (pi) {
-          const pad = Math.round(Math.min(cw, ch) * 0.1);
+          const s = cw * 0.86;
           if (isGrabbed) ctx.globalAlpha = 0.3;
-          ctx.drawImage(pi, px + pad, py + pad, cw - pad * 2, ch - pad * 2);
+          ctx.drawImage(pi, px + (cw - s) / 2, py + (ch - s) / 2, s, s);
           if (isGrabbed) ctx.globalAlpha = 1.0;
         }
       }
 
-      // Mine income in top-right corner (colored by owner)
-      if (sq.type.endsWith('Mine') && sq.mineOwner) {
-        const sz = Math.max(7 * dpr, Math.round(Math.min(cw, ch) * 0.18));
-        ctx.font = `bold ${sz}px sans-serif`;
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'top';
-        ctx.fillStyle = sq.mineOwner === 'white' ? '#fff' : '#000';
-        ctx.fillText(`+${MINE_INCOME}`, px + cw - Math.round(3 * dpr), py + Math.round(3 * dpr));
-      }
+      // Mine owner badge (top-right), above the piece so it stays visible
+      if (sq.type.endsWith('Mine')) drawMineBadge(ctx, sq.mineOwner, px, py, cw);
     }
 
     // ── Coordinate labels ─────────────────────────────────────────────────
     if (showCoords) {
       const cellPx = canvas.width / n;
-      const fontSize = Math.max(9 * dpr, Math.round(cellPx * 0.26));
-      ctx.font = `bold ${fontSize}px sans-serif`;
+      const fontSize = Math.max(9 * dpr, Math.round(cellPx * 0.22));
+      ctx.font = `bold ${fontSize}px "Alegreya Sans", sans-serif`;
+      // Text contrasts with the square it sits on (a1 is dark)
+      const labelColor = (bx, by) => ((bx + by) % 2 === 0) ? 'rgba(255,248,235,0.88)' : 'rgba(55,38,22,0.8)';
 
       // File labels along the bottom row (right-aligned inside each cell)
       ctx.textAlign    = 'right';
@@ -217,14 +191,10 @@
       for (let dx = 0; dx < n; dx++) {
         // x=0 → 'a', x=1 → 'b', … matches Move.cs XToLetter convention.
         // For white, canvas col dx == board x. For black, board x == n-1-dx.
-        const bx   = isWhite ? dx : n - 1 - dx;
-        const file = String.fromCharCode(bx + 97);  // 'a'=x=0
-        const fx   = ex(dx + 1) - Math.round(2 * dpr);
-        const fy   = ey(n)      - Math.round(2 * dpr);
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillText(file, fx + 1, fy + 1);
-        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.fillText(file, fx, fy);
+        const bx = isWhite ? dx : n - 1 - dx;
+        const by = isWhite ? 0 : n - 1;
+        ctx.fillStyle = labelColor(bx, by);
+        ctx.fillText(String.fromCharCode(bx + 97), ex(dx + 1) - Math.round(2 * dpr), ey(n) - Math.round(2 * dpr));
       }
 
       // Rank labels along the left column (top-aligned inside each cell)
@@ -232,25 +202,123 @@
       ctx.textBaseline = 'top';
       for (let dy = 0; dy < n; dy++) {
         // Rank = board y + 1 (1-indexed). For white, board y = n-1-dy; for black, board y = dy.
-        const by   = isWhite ? n - 1 - dy : dy;
-        const rank = String(by + 1);
-        const rx   = ex(0) + Math.round(2 * dpr);
-        const ry   = ey(dy) + Math.round(2 * dpr);
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillText(rank, rx + 1, ry + 1);
-        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.fillText(rank, rx, ry);
+        const by = isWhite ? n - 1 - dy : dy;
+        const bx = isWhite ? 0 : n - 1;
+        ctx.fillStyle = labelColor(bx, by);
+        ctx.fillText(String(by + 1), ex(0) + Math.round(2 * dpr), ey(dy) + Math.round(2 * dpr));
       }
     }
+
+    drawSuggestion(ctx, n, ex, ey);
+    drawMoveMarker(ctx, n, ex, ey, premoveSquares, PREMOVE_COLOR);
+    drawMoveMarker(ctx, n, ex, ey, hoverSquares, HOVER_COLOR);
+  }
+
+  function squareCenter(p, n, ex, ey) {
+    const dx = isWhite ? p.x : n - 1 - p.x;
+    const dy = isWhite ? n - 1 - p.y : p.y;
+    return [(ex(dx) + ex(dx + 1)) / 2, (ey(dy) + ey(dy + 1)) / 2];
+  }
+
+  function drawArrow(ctx, [x1, y1], [x2, y2], cell, color) {
+    const ang  = Math.atan2(y2 - y1, x2 - x1);
+    const head = cell * 0.38;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle   = color;
+    ctx.lineWidth = cell * 0.13;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2 - Math.cos(ang) * head * 0.7, y2 - Math.sin(ang) * head * 0.7);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - head * Math.cos(ang - 0.5), y2 - head * Math.sin(ang - 0.5));
+    ctx.lineTo(x2 - head * Math.cos(ang + 0.5), y2 - head * Math.sin(ang + 0.5));
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawRing(ctx, [x, y], cell, color) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = cell * 0.07;
+    ctx.beginPath();
+    ctx.arc(x, y, cell * 0.44, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Arrow for a move ([from, to]) or ring for a placement ([to]):
+  // black for the move hovered in the move list, yellow for a premove.
+  const HOVER_COLOR   = 'rgba(20, 16, 12, 0.72)';
+  const PREMOVE_COLOR = 'rgba(240, 196, 30, 0.88)';
+  function drawMoveMarker(ctx, n, ex, ey, squaresList, color) {
+    const sqs = (squaresList ?? []).filter(Boolean);
+    if (!sqs.length) return;
+    const cell = canvas.width / n;
+    if (sqs.length >= 2) drawArrow(ctx, squareCenter(sqs[0], n, ex, ey), squareCenter(sqs[1], n, ex, ey), cell, color);
+    else drawRing(ctx, squareCenter(sqs[0], n, ex, ey), cell, color);
+  }
+
+  // Engine suggestion: arrow for a move, faded piece + ring for a placement
+  function drawSuggestion(ctx, n, ex, ey) {
+    if (!suggestion?.toPos) return;
+    const center = (p) => {
+      const dx = isWhite ? p.x : n - 1 - p.x;
+      const dy = isWhite ? n - 1 - p.y : p.y;
+      return [(ex(dx) + ex(dx + 1)) / 2, (ey(dy) + ey(dy + 1)) / 2];
+    };
+    const cell = canvas.width / n;
+    const [x2, y2] = center(suggestion.toPos);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(40, 160, 255, 0.8)';
+    ctx.fillStyle   = 'rgba(40, 160, 255, 0.8)';
+
+    if (suggestion.type === 'm' && suggestion.fromPos) {
+      const [x1, y1] = center(suggestion.fromPos);
+      const ang  = Math.atan2(y2 - y1, x2 - x1);
+      const head = cell * 0.38;
+      ctx.lineWidth = cell * 0.13;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2 - Math.cos(ang) * head * 0.7, y2 - Math.sin(ang) * head * 0.7);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - head * Math.cos(ang - 0.5), y2 - head * Math.sin(ang - 0.5));
+      ctx.lineTo(x2 - head * Math.cos(ang + 0.5), y2 - head * Math.sin(ang + 0.5));
+      ctx.closePath();
+      ctx.fill();
+    } else if (suggestion.type === 'p') {
+      const src = pieceSrc(suggestion.pieceType, suggestion.isWhite);
+      const pi = images.get(src);
+      if (pi === undefined) loadImage(src).then(draw);
+      if (pi) {
+        const size = cell * 0.8;
+        ctx.globalAlpha = 0.55;
+        ctx.drawImage(pi, x2 - size / 2, y2 - size / 2, size, size);
+        ctx.globalAlpha = 1;
+      }
+      ctx.lineWidth = cell * 0.07;
+      ctx.beginPath();
+      ctx.arc(x2, y2, cell * 0.44, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   $effect(() => {
+    void theme;
     if (squares.length && canvas) preloadAll().then(draw);
   });
 
   // Re-draw when highlights change without squares changing
   $effect(() => {
-    void legalSet; void selectedSquare; void dragOverSquare; void hoverSet; void showCoords; void premoveSet; void lastMoveSet;
+    void legalSet; void selectedSquare; void dragOverSquare; void hoverSquares; void showCoords; void premoveSquares; void lastMoveSet; void suggestion;
     draw();
   });
 
@@ -335,8 +403,6 @@
     width: 100%;
     height: auto;
     cursor: grab;
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;
     touch-action: none;
   }
   canvas:active { cursor: grabbing; }

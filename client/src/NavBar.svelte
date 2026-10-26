@@ -1,5 +1,6 @@
 <script>
   import { settings, persistSettings } from './lib/settings.svelte.js';
+  import { BOARD_THEMES } from './lib/boardTheme.js';
   import { authState, clearAuth }      from './lib/auth.svelte.js';
   import { navigate }                  from './lib/navigate.js';
   import { currentGame }               from './lib/currentGame.svelte.js';
@@ -74,13 +75,16 @@
 <nav class="navbar">
   <!-- Hamburger: mobile only -->
   <div class="nav-left">
-    <button class="hamburger-btn" onclick={toggleMenu} aria-label="Menu">☰</button>
+    <button class="hamburger-btn" onclick={toggleMenu} aria-label="Menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
+    </button>
     {#if menuOpen}
       <div class="mobile-menu">
         <button class="mobile-menu-item" onclick={() => navTo('/')}>Play</button>
         <button class="mobile-menu-item" onclick={() => navTo('/watch')}>Watch</button>
-        <button class="mobile-menu-item" onclick={() => navTo('/sandbox')}>Sandbox</button>
-        <button class="mobile-menu-item" onclick={() => navTo('/tutorial')}>Rules</button>
+        <button class="mobile-menu-item" onclick={() => navTo('/analyze')}>Analyze</button>
+        <button class="mobile-menu-item" onclick={() => navTo('/rules')}>Rules</button>
+        <button class="mobile-menu-item" onclick={() => navTo('/about')}>About</button>
       </div>
     {/if}
   </div>
@@ -101,13 +105,28 @@
 
   <div class="nav-right">
     <div class="settings-wrap">
-      <button class="icon-btn" title="Settings" onclick={toggleSettings}>⚙</button>
+      <button class="icon-btn" title="Settings" aria-label="Settings" onclick={toggleSettings}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M9.97 3.85 L10.36 1.12 L13.64 1.12 L14.03 3.85 L16.33 4.80 L18.54 3.15 L20.85 5.46 L19.20 7.67 L20.15 9.97 L22.88 10.36 L22.88 13.64 L20.15 14.03 L19.20 16.33 L20.85 18.54 L18.54 20.85 L16.33 19.20 L14.03 20.15 L13.64 22.88 L10.36 22.88 L9.97 20.15 L7.67 19.20 L5.46 20.85 L3.15 18.54 L4.80 16.33 L3.85 14.03 L1.12 13.64 L1.12 10.36 L3.85 9.97 L4.80 7.67 L3.15 5.46 L5.46 3.15 L7.67 4.80 Z M12 8.6 A3.4 3.4 0 1 0 12 15.4 A3.4 3.4 0 1 0 12 8.6 Z"/></svg>
+      </button>
       {#if settingsOpen}
         <div class="dropdown">
           <label class="dropdown-item">
             <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
             Show coordinates
           </label>
+          <div class="dropdown-item theme-item">
+            <label for="board-theme" class="volume-label">Board</label>
+            <select
+              id="board-theme"
+              class="theme-select"
+              value={settings.boardTheme}
+              onchange={(e) => { settings.boardTheme = e.currentTarget.value; persistSettings(); }}
+            >
+              {#each BOARD_THEMES as t}
+                <option value={t.id}>{t.name}</option>
+              {/each}
+            </select>
+          </div>
           <div class="dropdown-item volume-item">
             <div class="volume-label">
               Volume
@@ -169,8 +188,8 @@
     align-items: center;
     padding: 0 1rem;
     height: 46px;
-    background: #12122a;
-    border-bottom: 1px solid #2a2a4a;
+    background: #15130f;
+    border-bottom: 1px solid var(--line);
     flex-shrink: 0;
   }
 
@@ -181,23 +200,29 @@
     position: relative;
     margin-right: 0.5rem;
   }
-  .hamburger-btn {
+  /* Square icon buttons with SVG icons, so the icon is exactly centred */
+  .hamburger-btn, .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
     background: none;
     border: none;
-    color: #aaa;
-    font-size: 1.2rem;
-    padding: 0.2rem 0.4rem;
+    color: var(--muted);
     border-radius: 4px;
-    line-height: 1;
   }
-  .hamburger-btn:hover { background: #2a2a4a; color: #eee; }
+  .hamburger-btn svg { width: 22px; height: 22px; display: block; }
+  .icon-btn svg { width: 22px; height: 22px; display: block; }
+  .hamburger-btn:hover { background: var(--line); color: var(--fg); }
 
   .mobile-menu {
     position: absolute;
     top: calc(100% + 6px);
     left: 0;
-    background: #1e1e38;
-    border: 1px solid #3a3a5a;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
     border-radius: 6px;
     padding: 0.4rem 0;
     min-width: 130px;
@@ -211,11 +236,11 @@
     border: none;
     text-align: left;
     font-family: inherit;
-    font-size: 0.9rem;
-    color: #ddd;
-    padding: 0.5rem 0.9rem;
+    font-size: 1.08rem;
+    color: var(--fg);
+    padding: 0.55rem 1rem;
   }
-  .mobile-menu-item:hover { background: #2a2a4a; }
+  .mobile-menu-item:hover { background: var(--line); }
 
   /* ── Desktop nav links ── */
   .nav-center {
@@ -227,12 +252,12 @@
   .nav-link {
     background: none;
     border: none;
-    color: #aaa;
-    font-size: 0.9rem;
-    padding: 0.25rem 0.65rem;
+    color: var(--fg-2);
+    font-size: 1.08rem;
+    padding: 0.25rem 0.7rem;
     border-radius: 4px;
   }
-  .nav-link:hover { background: #2a2a4a; color: #eee; }
+  .nav-link:hover { background: var(--line); color: var(--fg); }
 
   .logo-btn {
     display: flex;
@@ -240,17 +265,18 @@
     gap: 0.45rem;
     background: none;
     border: none;
-    color: #9aaae8;
+    color: var(--fg);
     font-size: 1.15rem;
     font-weight: 700;
     padding: 0;
     cursor: pointer;
     white-space: nowrap;
   }
-  .logo-btn:hover { color: #b8c5ff; }
+  .logo-btn:hover { color: var(--accent-2); }
   .logo-text {
-    font-family: 'Exo 2', sans-serif;
-    letter-spacing: 0.03em;
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    letter-spacing: 0.02em;
   }
   .logo-gold {
     color: #d4a017;
@@ -273,23 +299,14 @@
 
   .settings-wrap { position: relative; }
 
-  .icon-btn {
-    background: none;
-    border: none;
-    color: #aaa;
-    font-size: 1.15rem;
-    padding: 0.2rem 0.35rem;
-    border-radius: 4px;
-    line-height: 1;
-  }
-  .icon-btn:hover { background: #2a2a4a; color: #eee; }
+  .icon-btn:hover { background: var(--line); color: var(--fg); }
 
   .dropdown {
     position: absolute;
     right: 0;
     top: calc(100% + 6px);
-    background: #1e1e38;
-    border: 1px solid #3a3a5a;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
     border-radius: 6px;
     padding: 0.4rem 0;
     min-width: 190px;
@@ -303,11 +320,22 @@
     gap: 0.55rem;
     padding: 0.45rem 0.85rem;
     font-size: 0.88rem;
-    color: #ddd;
+    color: var(--fg);
     cursor: pointer;
     user-select: none;
   }
-  .dropdown-item:hover { background: #2a2a4a; }
+  .dropdown-item:hover { background: var(--line); }
+
+  .theme-item { cursor: default; justify-content: space-between; }
+  .theme-item:hover { background: none; }
+  .theme-select {
+    background: var(--line);
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    color: var(--fg);
+    font-size: 0.85rem;
+    padding: 0.2rem 0.35rem;
+  }
 
   .volume-item {
     flex-direction: row;
@@ -319,14 +347,14 @@
 
   .volume-label {
     font-size: 0.88rem;
-    color: #ddd;
+    color: var(--fg);
   }
 
   .volume-slider {
     width: 100%;
     height: 4px;
     border-radius: 2px;
-    background: #3a3a5a;
+    background: var(--line-strong);
     outline: none;
     appearance: none;
     -webkit-appearance: none;
@@ -338,12 +366,12 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: #9aaae8;
+    background: var(--accent-2);
     cursor: pointer;
   }
 
   .volume-slider::-webkit-slider-thumb:hover {
-    background: #b8c5ff;
+    background: var(--accent-2);
   }
 
   .volume-slider::-moz-range-thumb {
@@ -351,12 +379,12 @@
     height: 14px;
     border: none;
     border-radius: 50%;
-    background: #9aaae8;
+    background: var(--accent-2);
     cursor: pointer;
   }
 
   .volume-slider::-moz-range-thumb:hover {
-    background: #b8c5ff;
+    background: var(--accent-2);
   }
 
   .dropdown-btn {
@@ -366,7 +394,7 @@
     text-align: left;
     font-family: inherit;
     font-size: 0.88rem;
-    color: #ddd;
+    color: var(--fg);
     padding: 0.45rem 0.85rem;
   }
 
@@ -379,14 +407,14 @@
     gap: 0.3rem;
     background: none;
     border: none;
-    color: #ccc;
+    color: var(--fg-2);
     font-size: 0.88rem;
     font-family: inherit;
     padding: 0.25rem 0.5rem;
     border-radius: 5px;
     max-width: 180px;
   }
-  .user-menu-btn:hover { background: #2a2a4a; color: #eee; }
+  .user-menu-btn:hover { background: var(--line); color: var(--fg); }
 
   .user-menu-name {
     max-width: 130px;
@@ -397,7 +425,7 @@
 
   .user-menu-arrow {
     font-size: 1rem;
-    color: #666;
+    color: var(--faint);
     transition: transform 0.15s;
     flex-shrink: 0;
   }
@@ -407,7 +435,7 @@
 
   .dropdown-divider {
     margin: 0.3rem 0;
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid var(--line);
   }
 
   .logout-item { color: #e07070 !important; }
@@ -418,13 +446,13 @@
 
   .nav-btn {
     padding: 0.3rem 0.8rem;
-    background: #2d2d4a;
-    border: 1px solid #3a3a5a;
-    color: #ccc;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    color: var(--fg-2);
     border-radius: 5px;
     font-size: 0.85rem;
   }
-  .nav-btn:hover { background: #3a3a6a; color: #eee; }
+  .nav-btn:hover { background: var(--surface-3); color: var(--fg); }
 
   /* ── Mobile breakpoint ── */
   @media (max-width: 640px) {

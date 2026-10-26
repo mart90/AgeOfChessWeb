@@ -1,0 +1,12 @@
+{
+  "piece": [0, 0, 900, 520, 420, 400, 250],
+  "gold": 10,
+  "mine": 75,
+  "race": 0,
+  "mobility": [0, 0, 0, 0, 0, 0, 0],
+  "king_tropism": [0, 0, 0, 0, 0, 0, 0],
+  "king_zone_attack": 0,
+  "king_no_escape": 0,
+  "mine_pressure": 0,
+  "tempo": 0
+}

@@ -33,6 +33,16 @@ public class UserController(AppDbContext db) : ControllerBase
         return Ok(AuthController.MapUser(user));
     }
 
+    private static string? ComputerOpponentName(HistoricGame g)
+    {
+        try
+        {
+            var gs = JsonSerializer.Deserialize<GameSettings>(g.SettingsJson);
+            return gs?.ComputerLevel is int level ? ComputerLevels.Name(level) : null;
+        }
+        catch { return null; }
+    }
+
     // GET /api/user/{username}  — public profile
     [HttpGet("{username}")]
     [AllowAnonymous]
@@ -82,6 +92,7 @@ public class UserController(AppDbContext db) : ControllerBase
 
             string OppName(HistoricGame g)
             {
+                if (ComputerOpponentName(g) is { } computerName) return computerName;
                 int? oppId = g.WhitePlayerId == userId ? g.BlackPlayerId : g.WhitePlayerId;
                 return oppId.HasValue && opponents.TryGetValue(oppId.Value, out var o)
                     ? o.EffectiveDisplayName : "Anonymous";
@@ -123,9 +134,14 @@ public class UserController(AppDbContext db) : ControllerBase
         {
             bool isWhite = g.WhitePlayerId == userId;
 
+            // Settings JSON: map mode, ranked flag, computer opponent
+            GameSettings? gs = null;
+            try { gs = JsonSerializer.Deserialize<GameSettings>(g.SettingsJson); } catch { }
+            bool vsComputer = gs?.ComputerLevel != null;
+
             int? opponentId = isWhite ? g.BlackPlayerId : g.WhitePlayerId;
-            User? opp = opponentId.HasValue && opponents.TryGetValue(opponentId.Value, out var o) ? o : null;
-            string  opponentName     = opp?.EffectiveDisplayName ?? "Anonymous";
+            User? opp = !vsComputer && opponentId.HasValue && opponents.TryGetValue(opponentId.Value, out var o) ? o : null;
+            string  opponentName     = vsComputer ? ComputerLevels.Name(gs!.ComputerLevel!.Value) : opp?.EffectiveDisplayName ?? "Anonymous";
             string? opponentUsername = opp?.Username;
 
             int? myEloAtGame  = isWhite ? g.WhiteEloAtGame : g.BlackEloAtGame;
@@ -161,14 +177,7 @@ public class UserController(AppDbContext db) : ControllerBase
                           g.StartTimeMinutes >= 3   ? "blitz" :
                                                       "bullet";
 
-            // MapMode still requires the JSON blob (not a filter/sort column)
-            string mapMode = "m";
-            try
-            {
-                var settings = JsonSerializer.Deserialize<GameSettings>(g.SettingsJson);
-                if (settings != null) mapMode = settings.MapMode;
-            }
-            catch { }
+            string mapMode = gs?.MapMode ?? "m";
 
             return new
             {
@@ -188,6 +197,8 @@ public class UserController(AppDbContext db) : ControllerBase
                 result,
                 resultDetail,
                 moveCount            = g.MoveCount,
+                isRanked             = (gs?.IsRanked ?? true) && !vsComputer,
+                vsComputer,
             };
         }).ToList();
 

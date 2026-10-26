@@ -361,12 +361,14 @@ export function getAllLegalNewPiecePlacements(state) {
     const kingId = whiteIsActive ? state.whiteKingId : state.blackKingId;
     if (kingId === -1) return placements;
 
-    // Collect major piece square IDs for pawn placement
+    // Collect major piece square IDs for pawn placement, and queens for rook/bishop/knight placement
     const majorPieceIds = [];
+    const queenIds = [];
     for (let i = 0; i < lookup.length; i++) {
         const sq = lookup[i];
         if (sq.piece && sq.piece.isWhite === whiteIsActive && MAJOR_PIECES.has(sq.piece.type)) {
             majorPieceIds.push(i);
+            if (sq.piece.type.endsWith('Queen')) queenIds.push(i);
         }
     }
 
@@ -386,17 +388,18 @@ export function getAllLegalNewPiecePlacements(state) {
             visited.add(destId);
         }
 
-        // Pawns can also be placed adjacent to major pieces
-        if (pieceType === "Pawn") {
-            for (const psId of majorPieceIds) {
-                for (let d = 0; d < 8; d++) {
-                    const destId = neighbors[psId * 8 + d];
-                    if (destId === -1 || visited.has(destId)) continue;
-                    const dest = lookup[destId];
-                    if (dest.piece != null || !VALID_PLACEMENT_TYPES.has(dest.type)) continue;
-                    placements.push({ type: "p", toPos: { x: dest.x, y: dest.y }, pieceType: "Pawn", cost: shopItem.cost });
-                    visited.add(destId);
-                }
+        // Pawns can also be placed adjacent to major pieces; rooks, bishops and knights adjacent to queens
+        const extraSources = pieceType === "Pawn" ? majorPieceIds
+                           : pieceType === "Queen" ? []
+                           : queenIds;
+        for (const psId of extraSources) {
+            for (let d = 0; d < 8; d++) {
+                const destId = neighbors[psId * 8 + d];
+                if (destId === -1 || visited.has(destId)) continue;
+                const dest = lookup[destId];
+                if (dest.piece != null || !VALID_PLACEMENT_TYPES.has(dest.type)) continue;
+                placements.push({ type: "p", toPos: { x: dest.x, y: dest.y }, pieceType, cost: shopItem.cost });
+                visited.add(destId);
             }
         }
     }

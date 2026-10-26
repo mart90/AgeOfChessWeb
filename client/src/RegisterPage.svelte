@@ -160,19 +160,19 @@
     flex-direction: column;
     gap: 0.3rem;
     font-size: 0.9rem;
-    color: #ccc;
+    color: var(--fg-2);
   }
-  .hint { font-size: 0.78rem; color: #666; }
+  .hint { font-size: 0.78rem; color: var(--faint); }
   input[type="text"],
   input[type="password"] {
     padding: 0.5rem 0.75rem;
-    background: #22223a;
-    border: 1px solid #444;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
     border-radius: 6px;
-    color: #eee;
+    color: var(--fg);
     font-size: 1rem;
   }
-  input:focus { outline: none; border-color: #7b8cde; }
+  input:focus { outline: none; border-color: var(--accent); }
   input:disabled { opacity: 0.4; cursor: default; }
 
   .display-name-block {
@@ -180,16 +180,16 @@
     flex-direction: column;
     gap: 0.4rem;
     padding: 0.6rem 0.8rem;
-    background: #1e1e38;
+    background: var(--surface);
     border-radius: 6px;
-    border: 1px solid #2a2a4a;
+    border: 1px solid var(--line);
   }
   .checkbox-label {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     font-size: 0.85rem;
-    color: #aaa;
+    color: var(--muted);
     cursor: pointer;
     flex-direction: row;
   }
@@ -197,7 +197,7 @@
 
   button[type="submit"] {
     padding: 0.6rem;
-    background: #4a6fa5;
+    background: var(--button);
     color: #fff;
     border: none;
     border-radius: 6px;
@@ -214,7 +214,7 @@
     gap: 0.75rem;
     width: 100%;
     max-width: 340px;
-    color: #555;
+    color: var(--faint);
     font-size: 0.85rem;
   }
   .divider::before,
@@ -222,13 +222,13 @@
     content: '';
     flex: 1;
     height: 1px;
-    background: #333;
+    background: var(--line);
   }
 
-  .switch { color: #aaa; font-size: 0.85rem; }
+  .switch { color: var(--muted); font-size: 0.85rem; }
   .link-btn {
     background: none; border: none;
-    color: #7b8cde; text-decoration: underline;
+    color: var(--accent); text-decoration: underline;
     font-size: inherit; padding: 0; cursor: pointer;
   }
 </style>

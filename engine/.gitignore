@@ -1,0 +1,4 @@
+target/
+testdata/*
+!testdata/oracle.jsonl
+!testdata/seeds_*.txt

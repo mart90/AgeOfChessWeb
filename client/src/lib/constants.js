@@ -1,7 +1,7 @@
 export const MINE_INCOME = 3;
 
 export const SHOP = [
-  { type: 'Queen',  cost: 72 },
+  { type: 'Queen',  cost: 75 },
   { type: 'Rook',   cost: 40 },
   { type: 'Bishop', cost: 32 },
   { type: 'Knight', cost: 30 },

@@ -9,10 +9,15 @@
   import { playSound, stopClockSound } from './lib/sound.js';
   import { SHOP as SHOP_BASE } from './lib/constants.js';
   import { buildFromMainline, lastMainlineNode, addChild } from './lib/moveTree.js';
-  import { serializeTree, getNodePath } from './lib/treeStorage.js';
+  import { getNodePath } from './lib/treeStorage.js';
+  import { packGameTree, GAME_TRANSFER_KEY, GAME_TRANSFER_FORMAT } from './lib/gameTransfer.js';
   import { applyMoveToState, moveToNotation, applyPlacementToState, placementToNotation } from './lib/boardUtils.js';
   import { computeLegalMoves } from './lib/pathFinder.js';
   import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js';
+  import { EngineClient } from './lib/engine/engine.js';
+  import { pieceSrc } from './lib/boardTheme.js';
+  import { computeComputerBid, BID_BUDGET_FACTOR } from './lib/engine/computerBid.js';
+  import { createComputerGame } from './lib/api.js';
 
   const { gameId } = $props();
 
@@ -29,6 +34,29 @@
   let hub            = null;
   let boardCanvas    = null;   // canvas element exposed by Board
   let boardColHeight = $state(0);
+
+  // Fit the board to the window height: the layout width is chosen so the board fills exactly
+  // the height left over by the panels (no vertical scrolling, also on 1080p and 1440p).
+  const MOVE_LIST_WIDTH = 280 + 8;   // .move-list-col + .game-body gap
+  let gameBodyEl   = $state(null);
+  let boardWrapEl  = $state(null);
+  let layoutWidth  = $state(null);
+  function fitBoard() {
+    if (!gameBodyEl || !boardWrapEl || window.innerWidth <= 700) { layoutWidth = null; return; }
+    const pageBottomPadding = 8;
+    const other = gameBodyEl.getBoundingClientRect().bottom + window.scrollY
+                - boardWrapEl.offsetHeight + pageBottomPadding;
+    const board = Math.floor(window.innerHeight - other);
+    layoutWidth = Math.max(360, board) + MOVE_LIST_WIDTH;
+  }
+  $effect(() => {
+    if (!gameBodyEl) return;
+    fitBoard();
+    const ro = new ResizeObserver(fitBoard);
+    ro.observe(gameBodyEl);
+    window.addEventListener('resize', fitBoard);
+    return () => { ro.disconnect(); window.removeEventListener('resize', fitBoard); };
+  });
   let gameState      = $state(null);
   let playerToken    = $state(null);
 
@@ -48,6 +76,7 @@
   let isWhite        = $state(true);
   let statusMsg      = $state('Loading…');
   let inviteUrl      = $state('');
+  let statusDismissed = $state(null);   // statusMsg the user closed (shown again when it changes)
   let isSpectator    = $state(false);
 
   // ── Local clock state ────────────────────────────────────────────────────
@@ -150,6 +179,130 @@
     }
   }
 
+  // ── Computer opponent ────────────────────────────────────────────────────
+  // In games vs the computer, the engine runs here (Web Worker) and its moves are submitted
+  // to the server with SubmitComputerMove. The server validates and broadcasts them as usual.
+
+  const isComputerGame   = $derived(gameState?.computerLevel != null);
+  const COMPUTER_MIN_THINK_MS = 400;   // so instant replies from low levels don't feel abrupt
+  const PIECE_CODES = { Queen: 'q', Rook: 'r', Bishop: 'b', Knight: 'n', Pawn: 'p' };
+  let computerEngine     = null;
+  let computerSearchPly  = -1;       // ply the current/last search was started for
+  let computerThinking   = $state(false);
+  let playAgainSameBoard = $state(false);
+  let startingPlayAgain  = $state(false);
+
+  function maybeComputerMove() {
+    const s = gameState;
+    if (!s || s.gameEnded || isSpectator || !playerToken || s.computerLevel == null || biddingState || s.biddingInProgress) return;
+    const computerToMove = s.computerIsWhite ? s.white.isActive : s.black.isActive;
+    if (!computerToMove) return;
+    const ply = s.moves.length;
+    if (computerSearchPly === ply) return;
+    computerSearchPly = ply;
+    computerThinking = true;
+    computerEngine ??= new EngineClient();
+    // $state.snapshot: reactive proxies can't be posted to a Web Worker
+    const position = $state.snapshot({ squares: s.squares, whiteGold: s.white.gold, blackGold: s.black.gold, whiteIsActive: s.white.isActive });
+    const started = performance.now();
+    // Weak levels ask for the two best moves and sometimes play the second (if not too costly).
+    const makesMistakes = (s.computerMistakeRate ?? 0) > 0;
+    const request = makesMistakes
+      ? { cmd: 'search', position, nodes: s.computerNodes, multiPv: 2 }
+      : { cmd: 'search', position, nodes: s.computerNodes };
+    computerEngine.call(request)
+      .then(async (res) => {
+        const wait = COMPUTER_MIN_THINK_MS - (performance.now() - started);
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
+        const b = makesMistakes ? chooseWithMistakes(res.lines ?? [], s) : res.best;
+        // Skip if the game moved on meanwhile (e.g. resign, reconnect)
+        if (!gameState || gameState.gameEnded || gameState.moves.length !== ply || !b) return;
+        if (b.type === 'm') {
+          await hub?.invoke('SubmitComputerMove', playerToken, 'move', b.fromPos.x, b.fromPos.y, b.toPos.x, b.toPos.y, null);
+        } else {
+          await hub?.invoke('SubmitComputerMove', playerToken, 'place', -1, -1, b.toPos.x, b.toPos.y, PIECE_CODES[b.pieceType]);
+        }
+      })
+      .catch((e) => {
+        if (e?.message !== 'cancelled') {
+          console.warn('[Computer]', e);
+          statusMsg = `Computer error: ${e?.message ?? e}`;
+        }
+        computerSearchPly = -1;   // allow a retry on the next state update
+      })
+      .finally(() => { if (computerSearchPly === ply || computerSearchPly === -1) computerThinking = false; });
+  }
+
+  // lines are sorted best-first for the side to move; scores are gold from White's point of view.
+  function chooseWithMistakes(lines, s) {
+    if (!lines.length) return null;
+    if (lines.length < 2) return lines[0].move;
+    const sign = s.computerIsWhite ? 1 : -1;
+    const loss = (lines[0].score - lines[1].score) * sign;
+    const mistake = Math.random() < s.computerMistakeRate && loss <= s.computerMistakeMaxLoss;
+    return (mistake ? lines[1] : lines[0]).move;
+  }
+
+  $effect(() => {
+    void gameState;
+    maybeComputerMove();
+  });
+
+  // ── Computer bid ── (three analysis passes, see lib/engine/computerBid.js)
+  let computerBidding = $state(false);
+
+  function maybeComputerBid(b) {
+    const s = gameState;
+    if (!b || !s || s.computerLevel == null || isSpectator || !playerToken || computerBidding) return;
+    if (b.revealedCreatorBid != null) return;
+    // Before colours are resolved the computer holds the white token iff it's the "creator"
+    const placed = s.computerIsWhite ? b.creatorBidPlaced : b.joinerBidPlaced;
+    if (placed) return;
+    computerBidding = true;
+    computerEngine ??= new EngineClient();
+    const squares = $state.snapshot(s.squares);
+    const search = (position, nodes) => computerEngine.call({ cmd: 'search', position, nodes });
+    computeComputerBid(squares, s.computerNodes * BID_BUDGET_FACTOR, search, (s.mapSeed ?? '').startsWith('r'))
+      .then(({ bid }) => hub?.invoke('SubmitComputerBid', playerToken, bid))
+      .catch((e) => {
+        if (e?.message !== 'cancelled') {
+          console.warn('[Computer bid]', e);
+          statusMsg = `Computer error: ${e?.message ?? e}`;
+        }
+      })
+      .finally(() => { computerBidding = false; });
+  }
+
+  $effect(() => {
+    void biddingState;
+    maybeComputerBid(biddingState);
+  });
+
+  onDestroy(() => computerEngine?.cancel());
+
+  async function playAgainVsComputer() {
+    if (!gameState || startingPlayAgain) return;
+    startingPlayAgain = true;
+    try {
+      const seed = gameState.mapSeed ?? '';
+      const { gameId: newId, playerToken: token, isWhite: white } = await createComputerGame({
+        boardSize: mapSize,
+        mapMode: seed.startsWith('r') ? 'r' : 'm',
+        mapSeed: playAgainSameBoard ? seed : null,
+        level: gameState.computerLevel,
+        color: isWhite ? 'white' : 'black',
+        biddingEnabled: gameState.biddingEnabled,
+      });
+      localStorage.setItem(`token_${newId}`, token);
+      localStorage.setItem(`color_${newId}`, white ? 'white' : 'black');
+      navigateTo(`/game/${newId}`);
+    } catch (e) {
+      statusMsg = String(e.message ?? e);
+    } finally {
+      startingPlayAgain = false;
+    }
+  }
+
   // ── Interaction state ────────────────────────────────────────────────────
 
   let selectedSquare  = $state(null);
@@ -185,7 +338,20 @@
     ?? gameState
   );
 
+  // Navigation sounds: only when stepping exactly one move forward (not back, not jumps)
+  function playNavSound(san) {
+    if (san) playSound(/x/.test(san) ? 'capture' : 'move');
+  }
+
+  // Tree mode (finished games)
+  function goToNode(node) {
+    if (!node || node === currentNode) return;
+    if (node.parent === currentNode) playNavSound(node.san);
+    currentNode = node;
+  }
+
   function navigate(dir) {
+    const before   = replayIndex;
     const max      = stateHistory.length - 1;
     const gameOver = gameState?.gameEnded ?? false;
     // Helper: during a live game, reaching the last state means returning to live mode (null).
@@ -197,6 +363,9 @@
     else if (dir === 'next') replayIndex = resolve(Math.min(max, (replayIndex ?? max) + 1));
     // dir is a 0-indexed move number; stateHistory[n] = state after n moves, so +1
     else if (typeof dir === 'number') replayIndex = resolve(Math.max(0, Math.min(max, dir + 1)));
+
+    const shown = replayIndex ?? max;
+    if (shown === (before ?? max) + 1) playNavSound(gameState?.moves?.[shown - 1]);
   }
 
   function handleHoverMove(parsed) {
@@ -267,8 +436,7 @@
   function formatResult(r) { return RESULT_LABELS[r] ?? 'Game over'; }
 
   function shopImgSrc(code) {
-    const name = SHOP.find(s => s.code === code)?.name?.toLowerCase() ?? code;
-    return `/assets/objects/${isWhite ? 'w' : 'b'}_${name}.png`;
+    return pieceSrc(SHOP.find(s => s.code === code)?.name ?? 'Pawn', isWhite);
   }
 
   // ── Board coordinate helper (for shop drag hit-testing) ──────────────────
@@ -306,10 +474,13 @@
 
   // ── Board callbacks ───────────────────────────────────────────────────────
 
+  // Treasure is sent as a (black) piece, but it is never selectable.
+  const isOwnPiece = (sq, white) => !!sq?.piece && sq.piece.type !== 'Treasure' && sq.piece.isWhite === white;
+
   async function onPieceGrabbed(x, y, clientX, clientY) {
     if (gameState?.gameEnded || biddingState) return;
     const sq = gameState.squares.find(s => s.x === x && s.y === y);
-    if (!sq?.piece || sq.piece.isWhite !== isWhite) return;
+    if (!isOwnPiece(sq, isWhite)) return;
 
     selectedSquare = { x, y };
 
@@ -320,8 +491,7 @@
       legalDests = await fetchLegalMoves(x, y);
     }
 
-    const pieceName = sq.piece.type.replace(/^(White|Black)/, '').toLowerCase();
-    const imgSrc = `/assets/objects/${isWhite ? 'w' : 'b'}_${pieceName}.png`;
+    const imgSrc = pieceSrc(sq.piece.type, isWhite);
     dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
   }
 
@@ -366,14 +536,12 @@
     const state = displayedState;
     if (!state) return;
     const sq = state.squares.find(s => s.x === x && s.y === y);
-    if (!sq?.piece) return;
-    if (sq.piece.isWhite !== state.white.isActive) return; // wrong side's turn
+    if (!isOwnPiece(sq, state.white.isActive)) return; // empty, treasure, or wrong side's turn
 
     selectedSquare = { x, y };
     legalDests = computeLegalMoves(sq, state.squares, null);
 
-    const pieceName = sq.piece.type.replace(/^(White|Black)/, '').toLowerCase();
-    const imgSrc = `/assets/objects/${sq.piece.isWhite ? 'w' : 'b'}_${pieceName}.png`;
+    const imgSrc = pieceSrc(sq.piece.type, sq.piece.isWhite);
     dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
   }
 
@@ -420,7 +588,7 @@
     const placingWhite = state.white.isActive;
     dragging = {
       type: 'place', code,
-      imgSrc: `/assets/objects/${placingWhite ? 'w' : 'b'}_${item.name.toLowerCase()}.png`,
+      imgSrc: pieceSrc(item.name, placingWhite),
       ghostX: e.clientX, ghostY: e.clientY,
     };
   }
@@ -434,7 +602,7 @@
       if (selectedSquare.x === x && selectedSquare.y === y) {
         selectedSquare = null; legalDests = []; return;
       }
-      if (sq?.piece && sq.piece.isWhite === state.white.isActive) {
+      if (isOwnPiece(sq, state.white.isActive)) {
         // Reselect another piece (same side only)
         selectedSquare = { x, y };
         legalDests = computeLegalMoves(sq, state.squares, null);
@@ -455,7 +623,7 @@
       return;
     }
 
-    if (sq?.piece && sq.piece.isWhite === state.white.isActive) {
+    if (isOwnPiece(sq, state.white.isActive)) {
       selectedSquare = { x, y };
       legalDests = computeLegalMoves(sq, state.squares, null);
     }
@@ -470,7 +638,7 @@
         selectedSquare = null; legalDests = [];
         return;
       }
-      if (sq?.piece?.isWhite === isWhite) {
+      if (isOwnPiece(sq, isWhite)) {
         selectedSquare = { x, y };
         if (!isMyTurn) {
           legalDests = [];
@@ -499,7 +667,7 @@
         selectedSquare = null; legalDests = [];
       }
     } else {
-      if (sq?.piece?.isWhite === isWhite) {
+      if (isOwnPiece(sq, isWhite)) {
         selectedSquare = { x, y };
         if (!isMyTurn) {
           legalDests = [];
@@ -512,6 +680,31 @@
 
   function onHoverSquare(sq) {
     if (dragging) dragOverSquare = sq;
+  }
+
+  /**
+   * After a state update (usually the opponent's move), keep a drag or a click-selection that is
+   * in progress, so a premove being entered simply becomes a normal move when it's our turn.
+   * Dropped only if the selected piece is gone (e.g. captured). Legal targets are refreshed.
+   */
+  function keepInteractionAfterUpdate() {
+    const from = dragging?.type === 'move' ? { x: dragging.fromX, y: dragging.fromY }
+               : !dragging ? selectedSquare : null;
+    if (from) {
+      if (!isOwnPiece(gameState.squares.find(s => s.x === from.x && s.y === from.y), isWhite)) { clearDrag(); return; }
+      legalDests = [];
+      if (isMyTurn) {
+        fetchLegalMoves(from.x, from.y).then(d => {
+          if (selectedSquare?.x === from.x && selectedSquare?.y === from.y) legalDests = d;
+        });
+      }
+    } else if (dragging?.type === 'place') {
+      const code = dragging.code;
+      legalDests = [];
+      if (isMyTurn) fetchLegalPlacements(code).then(d => { if (dragging?.code === code) legalDests = d; });
+    } else {
+      clearDrag();
+    }
   }
 
   function clearDrag() {
@@ -734,6 +927,7 @@
     });
 
     hub.on('GameStarted', async (state) => {
+      computerSearchPly = -1;
       if (biddingState == null) {
         playSound('game_started')
       }
@@ -778,9 +972,10 @@
         const isCapture = newPieceCount < oldPieceCount;
         playSound(isCapture ? 'capture' : 'move');
       }
-      gameState = state; syncLocalTimes(state); clearDrag(); resignPending = false;
+      gameState = state; syncLocalTimes(state); resignPending = false;
       // Return to live mode so the player can interact (their turn may have come up)
       if (replayIndex !== null) replayIndex = null;
+      keepInteractionAfterUpdate();
     });
     hub.on('GameEnded', (state) => {
       stateHistory = [...stateHistory, state];
@@ -858,14 +1053,26 @@
 
   function openAnalyzePage() {
     if (!moveTree) return;
-    const data = {
-      format:      'gamepage',
+    const json = JSON.stringify({
+      format:      GAME_TRANSFER_FORMAT,
       mapSize,
       mapSeed:     gameState?.mapSeed ?? '',
-      treeData:    serializeTree(moveTree),
       currentPath: currentNode ? getNodePath(moveTree, currentNode) : [],
-    };
-    try { localStorage.setItem('analyze_pending_import', JSON.stringify(data)); } catch {}
+      ...packGameTree(moveTree),
+    });
+    try {
+      localStorage.setItem(GAME_TRANSFER_KEY, json);
+    } catch {
+      // Storage full: drop the analysis page's previous session and try once more
+      try {
+        localStorage.removeItem('analyze_board_state');
+        localStorage.setItem(GAME_TRANSFER_KEY, json);
+      } catch (e) {
+        console.warn('[Analyze] could not store game for the analysis page', e);
+        statusMsg = 'Could not open the analysis board: browser storage is full.';
+        return;
+      }
+    }
     window.open('/analyze', '_blank');
   }
 
@@ -883,8 +1090,8 @@
   function handleKeydown(e) {
     if (currentNode !== null) {
       // Tree mode navigation
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); if (currentNode.parent) currentNode = currentNode.parent; }
-      if (e.key === 'ArrowRight') { e.preventDefault(); if (currentNode.children[0]) currentNode = currentNode.children[0]; }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); if (currentNode.parent) goToNode(currentNode.parent); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); if (currentNode.children[0]) goToNode(currentNode.children[0]); }
       return;
     }
     if (replayIndex === null) return;
@@ -910,7 +1117,7 @@
 
 <!-- ── Page ───────────────────────────────────────────────────────────── -->
 <div class="page">
-<div class="game-layout">
+<div class="game-layout" style={layoutWidth ? `max-width: ${layoutWidth}px` : ''}>
 
   <!-- Opponent panel (top) -->
   <div class="player-panel" class:active={opponent?.isActive && !biddingState}>
@@ -918,9 +1125,11 @@
       {opponent?.name ?? 'Waiting for opponent...'}
       {#if opponent?.elo != null}<span class="elo-label">({opponent.elo})</span>{/if}
       {#if opponent && !biddingState}<span class="color-label">{isWhite ? 'Black' : 'White'}</span>{/if}
+      {#if isComputerGame && computerThinking && !gameState?.gameEnded}<span class="thinking-label">thinking…</span>{/if}
+      {#if isComputerGame && computerBidding}<span class="thinking-label"><span class="spinner"></span>deciding on a bid…</span>{/if}
     </span>
     {#if opponent}
-      <span class="gold">⚙ {opponent.gold}g</span>
+      <span class="gold">{opponent.gold} gold</span>
       {#if biddingState}
         {@const oppBidPlaced = isWhite ? biddingState.joinerBidPlaced : biddingState.creatorBidPlaced}
         {@const oppBidMs    = isWhite ? localJoinerMs : localCreatorMs}
@@ -935,21 +1144,22 @@
     {/if}
   </div>
 
-  <!-- Status / invite bar -->
-  {#if statusMsg || inviteUrl}
-    <div class="status-bar">
-      <span>{statusMsg}</span>
-      {#if inviteUrl}
-        <button class="copy-btn" onclick={copyInvite}>Copy invite link</button>
-      {/if}
-    </div>
-  {/if}
-
   <!-- Board + move list side by side -->
-  <div class="game-body">
+  <div class="game-body" bind:this={gameBodyEl}>
     <div class="board-col">
       <div class="board-main" bind:clientHeight={boardColHeight}>
-      <div class="board-wrap">
+      <div class="board-wrap" bind:this={boardWrapEl}>
+        <!-- Status / invite banner: floats over the top of the board so it doesn't change the layout -->
+        {#if (statusMsg && statusMsg !== statusDismissed) || inviteUrl}
+          <div class="status-bar">
+            {#if statusMsg}<span>{statusMsg}</span>{/if}
+            {#if inviteUrl}
+              <button class="copy-btn" onclick={copyInvite}>Copy invite link</button>
+            {:else}
+              <button class="status-close" onclick={() => statusDismissed = statusMsg} title="Close">✕</button>
+            {/if}
+          </div>
+        {/if}
         {#if displayedState}
           <Board
             squares={displayedState.squares}
@@ -1007,7 +1217,11 @@
         />
         <button class="bid-submit-btn" onclick={submitBid}>Submit</button>
       {:else}
-        <span class="bid-waiting">Bid submitted — waiting for opponent…</span>
+        {#if isComputerGame && computerBidding}
+          <span class="bid-waiting"><span class="spinner"></span>Bid submitted — the computer is deciding on its bid…</span>
+        {:else}
+          <span class="bid-waiting">Bid submitted — waiting for opponent…</span>
+        {/if}
       {/if}
     </div>
   {:else if pendingBidReveal && !isSpectator}
@@ -1030,7 +1244,7 @@
             onpointerdown={(e) => shopPointerDown(e, item.code)}
           >
             <img src={shopImgSrc(item.code)} alt={item.name} width="44" height="44" draggable="false" />
-            <span class="cost" class:dim={!canAfford}>{item.cost}g</span>
+            <span class="cost" class:dim={!canAfford}>{item.cost}</span>
           </button>
         {/each}
       </div>
@@ -1049,8 +1263,8 @@
             title="{item.name} — {item.cost}g"
             onpointerdown={(e) => shopPointerDownAnalysis(e, item.code)}
           >
-            <img src={`/assets/objects/${analysisWhite ? 'w' : 'b'}_${item.name.toLowerCase()}.png`} alt={item.name} width="44" height="44" draggable="false" />
-            <span class="cost" class:dim={!canAfford}>{item.cost}g</span>
+            <img src={pieceSrc(item.name, analysisWhite)} alt={item.name} width="44" height="44" draggable="false" />
+            <span class="cost" class:dim={!canAfford}>{item.cost}</span>
           </button>
         {/each}
       </div>
@@ -1065,10 +1279,12 @@
       <div class="move-list-col" style={boardColHeight ? `max-height: ${boardColHeight}px` : ''}>
         <div class="tab-bar">
           <button class="tab" class:active={activeTab === 'moves'} onclick={() => switchTab('moves')}>Moves</button>
-          <button class="tab" class:active={activeTab === 'chat'} onclick={() => switchTab('chat')}>
-            Chat
-            {#if unreadChat > 0}<span class="badge">{unreadChat}</span>{/if}
-          </button>
+          {#if !isComputerGame}
+            <button class="tab" class:active={activeTab === 'chat'} onclick={() => switchTab('chat')}>
+              Chat
+              {#if unreadChat > 0}<span class="badge">{unreadChat}</span>{/if}
+            </button>
+          {/if}
         </div>
         {#if activeTab === 'moves'}
           {#if moveTree}
@@ -1078,7 +1294,7 @@
               {treeRevision}
               replayMode={true}
               onHoverMove={handleHoverMove}
-              onNavigate={(node) => { currentNode = node; }}
+              onNavigate={goToNode}
             />
           {:else}
             <MoveList
@@ -1115,12 +1331,47 @@
             </div>
           {/if}
         {/if}
-        {#if moveTree}
+        {#if moveTree || (gameState?.gameEnded && !isSpectator)}
+          <!-- Play again / rematch (players, after the game) + Analyze button -->
           <div class="movelist-footer">
-            <button class="analyze-icon-btn" onclick={openAnalyzePage} title="Analyze game">🔍</button>
+            {#if gameState?.gameEnded && !isSpectator && isComputerGame}
+              <div class="rematch-bar">
+                <label class="rematch-option">
+                  <input type="checkbox" bind:checked={playAgainSameBoard} />
+                  <span>Same board</span>
+                </label>
+                <button class="rematch-btn" onclick={playAgainVsComputer} disabled={startingPlayAgain}>
+                  {startingPlayAgain ? 'Starting…' : 'Play again'}
+                </button>
+              </div>
+            {:else if gameState?.gameEnded && !isSpectator}
+              <div class="rematch-bar">
+                {#if opponentRematchRequested && !rematchRequested}
+                  <label class="rematch-option">
+                    <input type="checkbox" bind:checked={sameSeedRematch} />
+                    <span>Same board</span>
+                  </label>
+                  <button class="rematch-btn accept" onclick={requestRematch}>Accept Rematch</button>
+                {:else if rematchRequested}
+                  <span class="rematch-waiting">Rematch requested — waiting for opponent…</span>
+                {:else}
+                  <label class="rematch-option">
+                    <input type="checkbox" bind:checked={sameSeedRematch} />
+                    <span>Same board</span>
+                  </label>
+                  <button class="rematch-btn" onclick={requestRematch}>Request Rematch</button>
+                {/if}
+              </div>
+            {/if}
+            {#if moveTree}
+              <button class="analyze-icon-btn" onclick={openAnalyzePage} title="Analyze game">🔍</button>
+            {/if}
           </div>
         {/if}
       </div>
+    {:else}
+      <!-- Empty until the game starts, so the board placeholder gets the same size as the board -->
+      <div class="move-list-col"></div>
     {/if}
 
   <!-- My panel — inside game-body so CSS order can place it above the move list on mobile -->
@@ -1141,7 +1392,7 @@
           {/if}
         {/if}
       </span>
-      <span class="gold">⚙ {me.gold}g</span>
+      <span class="gold">{me.gold} gold</span>
       {#if biddingState}
         {@const myBidPlaced = isWhite ? biddingState.creatorBidPlaced : biddingState.joinerBidPlaced}
         {@const myBidMs    = isWhite ? localCreatorMs : localJoinerMs}
@@ -1160,31 +1411,17 @@
 
   </div><!-- /.game-body -->
 
-  <!-- Rematch bar (only for players, after game ends) -->
-  {#if gameState?.gameEnded && !isSpectator}
-    <div class="rematch-bar">
-      {#if opponentRematchRequested && !rematchRequested}
-        <label class="rematch-option">
-          <input type="checkbox" bind:checked={sameSeedRematch} />
-          <span>Same board</span>
-        </label>
-        <button class="rematch-btn accept" onclick={requestRematch}>Accept Rematch</button>
-      {:else if rematchRequested}
-        <span class="rematch-waiting">Rematch requested — waiting for opponent…</span>
-      {:else}
-        <label class="rematch-option">
-          <input type="checkbox" bind:checked={sameSeedRematch} />
-          <span>Same board</span>
-        </label>
-        <button class="rematch-btn" onclick={requestRematch}>Request Rematch</button>
-      {/if}
-    </div>
-  {/if}
-
 </div><!-- /.game-layout -->
 </div><!-- /.page -->
 
 <style>
+  .thinking-label { font-size: 0.78rem; color: var(--muted); font-style: italic; margin-left: 0.4rem; display: inline-flex; align-items: center; gap: 0.35rem; }
+  .spinner {
+    display: inline-block; width: 0.85em; height: 0.85em; flex-shrink: 0;
+    border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 0.35rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   /* ── Drag ghost ── */
   .drag-ghost {
     position: fixed;
@@ -1192,7 +1429,6 @@
     transform: translate(-50%, -50%);
     pointer-events: none;
     z-index: 1000;
-    image-rendering: pixelated;
     filter: drop-shadow(0 4px 10px rgba(0,0,0,0.7));
   }
 
@@ -1227,7 +1463,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
-    flex: 1 1 auto;
+    flex: 1 1 0;   /* not auto: the canvas's pixel width must not push the move list onto a new row */
     min-width: 0;
   }
   .board-main {
@@ -1238,8 +1474,8 @@
   .move-list-col {
     display: flex;
     flex-direction: column;
-    background: #1e1e38;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 6px;
     overflow: hidden;
     flex: 0 0 280px;
@@ -1248,7 +1484,7 @@
   /* ── Tabs ── */
   .tab-bar {
     display: flex;
-    border-bottom: 1px solid #2a2a4a;
+    border-bottom: 1px solid var(--line);
     flex-shrink: 0;
   }
   .tab {
@@ -1257,7 +1493,7 @@
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
-    color: #888;
+    color: var(--muted);
     font-size: 0.82rem;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -1267,8 +1503,8 @@
     justify-content: center;
     gap: 0.35rem;
   }
-  .tab:hover { color: #ccc; }
-  .tab.active { color: #fff; border-bottom-color: #7b8cde; }
+  .tab:hover { color: var(--fg-2); }
+  .tab.active { color: #fff; border-bottom-color: var(--accent); }
   .badge {
     display: inline-flex;
     align-items: center;
@@ -1301,44 +1537,44 @@
     line-height: 1.4;
   }
   .chat-sender {
-    color: #7b8cde;
+    color: var(--accent);
     font-weight: 600;
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .chat-text { color: #ddd; word-break: break-word; }
-  .chat-empty { color: #555; font-style: italic; padding: 0.25rem 0; }
+  .chat-text { color: var(--fg); word-break: break-word; }
+  .chat-empty { color: var(--faint); font-style: italic; padding: 0.25rem 0; }
   .chat-input-row {
     display: flex;
     gap: 0.4rem;
     padding: 0.5rem 0.6rem;
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid var(--line);
     flex-shrink: 0;
   }
   .chat-input {
     flex: 1;
     min-width: 0;
     padding: 0.3rem 0.5rem;
-    background: #2d2d4a;
-    border: 1px solid #444;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
     border-radius: 4px;
-    color: #eee;
+    color: var(--fg);
     font-size: 0.85rem;
   }
-  .chat-input:focus { outline: none; border-color: #7b8cde; }
+  .chat-input:focus { outline: none; border-color: var(--accent); }
   .chat-send-btn {
     padding: 0.3rem 0.7rem;
-    background: #4a6fa5;
+    background: var(--button);
     color: #fff;
     border: none;
     border-radius: 4px;
     font-size: 0.82rem;
     white-space: nowrap;
   }
-  .chat-send-btn:hover { background: #5c82c0; }
+  .chat-send-btn:hover { background: var(--button-hover); }
   @media (max-width: 700px) {
     .game-body { flex-direction: column; flex-wrap: nowrap; }
-    .board-col    { order: 1; }
+    .board-col    { order: 1; flex: none; }
     .player-panel.me { order: 2; width: 100%; flex: none; }
     .move-list-col { order: 3; flex: none; max-height: 260px; width: 100%; }
   }
@@ -1349,8 +1585,9 @@
     align-items: center;
     gap: 0.7rem;
     width: 100%;
-    padding: 0.55rem 1rem;
-    background: #22223a;
+    height: 3rem;   /* fixed: the resign button / confirm buttons must not change the layout */
+    padding: 0 1rem;
+    background: var(--surface);
     border-radius: 6px;
     font-size: 1rem;
     border: 2px solid transparent;
@@ -1358,50 +1595,59 @@
   }
   .player-panel.me { flex: 0 0 100%; }
   .player-panel.active {
-    background: #2a2a48;
-    border-color: #7b8cde;
-    box-shadow: 0 0 12px rgba(123, 140, 222, 0.3);
+    background: var(--surface-3);
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(216, 166, 74, 0.3);
   }
 
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: #444; flex-shrink: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); flex-shrink: 0; }
   .dot.connected { background: #7cfc00; }
-  .name { font-weight: 600; flex: 1; }
+  .name { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .muted { opacity: 0.45; }
-  .elo-label   { font-weight: 400; font-size: 0.82rem; color: #aaa; margin-left: 0.2rem; }
-  .color-label { font-weight: 400; font-size: 0.8rem; color: #999; margin-left: 0.3rem; }
+  .elo-label   { font-weight: 400; font-size: 0.82rem; color: var(--muted); margin-left: 0.2rem; }
+  .color-label { font-weight: 400; font-size: 0.8rem; color: var(--muted); margin-left: 0.3rem; }
   .gold { color: #f5c518; font-size: 0.9rem; }
 
   .clock {
     font-variant-numeric: tabular-nums;
     font-size: 1rem;
-    background: #333;
+    background: var(--line);
     padding: 0.15rem 0.5rem;
     border-radius: 4px;
   }
-  .clock.ticking { background: #4a6fa5; color: #fff; }
+  .clock.ticking { background: var(--button); color: #fff; }
 
   /* ── Status bar ── */
   .status-bar {
+    position: absolute; top: 0.75rem; left: 50%; transform: translateX(-50%);
+    z-index: 5;
     display: flex; align-items: center; gap: 0.75rem;
-    width: 100%;
-    padding: 0.55rem 1rem;
-    background: #2a2a18; border: 1px solid #555; border-radius: 6px;
+    max-width: calc(100% - 1.5rem);
+    padding: 0.55rem 0.6rem 0.55rem 1rem;
+    background: rgba(28, 24, 18, 0.94); border: 1px solid var(--accent); border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     font-size: 0.95rem;
   }
+  .status-close {
+    background: none; border: none; color: var(--muted);
+    font-size: 0.85rem; padding: 0.1rem 0.3rem; line-height: 1; cursor: pointer;
+  }
+  .status-close:hover { color: var(--fg); }
   .copy-btn {
-    padding: 0.2rem 0.7rem; background: #4a6fa5; color: #fff;
+    padding: 0.2rem 0.7rem; background: var(--button); color: #fff;
     border: none; border-radius: 4px; font-size: 0.82rem; white-space: nowrap;
   }
 
   /* ── Board ── */
   .board-wrap {
+    position: relative;
     width: 100%;
     display: flex; justify-content: center;
   }
   .board-placeholder {
     width: 100%; aspect-ratio: 1;
-    background: #22223a; border-radius: 6px;
-    display: flex; align-items: center; justify-content: center; color: #555;
+    background: var(--surface); border-radius: 6px;
+    display: flex; align-items: center; justify-content: center; color: var(--faint);
   }
 
   /* ── Controls ── */
@@ -1409,25 +1655,25 @@
     display: flex; align-items: center; gap: 0.6rem;
     width: 100%;
     padding: 0.6rem 0.85rem;
-    background: #22223a; border-radius: 6px;
+    background: var(--surface); border-radius: 6px;
   }
   .shop { display: flex; gap: 0.35rem; flex: 1; justify-content: center; }
 
   .shop-piece {
     display: flex; flex-direction: column; align-items: center;
     padding: 0.3rem 0.4rem;
-    background: #2d2d4a; border: 2px solid transparent; border-radius: 8px;
-    color: #eee; gap: 2px;
+    background: var(--surface-2); border: 2px solid transparent; border-radius: 8px;
+    color: var(--fg); gap: 2px;
     transition: border-color 0.1s, background 0.1s;
     touch-action: none; user-select: none;
   }
-  .shop-piece:not(:disabled):hover { border-color: #7b8cde; background: #3a3a60; }
+  .shop-piece:not(:disabled):hover { border-color: var(--accent); background: var(--surface-3); }
   .shop-piece.active { border-color: #f5c518; background: #3a3a20; }
   .shop-piece:disabled { opacity: 0.3; cursor: default; }
-  .shop-piece img { image-rendering: pixelated; }
 
-  .cost { font-size: 0.68rem; color: #f5c518; }
-  .cost.dim { color: #666; }
+
+  .cost { font-size: 0.85rem; font-weight: 700; color: #f5c518; font-variant-numeric: tabular-nums; }
+  .cost.dim { color: var(--faint); }
 
   .resign-flag {
     background: #3a1a1a; border: 1px solid #6a2a2a; border-radius: 4px;
@@ -1443,7 +1689,7 @@
   }
   .resign-confirm { background: #2d5a2d; color: #7cfc00; }
   .resign-confirm:hover { background: #3a773a; }
-  .resign-cancel  { background: #3a3a3a; color: #aaa; }
+  .resign-cancel  { background: #3a3a3a; color: var(--muted); }
   .resign-cancel:hover  { background: #505050; }
 
   /* ── Bidding help tooltip ── */
@@ -1455,9 +1701,9 @@
   .bid-help-btn {
     width: 1.35em; height: 1.35em;
     border-radius: 50%;
-    background: #2d2d4a;
-    border: 1px solid #555;
-    color: #7b8cde;
+    background: var(--surface-2);
+    border: 1px solid var(--faint);
+    color: var(--accent);
     font-size: 0.75rem;
     font-weight: 700;
     cursor: default;
@@ -1473,37 +1719,37 @@
     left: 50%;
     transform: translateX(-50%);
     width: 270px;
-    background: #1a1a30;
-    border: 1px solid #3a3a5a;
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
     border-radius: 6px;
     padding: 0.6rem 0.75rem;
     font-size: 0.8rem;
-    color: #aaa;
+    color: var(--muted);
     line-height: 1.55;
     z-index: 100;
     pointer-events: none;
     text-align: left;
   }
-  .bid-help-tip strong { color: #ccc; }
+  .bid-help-tip strong { color: var(--fg-2); }
   .bid-help:hover .bid-help-tip,
   .bid-help:focus-within .bid-help-tip { display: block; }
 
   /* ── Bidding controls bar ── */
   .bid-controls { justify-content: center; gap: 0.6rem; flex-wrap: wrap; }
-  .bid-label { font-size: 0.9rem; color: #ccc; }
+  .bid-label { font-size: 0.9rem; color: var(--fg-2); }
   .bid-label strong { color: #f5c518; }
   .bid-input {
     width: 90px; padding: 0.35rem 0.5rem;
-    background: #2d2d4a; border: 2px solid #555; border-radius: 6px;
-    color: #eee; font-size: 1rem; text-align: center;
+    background: var(--surface-2); border: 2px solid var(--faint); border-radius: 6px;
+    color: var(--fg); font-size: 1rem; text-align: center;
   }
-  .bid-input:focus { outline: none; border-color: #7b8cde; }
+  .bid-input:focus { outline: none; border-color: var(--accent); }
   .bid-submit-btn {
-    padding: 0.35rem 1rem; background: #4a6fa5; color: #fff;
+    padding: 0.35rem 1rem; background: var(--button); color: #fff;
     border: none; border-radius: 6px; font-size: 0.9rem;
   }
-  .bid-submit-btn:hover { background: #5c82c0; }
-  .bid-waiting { font-size: 0.85rem; color: #aaa; font-style: italic; }
+  .bid-submit-btn:hover { background: var(--button-hover); }
+  .bid-waiting { font-size: 0.85rem; color: var(--muted); font-style: italic; }
 
   /* ── Bid check / clock ── */
   .bid-check { font-size: 0.9rem; color: #7cfc00; flex-shrink: 0; }
@@ -1511,17 +1757,19 @@
   /* ── Rematch bar ── */
   .rematch-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: center;
-    gap: 0.8rem;
-    padding: 0.5rem;
+    gap: 0.6rem;
+    flex: 1;
+    min-width: 0;
+    padding: 0.2rem 0.3rem;
   }
   .rematch-option {
     display: flex;
     align-items: center;
     gap: 0.4rem;
     font-size: 0.85rem;
-    color: #aaa;
+    color: var(--muted);
     cursor: pointer;
     user-select: none;
   }
@@ -1531,30 +1779,32 @@
     height: 15px;
   }
   .rematch-btn {
-    padding: 0.45rem 1.4rem;
-    background: #1e2840;
-    border: 1px solid #364870;
+    padding: 0.35rem 0.9rem;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
     border-radius: 6px;
-    color: #7a96cc;
+    color: var(--accent);
     font-size: 0.9rem;
     font-weight: 600;
     cursor: pointer;
   }
-  .rematch-btn:hover { background: #263252; border-color: #4a6090; color: #90aae0; }
+  .rematch-btn:hover { background: var(--surface-3); border-color: var(--accent); color: var(--accent-2); }
   .rematch-btn.accept {
-    background: #1a3248;
-    border-color: #36688a;
-    color: #6aaecc;
+    background: var(--button);
+    border-color: var(--button);
+    color: #fff;
   }
-  .rematch-btn.accept:hover { background: #224060; border-color: #4a84aa; color: #80c4e0; }
-  .rematch-waiting { font-size: 0.85rem; color: #aaa; font-style: italic; }
+  .rematch-btn.accept:hover { background: var(--button-hover); border-color: var(--button-hover); color: #fff; }
+  .rematch-waiting { font-size: 0.85rem; color: var(--muted); font-style: italic; }
 
   /* ── Analyze icon button (bottom of move list) ── */
   .movelist-footer {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
+    gap: 0.3rem;
     padding: 0.15rem 0.25rem;
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid var(--line);
     flex-shrink: 0;
   }
   .analyze-icon-btn {
@@ -1568,5 +1818,5 @@
     opacity: 0.45;
     transition: opacity 0.15s;
   }
-  .analyze-icon-btn:hover { opacity: 1; background: #2a2a4a; }
+  .analyze-icon-btn:hover { opacity: 1; background: var(--line); }
 </style>

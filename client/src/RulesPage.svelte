@@ -24,17 +24,18 @@
     <ul>
       <li>Pieces other than pawns move as in Chess.</li>
       <li>Pawns can move any direction in a straight line, and capture any direction diagonally.</li>
-      <li><strong>Rocks</strong> block movement along files and diagonals and nothing can stand
+      <li><strong>Mountains</strong> block movement along files and diagonals and nothing can stand
           on them.</li>
       <li><strong>Forests</strong> block movement along files and diagonals, but can be occupied.</li>
-      <li><strong>Mines</strong> (rocks with gold in them) affect movement the same way forests do.</li>
+      <li><strong>Gold mines</strong> affect movement the same way forests do.</li>
     </ul>
 
     <h3>Piece placement</h3>
     <ul>
       <li>Instead of moving a piece, a new piece can be placed on the board.</li>
-      <li>New non-pawn pieces can only be placed around the king.</li>
-      <li>Pawns can be placed around any piece except other pawns.</li> 
+      <li>New pieces can always be placed around the king.</li>
+      <li>Rooks, bishops and knights can also be placed around any of your queens.</li>
+      <li>Pawns can be placed around any piece except other pawns.</li>
       <li>Pieces can't be placed on top of enemy pieces or treasures.</li>
     </ul>
     
@@ -42,8 +43,8 @@
     <p>Two additional win conditions compared to regular Chess:</p>
     <ul>
       <li>If a player reaches a high amount of gold, they win the game. This is 150 gold for 6x6 boards, and increases by 25 
-          per board size up to 275 for 16x16. You cannot win a gold victory when your king is in check.</li>
-      <li>Stalemate wins the game instead of drawing it.</li>
+          per board size up to 275 for 16x16. You win at the start of your turn if you have enough gold and your king is not in check.</li>
+      <li>Stalemate wins the game instead of drawing it: if you have no legal moves (including piece placements), you lose.</li>
     </ul>
 
     <h3>Bidding</h3>
@@ -52,7 +53,7 @@
       bidder wins White and their bid becomes Black's starting gold. Bids can be negative.
     </p>
     <p class="example">
-      <strong>Example:</strong> You bid 8g, the opponent bids 6g. You play White, and the opponent
+      <strong>Example:</strong> You bid 8 gold, the opponent bids 6 gold. You play White, and the opponent
       plays Black with 8 starting gold.
     </p>
 
@@ -95,7 +96,7 @@
   h1 {
     font-size: 2rem;
     font-weight: 700;
-    color: #a0b0ff;
+    color: var(--accent-2);
     margin: 0 0 0.5rem;
     letter-spacing: 0.01em;
   }
@@ -103,14 +104,14 @@
   h2 {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #ccd;
+    color: var(--fg-2);
     margin: 1.5rem 0 0.6rem;
   }
 
   h3 {
     font-size: 1rem;
     font-weight: 600;
-    color: #9ab;
+    color: var(--muted);
     margin: 1.1rem 0 0.4rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -120,14 +121,14 @@
   p, li {
     font-size: 0.97rem;
     line-height: 1.7;
-    color: #ccc;
+    color: var(--fg-2);
   }
 
   p { margin: 0.4rem 0; }
 
   .lead {
     font-size: 1.05rem;
-    color: #bbb;
+    color: var(--fg-2);
     line-height: 1.75;
     margin-top: 0.75rem;
   }
@@ -140,21 +141,21 @@
     gap: 0.4rem;
   }
 
-  li { color: #bbb; }
-  li strong { color: #ddd; }
+  li { color: var(--fg-2); }
+  li strong { color: var(--fg); }
 
   .example {
-    background: #1e1e38;
-    border-left: 3px solid #4a6fa5;
+    background: var(--surface);
+    border-left: 3px solid var(--button);
     padding: 0.6rem 0.9rem;
     border-radius: 0 6px 6px 0;
-    color: #bbb;
+    color: var(--fg-2);
   }
-  .example strong { color: #ddd; }
+  .example strong { color: var(--fg); }
 
   hr {
     border: none;
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid var(--line);
     margin: 1.75rem 0 0.25rem;
   }
 

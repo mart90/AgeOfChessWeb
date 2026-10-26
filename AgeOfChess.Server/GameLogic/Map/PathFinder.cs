@@ -129,12 +129,20 @@ public class PathFinder
         return legalSquares;
     }
 
-    public IEnumerable<Square> FindLegalDestinationsForPiecePlacement(bool pieceIsWhite, bool placingPawn = false, bool recurring = false)
+    /// <param name="nextToQueens">Also allow the squares next to the player's queens (rooks, bishops, knights).</param>
+    public IEnumerable<Square> FindLegalDestinationsForPiecePlacement(bool pieceIsWhite, bool placingPawn = false, bool recurring = false, bool nextToQueens = false)
     {
         var legalDestinations = new List<Square>();
 
         Square activePlayerKingSquare = _map.Squares.Single(e => e.Object is Piece piece && piece.IsWhite == pieceIsWhite && piece is King);
         legalDestinations.AddRange(FindLegalPiecePlacementsAroundSquare(activePlayerKingSquare));
+
+        if (nextToQueens)
+        {
+            foreach (Square queenSquare in _map.Squares.Where(e => e.Object is Queen queen && queen.IsWhite == pieceIsWhite).ToList())
+                legalDestinations.AddRange(FindLegalPiecePlacementsAroundSquare(queenSquare));
+            legalDestinations = legalDestinations.Distinct().ToList();
+        }
 
         if (placingPawn)
         {

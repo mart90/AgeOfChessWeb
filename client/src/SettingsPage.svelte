@@ -97,18 +97,18 @@
   .card {
     width: 100%;
     max-width: 400px;
-    background: #1e1e38;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 8px;
     padding: 1.2rem 1.4rem;
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
   }
-  h2 { margin: 0 0 0.25rem; font-size: 1.1rem; color: #bbb; }
+  h2 { margin: 0 0 0.25rem; font-size: 1.1rem; color: var(--fg-2); }
 
-  .username-row { margin: 0; font-size: 0.9rem; color: #aaa; }
-  .username-row strong { color: #eee; }
+  .username-row { margin: 0; font-size: 0.9rem; color: var(--muted); }
+  .username-row strong { color: var(--fg); }
 
   form {
     display: flex;
@@ -120,17 +120,17 @@
     flex-direction: column;
     gap: 0.3rem;
     font-size: 0.9rem;
-    color: #ccc;
+    color: var(--fg-2);
   }
   input[type="text"] {
     padding: 0.5rem 0.75rem;
-    background: #22223a;
-    border: 1px solid #444;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
     border-radius: 6px;
-    color: #eee;
+    color: var(--fg);
     font-size: 1rem;
   }
-  input[type="text"]:focus { outline: none; border-color: #7b8cde; }
+  input[type="text"]:focus { outline: none; border-color: var(--accent); }
   input[type="text"]:disabled { opacity: 0.4; cursor: default; }
 
   .display-name-block {
@@ -143,14 +143,14 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.85rem;
-    color: #aaa;
+    color: var(--muted);
     flex-direction: row;
     cursor: pointer;
   }
 
   button[type="submit"] {
     padding: 0.55rem 1.2rem;
-    background: #4a6fa5;
+    background: var(--button);
     color: #fff;
     border: none;
     border-radius: 6px;
@@ -161,6 +161,6 @@
 
   .error   { color: #e07070; font-size: 0.85rem; margin: 0; }
   .success { color: #7cfc00; font-size: 0.85rem; margin: 0; }
-  .muted   { color: #666; }
+  .muted   { color: var(--faint); }
 
 </style>

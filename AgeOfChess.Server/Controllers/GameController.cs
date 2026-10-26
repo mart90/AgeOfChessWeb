@@ -35,7 +35,17 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         bool BiddingEnabled = false,
         string? MapSeed = null,
         string MapMode = "m",
-        bool IsPrivate = false
+        bool IsPrivate = false,
+        bool IsRanked = true
+    );
+
+    public record CreateComputerGameRequest(
+        int BoardSize = 10,
+        string MapMode = "m",
+        string? MapSeed = null,
+        int Level = 3,
+        string Color = "white",   // "white" | "black" | "random" — the human's colour (ignored with bidding)
+        bool BiddingEnabled = false
     );
 
     // POST /api/game
@@ -51,6 +61,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             BiddingEnabled       = req.BiddingEnabled,
             MapSeed              = req.MapSeed,
             MapMode              = req.MapMode,
+            IsRanked             = req.IsRanked,
         };
 
         // Resolve creator info if authenticated
@@ -85,12 +96,77 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         });
     }
 
-    // POST /api/game/{gameId}/join
+    // POST /api/game/computer  — start a game against the computer (always unranked, untimed).
+    // The computer's moves are calculated in the player's browser (see GameHub.SubmitComputerMove).
+    [HttpPost("computer")]
+    public async Task<IActionResult> CreateComputerGame([FromBody] CreateComputerGameRequest req)
+    {
+        var level = ComputerLevels.Get(req.Level);
+        if (level == null) return BadRequest("Unknown computer level.");
+
+        // With bidding the human starts as the "creator" (white token) and the bids decide
+        bool humanIsWhite = req.BiddingEnabled || req.Color switch
+        {
+            "black"  => false,
+            "random" => Random.Shared.Next(2) == 0,
+            _        => true,
+        };
+
+        var settings = new GameSettings
+        {
+            BoardSize          = req.BoardSize,
+            TimeControlEnabled = false,
+            BiddingEnabled     = req.BiddingEnabled,
+            MapSeed            = req.MapSeed,
+            MapMode            = req.MapMode,
+            IsRanked           = false,
+            ComputerLevel      = level.Number,
+            ComputerIsWhite    = !humanIsWhite,
+        };
+
+        GameCreationService.PlayerInfo human = new();
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (int.TryParse(userIdStr, out var userId) && await db.Users.FindAsync(userId) is { } user)
+            human = new(userId, user.EloSlow, user.EffectiveDisplayName);
+        var computer = new GameCreationService.PlayerInfo(null, level.Elo, ComputerLevels.Name(level.Number));
+
+        var (session, game) = await gameCreation.CreateAsync(
+            settings,
+            humanIsWhite ? human : computer,
+            humanIsWhite ? computer : human,
+            isPrivate: true);
+
+        return Ok(new
+        {
+            gameId      = session.Id,
+            playerToken = humanIsWhite ? game.WhitePlayerToken : game.BlackPlayerToken,
+            isWhite     = humanIsWhite,
+        });
+    }
+
+    /// <summary>
+    /// Who can see (and join from the list) an open lobby: private → nobody (invite link only);
+    /// ranked → logged-in users; unranked → everyone. Lobbies created without an account and
+    /// computer games are never listed.
+    /// </summary>
+    private static bool LobbyVisibleTo(ServerGame game, bool isPrivate, bool isRanked, int? viewerId) =>
+        game.WhiteUserId.HasValue && game.WhiteUserId != viewerId && !game.IsComputerGame
+        && !game.HasGameStarted && !game.GameEnded
+        && !isPrivate && (!isRanked || viewerId.HasValue);
+
+    private int? CurrentUserId() =>
+        int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : null;
+
+    // POST /api/game/{gameId}/join  — join an open lobby from the list (returns the black token)
     [HttpPost("{gameId:int}/join")]
     public async Task<IActionResult> JoinGame(int gameId)
     {
+        var game = sessions.GetById(gameId);
         var session = await db.GameSessions.FindAsync(gameId);
-        if (session == null) return NotFound();
+        if (game == null || session == null) return NotFound();
+        var settings = JsonSerializer.Deserialize<GameSettings>(session.SettingsJson);
+        if (!LobbyVisibleTo(game, session.IsPrivate, settings?.IsRanked ?? true, CurrentUserId()))
+            return NotFound();
 
         // Game already has two players (i.e. it's in the session manager and both tokens are set)
         // The second player joins by connecting to SignalR with their token.
@@ -195,33 +271,34 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         return Ok(list);
     }
 
-    // GET /api/game/open-lobbies  — public lobbies waiting for an opponent (logged-in users only)
+    // GET /api/game/open-lobbies  — lobbies waiting for an opponent that the caller may see
+    // (see LobbyVisibleTo; anonymous callers get unranked lobbies only)
     [HttpGet("open-lobbies")]
-    [Authorize]
     public async Task<IActionResult> GetOpenLobbies()
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(userIdStr, out var userId)) return Unauthorized();
+        var userId = CurrentUserId();
 
-        // In-memory games that haven't started yet, created by another logged-in user
         var waitingGames = sessions.GetAll()
-            .Where(g => !g.HasGameStarted && !g.GameEnded
-                        && g.WhiteUserId.HasValue && g.WhiteUserId != userId)
+            .Where(g => !g.HasGameStarted && !g.GameEnded && g.WhiteUserId.HasValue && g.WhiteUserId != userId)
             .ToList();
 
         if (waitingGames.Count == 0) return Ok(Array.Empty<object>());
 
-        // Filter out private lobbies; also fetch SettingsJson to check for custom map seeds
+        // Private flag and settings (ranked, custom map seed) live in the DB row
         var sessionIds = waitingGames.Select(g => g.SessionId).ToList();
         var dbRows = await db.GameSessions
-            .Where(s => sessionIds.Contains(s.Id) && !s.IsPrivate)
-            .Select(s => new { s.Id, s.SettingsJson })
+            .Where(s => sessionIds.Contains(s.Id))
+            .Select(s => new { s.Id, s.SettingsJson, s.IsPrivate })
             .ToListAsync();
-
-        var publicIds    = dbRows.Select(r => r.Id).ToHashSet();
+        var rowById      = dbRows.ToDictionary(r => r.Id);
         var settingsById = dbRows.ToDictionary(r => r.Id, r => r.SettingsJson);
 
-        var publicGames = waitingGames.Where(g => publicIds.Contains(g.SessionId)).ToList();
+        var publicGames = waitingGames.Where(g =>
+        {
+            if (!rowById.TryGetValue(g.SessionId, out var row)) return false;
+            var s = JsonSerializer.Deserialize<GameSettings>(row.SettingsJson);
+            return LobbyVisibleTo(g, row.IsPrivate, s?.IsRanked ?? true, userId);
+        }).ToList();
         if (publicGames.Count == 0) return Ok(Array.Empty<object>());
 
         // Fetch creator user records for Elo lookup
@@ -250,10 +327,12 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
 
             // Only expose the seed if the creator explicitly pasted one
             string? customSeed = null;
+            bool isRanked = true;
             if (settingsById.TryGetValue(g.SessionId, out var sJson))
             {
                 var s = JsonSerializer.Deserialize<GameSettings>(sJson);
                 if (s?.MapSeed != null) customSeed = map.Seed;
+                if (s != null) isRanked = s.IsRanked;
             }
 
             return new
@@ -267,6 +346,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
                 boardSize            = g.MapSize,
                 isFullRandom         = !map.IsMirrored,
                 mapSeed              = customSeed,
+                isRanked,
             };
         }).ToList();
 

@@ -78,18 +78,47 @@
 {/if}
 
 <style>
+  /* Site-wide palette and type (warm dark wood + gold, matching the board). Components use these
+     variables instead of literal colours. */
+  :global(:root) {
+    color-scheme: dark;
+    --bg:          #1b1916;   /* page */
+    --surface:     #24211d;   /* panels, cards, nav */
+    --surface-2:   #2d2924;   /* inputs, idle buttons */
+    --surface-3:   #3a332b;   /* hover / selected surfaces */
+    --line:        #3a352e;   /* borders, dividers */
+    --line-strong: #4a433a;   /* stronger borders, tracks */
+    --fg:          #ece5d8;   /* main text */
+    --fg-2:        #cfc6b6;   /* secondary text */
+    --muted:       #a59a8a;   /* labels, hints */
+    --faint:       #7a7064;   /* very quiet text */
+    --accent:      #d8a64a;   /* gold: links, selection, focus */
+    --accent-2:    #e8c27a;   /* lighter gold: headings, hover */
+    --button:      #9b6f24;   /* primary button background */
+    --button-hover:#b0802c;
+    --font-display: "Alegreya SC", Georgia, "Times New Roman", serif;
+    --font-body:    "Alegreya Sans", "Segoe UI", system-ui, sans-serif;
+  }
   :global(*, *::before, *::after) { box-sizing: border-box; }
   :global(body) {
     margin: 0;
-    font-family: sans-serif;
-    background: #1a1a2e;
-    color: #eee;
+    font-family: var(--font-body);
+    font-size: 16px;
+    background: var(--bg);
+    color: var(--fg);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
   }
+  :global(h1, h2, h3) {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  :global(button, input, select, textarea) {
+    font-family: inherit;
+  }
   :global(button) {
     cursor: pointer;
-    font-family: inherit;
   }
 </style>

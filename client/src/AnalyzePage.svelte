@@ -8,17 +8,15 @@
   import MoveList from './MoveList.svelte';
   import { MoveNode, addChild } from './lib/moveTree.js';
   import { serializeTree, deserializeTree, getNodePath, nodeAtPath } from './lib/treeStorage.js';
-  import { getBestMove, createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js'
+  import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js'
+  import { engineSearch, cancelSearch } from './lib/engine/engine.js';
   import { SHOP, MINE_INCOME } from './lib/constants.js'
-  import AnalysisWorker from './lib/analysisWorker.js?worker';
+  import { EngineAnalysis as AnalysisWorker } from './lib/engine/engineAnalysis.js';
   import { settings, persistSettings } from './lib/settings.svelte.js';
+  import { pieceSrc } from './lib/boardTheme.js';
+  import { unpackGameTree, GAME_TRANSFER_KEY, GAME_TRANSFER_FORMAT } from './lib/gameTransfer.js';
 
-  function pieceImgSrc(type, isWhite) {
-    if (type === 'Treasure') return '/assets/objects/treasure.png';
-    if (type === 'WhiteFlag' || type === 'BlackFlag') return '/assets/objects/white_flag.png';
-    const n = type.replace(/^(White|Black)/, '').toLowerCase();
-    return `/assets/objects/${isWhite ? 'w' : 'b'}_${n}.png`;
-  }
+  const pieceImgSrc = pieceSrc;
 
   // ── Board state ─────────────────────────────────────────────────────────────
   let squares       = $state([]);
@@ -96,28 +94,24 @@
 
   // ── Analysis ────────────────────────────────────────────────────────────────
   let analyzing      = $state(false);
-  let thinking       = $state(false);
   let analysisWorker = $state(null);
   let analysisResults = $state([]);
   let analysisDepth = $state(0);
-  let depthTimings = $state([]);
 
   function startWorker() {
     if (!analysisWorker) {
       analysisWorker = new AnalysisWorker();
 
       analysisWorker.onmessage = (event) => {
-        const { type, depth, topMoves, timeMs } = event.data;
+        const { type, depth, topMoves } = event.data;
 
         if (type === 'depth-result') {
           analysisDepth = depth;
           analysisResults = topMoves || [];
-          depthTimings = [...depthTimings, { depth, timeMs }];
         }
       };
     }
 
-    depthTimings = [];
     analysisWorker.postMessage({
       type: 'start',
       payload: getCurrentPosition()
@@ -159,25 +153,59 @@
     analysisWorker?.postMessage({ type: 'stop' });
   }
 
-  async function botMove() {
-    thinking = true;
-    try {
-      let maxPlayouts = 3_000_000;
-      maxPlayouts = maxPlayouts / (squares.length * 1/64); // Stays the same on 8x8 boards. 
+  // ── Engine move (Rust engine via WebAssembly, see lib/engine/) ──────────────
+  const ENGINE_MOVE_NODES = 600_000;
+  let engineThinking = $state(false);
+  let engineError    = $state('');
+  let searchToken    = 0;              // invalidates results of aborted searches
 
-      let bestMove = getBestMove(squares, whiteGold, blackGold, whiteIsActive, maxPlayouts);
-      if (bestMove.type == "m") {
-        applyMove(bestMove.fromPos, bestMove.toPos);
-      }
-      else {
-        placePieceAt(bestMove.toPos, bestMove.pieceType, whiteIsActive);
-      }
+  // Top engine move while analyzing, shown on the board
+  const suggestion = $derived(analyzing && analysisResults.length > 0 ? { ...analysisResults[0].move, isWhite: whiteIsActive } : null);
+
+  function abortEngine() {
+    if (engineThinking) {
+      cancelSearch();
+      engineThinking = false;
+    }
+    searchToken++;
+  }
+
+  function applyEngineMove(best) {
+    if (best.type === 'm') applyMove(best.fromPos, best.toPos);
+    else placePieceAt(best.toPos, best.pieceType, whiteIsActive);
+  }
+
+  // While analyzing: play the current top move. Otherwise: think for 600k nodes and play.
+  async function engineMove() {
+    if (engineThinking || !squares.length) return;
+    engineError = '';
+    if (suggestion) {
+      applyEngineMove(suggestion);
+      return;
+    }
+    const position = getCurrentPosition();
+    const before = JSON.stringify(position);
+    const token = ++searchToken;
+    engineThinking = true;
+    try {
+      const res = await engineSearch(position, { nodes: ENGINE_MOVE_NODES });
+      // Ignore the result if the position changed meanwhile
+      if (token !== searchToken || JSON.stringify(getCurrentPosition()) !== before) return;
+      engineThinking = false;
+      if (res.best) applyEngineMove(res.best);
     } catch (e) {
-      genError = e.message ?? String(e);
+      if (token === searchToken) engineError = e.message ?? String(e);
     } finally {
-      thinking = false;
+      if (token === searchToken) engineThinking = false;
     }
   }
+
+  function formatEval(info) {
+    if (info.mate != null) return info.mate > 0 ? `#${info.mate}` : `#-${-info.mate}`;
+    return `${info.score > 0 ? '+' : ''}${info.score.toFixed(1)}g`;
+  }
+
+  onDestroy(() => cancelSearch());
 
   function toNotation(rawMove) {
     const move = JSON.parse(JSON.stringify(rawMove)).move;
@@ -368,24 +396,31 @@
 
   function navigateToNode(node) {
     if (!node?.boardState) return;
+    // Sound only when stepping exactly one move forward (not back, not jumps)
+    if (node.parent === currentNode && node.san) playSound(/x/.test(node.san) ? 'capture' : 'move');
+    abortEngine();
     restoreSnapshot(node.boardState);
     currentNode = node;
+
     if (analyzing && analysisWorker) {
       analysisResults = [];
-      depthTimings = [];
       analysisWorker.postMessage({ type: 'update', payload: getCurrentPosition() });
     }
   }
 
-  function undo() {
-    if (!undoStack.length) return;
+  function undoOnce() {
     redoStack = [...redoStack, snapshot()];
     restoreSnapshot(undoStack[undoStack.length - 1]);
     undoStack = undoStack.slice(0, -1);
+  }
+
+  function undo() {
+    if (!undoStack.length) return;
+    abortEngine();
+    undoOnce();
 
     if (analyzing && analysisWorker) {
-      analysisResults = [];  // Clear old results
-      depthTimings = [];
+      analysisResults = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -395,13 +430,14 @@
 
   function redo() {
     if (!redoStack.length) return;
+    abortEngine();
     undoStack = [...undoStack, snapshot()];
     restoreSnapshot(redoStack[redoStack.length - 1]);
     redoStack = redoStack.slice(0, -1);
 
+
     if (analyzing && analysisWorker) {
-      analysisResults = [];  // Clear old results
-      depthTimings = [];
+      analysisResults = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -432,7 +468,10 @@
       moveTree    = new MoveNode(null, snapshot(), null);
       currentNode = moveTree;
 
+      abortEngine();
+
       if (analyzing && analysisWorker) {
+        analysisResults = [];
         analysisWorker.postMessage({
           type: 'update',
           payload: getCurrentPosition()
@@ -452,6 +491,7 @@
     clearSelection();
 
     if (analyzing && analysisWorker) {
+      analysisResults = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -472,6 +512,7 @@
     clearSelection();
 
     if (analyzing && analysisWorker) {
+      analysisResults = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -534,8 +575,7 @@
     lastMoveTo    = toPos;
 
     if (analyzing && analysisWorker) {
-      analysisResults = [];  // Clear old results
-      depthTimings = [];
+      analysisResults = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -554,6 +594,7 @@
   function placePieceAt(pos, pieceType, isWhitePiece) {
     const sq = sqAt(pos);
     if (!sq || isRocks(sq.type)) return;
+    if (isWhitePiece !== whiteIsActive) return; // wrong side's turn
     const cost = SHOP.find(s => s.type === pieceType)?.cost ?? 0;
     if (isWhitePiece && whiteGold < cost) return;
     if (!isWhitePiece && blackGold < cost) return;
@@ -595,6 +636,7 @@
     lastMoveTo    = pos;
 
     if (analyzing && analysisWorker) {
+      analysisResults = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -606,6 +648,7 @@
       currentNode = addChild(currentNode, placeSan, snapshot());
       treeRevision++;
     }
+
   }
 
   function removePieceAt(pos) {
@@ -618,6 +661,7 @@
     });
 
     if (analyzing && analysisWorker) {
+      analysisResults = [];
       analysisWorker.postMessage({
         type: 'update',
         payload: getCurrentPosition()
@@ -699,7 +743,7 @@
 
   // ── Shop drag ─────────────────────────────────────────────────────────────
   function shopPointerDown(e, pieceType, isWhitePiece) {
-    if (!squares.length) return;
+    if (!squares.length || isWhitePiece !== whiteIsActive) return;
     const cost = SHOP.find(s => s.type === pieceType)?.cost ?? 0;
     if (isWhitePiece && whiteGold < cost) return;
     if (!isWhitePiece && blackGold < cost) return;
@@ -738,13 +782,20 @@
     window.addEventListener('pointerup',   globalPointerUp);
 
     // Load a game imported from GamePage, or restore a previously saved session
-    const pendingRaw = localStorage.getItem('analyze_pending_import');
+    const pendingRaw = localStorage.getItem(GAME_TRANSFER_KEY);
     if (pendingRaw) {
-      localStorage.removeItem('analyze_pending_import');
+      localStorage.removeItem(GAME_TRANSFER_KEY);
       try {
         const data = JSON.parse(pendingRaw);
-        if (data.format === 'gamepage') loadImportedGameTree(data);
-      } catch (e) { console.error('Failed to load game import', e); }
+        if (data.format === GAME_TRANSFER_FORMAT) {
+          applyLoadedTree(unpackGameTree(data), data.currentPath, data.mapSize, data.mapSeed, true);
+        } else if (data.format === 'gamepage') {
+          loadImportedGameTree(data);   // older full-snapshot format
+        }
+      } catch (e) {
+        console.error('Failed to load game import', e);
+        genError = 'Could not load the game into the analysis board.';
+      }
     } else {
       const savedRaw = localStorage.getItem('analyze_board_state');
       if (savedRaw) {
@@ -772,6 +823,22 @@
   />
 {/if}
 
+<!-- Mobile only (between the move nav buttons and the move list): best line + engine buttons -->
+{#snippet mobileEngineBar()}
+  <div class="mobile-only mobile-engine">
+    <span class="mobile-engine-info">
+      {#if analysisResults.length > 0}
+        <span class="move-score">{formatEval(analysisResults[0])}</span>
+        <span class="move-notation">{toNotation(analysisResults[0])}</span>
+      {:else}
+        <span class="mobile-engine-idle">{analyzing ? 'Analyzing…' : 'Engine'}</span>
+      {/if}
+    </span>
+    <button class="ctrl-btn" onclick={toggleAnalysis} disabled={!mapSize}>{analyzing ? 'Stop' : 'Analyze'}</button>
+    <button class="ctrl-btn" onclick={engineMove} disabled={!mapSize || engineThinking}>{engineThinking ? '…' : 'Move'}</button>
+  </div>
+{/snippet}
+
 <div class="sandbox-wrap">
   <!-- Board column: centers the board+movelist unit -->
   <div class="board-col">
@@ -788,12 +855,39 @@
             dragOverSquare={dragOverSq}
             {hoverSquares}
             lastMoveSquares={lastMoveSquares}
+            {suggestion}
             onPieceGrabbed={handleGrab}
             onDropOnBoard={handleDrop}
             onHoverSquare={handleHover}
             onSquareClick={handleSquareClick}
             onCanvasReady={(el) => { boardCanvas = el; }}
           />
+        </div>
+        <!-- Mobile only: gold counts and the shop of the side to move, right under the board -->
+        <div class="mobile-only mobile-gold">
+          <div class="mobile-gold-side" class:active={whiteIsActive}>
+            <span class="player-name">White</span>
+            <input class="gold-input" type="number" min="0" max="9999" bind:value={whiteGold} />
+          </div>
+          <div class="mobile-gold-side" class:active={!whiteIsActive}>
+            <span class="player-name">Black</span>
+            <input class="gold-input" type="number" min="0" max="9999" bind:value={blackGold} />
+          </div>
+        </div>
+        <div class="mobile-only shop-row mobile-shop">
+          {#each SHOP as item}
+            {@const gold = whiteIsActive ? whiteGold : blackGold}
+            <button
+              class="shop-piece"
+              class:active={dragging?.type === 'place' && dragging.pieceType === item.type}
+              disabled={gold < item.cost}
+              title="{item.type} — {item.cost}g"
+              onpointerdown={(e) => shopPointerDown(e, item.type, whiteIsActive)}
+            >
+              <img src={pieceImgSrc(item.type, whiteIsActive)} alt={item.type} width="32" height="32" draggable="false" />
+              <span class="cost" class:dim={gold < item.cost}>{item.cost}</span>
+            </button>
+          {/each}
         </div>
         {#if moveTree}
           <div class="movelist-col">
@@ -803,6 +897,7 @@
               {treeRevision}
               replayMode={true}
               onNavigate={navigateToNode}
+              belowNav={mobileEngineBar}
             />
           </div>
         {/if}
@@ -817,14 +912,14 @@
   <!-- Right: controls -->
   <aside class="side-panel">
 
-    <!-- Player bars -->
-    <div class="players">
+    <!-- Player bars (desktop; mobile has the compact gold bar under the board) -->
+    <div class="players desktop-only">
       <div class="player-bar" class:active={whiteIsActive}>
         <span class="player-name">White</span>
         <div class="gold-wrap">
           <input class="gold-input" type="number" min="0" max="9999"
                  bind:value={whiteGold} />
-          <span class="gold-unit">g</span>
+          <span class="gold-unit">gold</span>
         </div>
       </div>
       <div class="player-bar" class:active={!whiteIsActive}>
@@ -832,7 +927,7 @@
         <div class="gold-wrap">
           <input class="gold-input" type="number" min="0" max="9999"
                  bind:value={blackGold} />
-          <span class="gold-unit">g</span>
+          <span class="gold-unit">gold</span>
         </div>
       </div>
     </div>
@@ -842,8 +937,8 @@
       <button class="ctrl-btn" onclick={passTurn} disabled={!squares.length}>Pass turn</button>
       <button class="ctrl-btn" onclick={() => viewAsWhite = !viewAsWhite} disabled={!squares.length}>Flip</button>
     </div>
-    <!-- Shop: place pieces -->
-    <div class="section">
+    <!-- Shop: place pieces (desktop; mobile has the shop under the board) -->
+    <div class="section desktop-only">
       <div class="section-label">Place piece</div>
       <div class="shop-label">White</div>
       <div class="shop-row">
@@ -852,12 +947,12 @@
           <button
             class="shop-piece"
             class:active={dragging?.type === 'place' && dragging.pieceType === item.type && dragging.isWhitePiece}
-            disabled={!squares.length || !canAfford}
+            disabled={!squares.length || !canAfford || !whiteIsActive}
             title="{item.type} — {item.cost}g"
             onpointerdown={(e) => shopPointerDown(e, item.type, true)}
           >
             <img src={pieceImgSrc(item.type, true)} alt={item.type} width="32" height="32" draggable="false" />
-            <span class="cost" class:dim={!canAfford}>{item.cost}g</span>
+            <span class="cost" class:dim={!canAfford}>{item.cost}</span>
           </button>
         {/each}
       </div>
@@ -868,12 +963,12 @@
           <button
             class="shop-piece"
             class:active={dragging?.type === 'place' && dragging.pieceType === item.type && !dragging.isWhitePiece}
-            disabled={!squares.length || !canAfford}
+            disabled={!squares.length || !canAfford || whiteIsActive}
             title="{item.type} — {item.cost}g"
             onpointerdown={(e) => shopPointerDown(e, item.type, false)}
           >
             <img src={pieceImgSrc(item.type, false)} alt={item.type} width="32" height="32" draggable="false" />
-            <span class="cost" class:dim={!canAfford}>{item.cost}g</span>
+            <span class="cost" class:dim={!canAfford}>{item.cost}</span>
           </button>
         {/each}
       </div>
@@ -911,15 +1006,19 @@
       </button>
     </div>
 
-    <div class="section">
-      <div class="section-label">Analysis</div>
-      <!-- <button class="action-btn" onclick={botMove}
-              disabled={thinking || analyzing}>
-        {thinking ? "Thinking..." : "Bot move"}
-      </button> -->
-      <button class="action-btn" onclick={toggleAnalysis} disabled={!mapSize}>
-        {analyzing ? "Stop" : "Analyze"}
-      </button>
+    <!-- On mobile only the line list is shown here (buttons and best line sit under the board) -->
+    <div class="section" class:desktop-only={!analysisResults.length && !engineError}>
+      <div class="section-label">Engine</div>
+      <div class="ctrl-row desktop-only">
+        <button class="action-btn grow" onclick={toggleAnalysis} disabled={!mapSize}>
+          {analyzing ? "Stop" : "Analyze"}
+        </button>
+        <button class="ctrl-btn" onclick={engineMove} disabled={!mapSize || engineThinking}
+                title={analyzing ? 'Play the top move' : 'Think (600k nodes) and play a move'}>
+          {engineThinking ? 'Thinking…' : 'Engine move'}
+        </button>
+      </div>
+      {#if engineError}<p class="error">{engineError}</p>{/if}
       {#if analysisResults.length > 0}
         <div class="analysis-info">
           <div class="analysis-depth">Depth: {analysisDepth}</div>
@@ -929,19 +1028,13 @@
                 class="analysis-move"
                 onmouseenter={() => handleAnalysisMoveHover(move)}
                 onmouseleave={() => handleAnalysisMoveHover(null)}
+                title={move.pv?.join(' ')}
               >
                 <span class="move-notation">{toNotation(move)}</span>
-                <span class="move-score">{move.score.toFixed(2)}</span>
+                <span class="move-score">{formatEval(move)}</span>
               </button>
             {/each}
           </div>
-          {#if depthTimings.length > 0}
-            <div class="depth-timings">
-              {#each depthTimings as { depth, timeMs }}
-                <div>Depth {depth}: {timeMs.toFixed(0)}ms</div>
-              {/each}
-            </div>
-          {/if}
         </div>
       {/if}
     </div>
@@ -956,7 +1049,6 @@
     transform: translate(-50%, -50%);
     pointer-events: none;
     z-index: 1000;
-    image-rendering: pixelated;
     filter: drop-shadow(0 4px 10px rgba(0,0,0,0.7));
   }
 
@@ -1003,9 +1095,9 @@
     width: 100%;
     max-width: 600px;
     aspect-ratio: 1;
-    border: 2px dashed #2a2a4a;
+    border: 2px dashed var(--line);
     border-radius: 8px;
-    color: #555;
+    color: var(--faint);
     font-size: 0.95rem;
   }
 
@@ -1016,7 +1108,7 @@
     align-self: stretch;
     display: flex;
     flex-direction: column;
-    background: #1e1e38;
+    background: var(--surface);
     overflow: hidden;
   }
 
@@ -1028,8 +1120,8 @@
     flex-direction: column;
     gap: 0.9rem;
     padding: 1rem;
-    border-left: 1px solid #2a2a4a;
-    background: #14142a;
+    border-left: 1px solid var(--line);
+    background: var(--surface);
     overflow-y: auto;
     overflow-x: hidden;
   }
@@ -1042,27 +1134,27 @@
     justify-content: space-between;
     padding: 0.5rem 0.75rem;
     border-radius: 6px;
-    border: 1px solid #2a2a4a;
-    background: #1e1e38;
+    border: 1px solid var(--line);
+    background: var(--surface);
     transition: border-color 0.15s;
   }
-  .player-bar.active { border-color: #7cfc00; background: rgba(124,252,0,0.06); }
-  .player-name { font-size: 0.9rem; font-weight: 600; color: #ccc; }
+  .player-bar.active { border-color: var(--accent); background: var(--surface-3); }
+  .player-name { font-size: 0.9rem; font-weight: 600; color: var(--fg-2); }
   .gold-wrap { display: flex; align-items: center; gap: 0.25rem; }
   .gold-input {
     width: 62px;
-    background: #2d2d4a; border: 1px solid #3a3a5a; border-radius: 4px;
+    background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 4px;
     color: #f0c040; font-size: 0.9rem; padding: 0.2rem 0.4rem; text-align: right;
   }
-  .gold-unit { color: #888; font-size: 0.85rem; }
+  .gold-unit { color: var(--muted); font-size: 0.85rem; }
 
   /* ── Control buttons ── */
   .ctrl-row { display: flex; gap: 0.4rem; }
   .ctrl-btn {
-    flex: 1; padding: 0.4rem 0.5rem; font-size: 0.82rem;
-    background: #2d2d4a; border: 1px solid #3a3a5a; color: #ccc; border-radius: 5px;
+    flex: 1; padding: 0.4rem 0.6rem; font-size: 0.82rem; white-space: nowrap;
+    background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--fg-2); border-radius: 5px;
   }
-  .ctrl-btn:hover:not(:disabled) { background: #3a3a6a; color: #eee; }
+  .ctrl-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--fg); }
   .ctrl-btn:disabled { opacity: 0.35; cursor: default; }
   .ctrl-btn.danger { color: #e07070; border-color: #5a3a3a; }
   .ctrl-btn.danger:hover:not(:disabled) { background: #3a2a2a; }
@@ -1070,55 +1162,58 @@
   /* ── Sections ── */
   .section {
     display: flex; flex-direction: column; gap: 0.5rem;
-    padding-top: 0.6rem; border-top: 1px solid #2a2a4a;
+    padding-top: 0.6rem; border-top: 1px solid var(--line);
   }
   .section-label {
-    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: #555;
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
   }
 
   /* ── Shop ── */
-  .shop-label { font-size: 0.78rem; color: #888; margin-bottom: -0.2rem; }
+  .shop-label { font-size: 0.78rem; color: var(--muted); margin-bottom: -0.2rem; }
   .shop-row { display: flex; gap: 0.2rem; }
   .shop-piece {
     display: flex; flex-direction: column; align-items: center;
     padding: 0.2rem 0.15rem;
-    background: #2d2d4a; border: 2px solid transparent; border-radius: 7px;
+    background: var(--surface-2); border: 2px solid transparent; border-radius: 7px;
     gap: 2px; touch-action: none; user-select: none; flex: 1; min-width: 0;
     transition: border-color 0.1s, background 0.1s;
   }
-  .shop-piece img { image-rendering: pixelated; }
-  .shop-piece:not(:disabled):hover { border-color: #7b8cde; background: #3a3a60; }
+
+  .shop-piece:not(:disabled):hover { border-color: var(--accent); background: var(--surface-3); }
   .shop-piece.active { border-color: #f5c518; background: #3a3a20; }
   .shop-piece:disabled { opacity: 0.3; cursor: default; }
-  .cost { font-size: 0.65rem; color: #f5c518; }
-  .cost.dim { color: #666; }
-  .shop-hint { font-size: 0.74rem; color: #666; margin: 0; line-height: 1.4; }
+  .cost { font-size: 0.8rem; font-weight: 700; color: #f5c518; font-variant-numeric: tabular-nums; }
+  .cost.dim { color: var(--faint); }
+  .shop-hint { font-size: 0.74rem; color: var(--faint); margin: 0; line-height: 1.4; }
 
   /* ── Map generation ── */
   .option-row {
     display: flex; align-items: center; justify-content: space-between;
-    gap: 0.5rem; font-size: 0.88rem; color: #ccc;
+    gap: 0.5rem; font-size: 0.88rem; color: var(--fg-2);
   }
-  .option-row input[type="range"] { flex: 1; accent-color: #7b8cde; }
+  .option-row input[type="range"] { flex: 1; accent-color: var(--accent); }
   .checkbox-label {
     display: flex; align-items: center; gap: 0.5rem;
-    font-size: 0.88rem; color: #ccc; cursor: pointer;
+    font-size: 0.88rem; color: var(--fg-2); cursor: pointer;
   }
   .seed-row { display: flex; }
   .seed-input {
-    width: 100%; background: #2d2d4a; border: 1px solid #3a3a5a; border-radius: 5px;
-    color: #eee; font-size: 0.8rem; font-family: monospace; padding: 0.35rem 0.6rem;
+    width: 100%; background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 5px;
+    color: var(--fg); font-size: 0.8rem; font-family: monospace; padding: 0.35rem 0.6rem;
   }
   .seed-input.seed-invalid { border-color: #c05050; }
   .seed-input.seed-ok      { border-color: #4a9a4a; }
 
   .action-btn {
     padding: 0.65rem; font-size: 0.95rem;
-    background: #4a6fa5; color: #fff; border: none; border-radius: 6px;
+    background: var(--button); color: #fff; border: none; border-radius: 6px;
   }
   .action-btn:disabled { opacity: 0.45; cursor: default; }
 
   .error { color: #e07070; font-size: 0.8rem; margin: 0; }
+
+  /* ── Engine ── */
+  .grow { flex: 2; }
 
   /* ── Analysis ── */
   .analysis-info {
@@ -1129,7 +1224,7 @@
   }
   .analysis-depth {
     font-size: 0.82rem;
-    color: #888;
+    color: var(--muted);
     padding: 0 0.2rem;
   }
   .analysis-moves {
@@ -1142,20 +1237,21 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.3rem 0.5rem;
-    background: #2d2d4a;
+    background: var(--surface-2);
     border: 1px solid transparent;
     border-radius: 4px;
-    color: #ccc;
+    color: var(--fg-2);
     font-size: 0.85rem;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     cursor: default;
     transition: background 0.1s, border-color 0.1s;
     width: 100%;
     text-align: left;
   }
   .analysis-move:hover {
-    background: rgba(123, 140, 222, 0.25);
-    border-color: #7b8cde;
+    background: rgba(216, 166, 74, 0.25);
+    border-color: var(--accent);
     color: #fff;
   }
   .move-notation {
@@ -1166,15 +1262,30 @@
     font-weight: 600;
   }
 
-  .depth-timings {
-    font-size: 0.78rem;
-    color: #777;
-    padding: 0.3rem 0.2rem;
-    line-height: 1.5;
+  /* ── Mobile-only bars (gold, shop, engine) ── */
+  .mobile-only { display: none; }
+  .mobile-gold { gap: 0.4rem; padding: 0.4rem 0; }
+  .mobile-gold-side {
+    flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;
+    padding: 0.3rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface);
   }
+  .mobile-gold-side.active { border-color: var(--accent); background: var(--surface-3); }
+  .mobile-shop { padding-bottom: 0.4rem; }
+  .mobile-engine {
+    align-items: center; gap: 0.4rem;
+    padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--line);
+  }
+  .mobile-engine-info {
+    flex: 1; min-width: 0; display: flex; gap: 0.5rem; align-items: baseline;
+    font-size: 0.9rem; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+  }
+  .mobile-engine-idle { color: var(--faint); }
+  .mobile-engine .ctrl-btn { flex: 0 0 auto; padding: 0.35rem 0.75rem; }
 
   /* ── Mobile: stack vertically ── */
   @media (max-width: 640px) {
+    .mobile-only { display: flex; }
+    .desktop-only { display: none; }
     .sandbox-wrap {
       flex-direction: column;
       height: auto;
@@ -1194,12 +1305,12 @@
     .movelist-col {
       width: 100%;
       max-height: 240px;
-      border-top: 1px solid #2a2a4a;
+      border-top: 1px solid var(--line);
     }
     .side-panel {
       width: 100%;
       border-left: none;
-      border-top: 1px solid #2a2a4a;
+      border-top: 1px solid var(--line);
       overflow: visible;
     }
   }

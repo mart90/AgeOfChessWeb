@@ -20,6 +20,8 @@ namespace AgeOfChess.Server.Hubs;
 ///   MakeMove(playerToken, fromX, fromY, toX, toY)
 ///   PlacePiece(playerToken, toX, toY, pieceCode)   "q"|"r"|"b"|"n"|"p"
 ///   Resign(playerToken)
+///   SubmitComputerMove(playerToken, type, fromX, fromY, toX, toY, pieceCode)  — vs-computer games
+///   SubmitComputerBid(playerToken, amount)                                     — vs-computer games
 ///
 /// Server → Client (broadcast to both players via group):
 ///   GameStarted(GameStateDto)   — when both players are connected
@@ -109,7 +111,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         if (game.ChatMessages.Count > 0)
             await Clients.Caller.SendAsync("ChatHistory", game.ChatMessages);
 
-        if (game.WhiteConnected && game.BlackConnected)
+        if (game.SideReady(true) && game.SideReady(false))
         {
             if (!game.HasGameStarted)
             {
@@ -224,6 +226,48 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     }
 
     /// <summary>
+    /// Submits the computer's move in a game against the computer. The engine runs in the human
+    /// player's browser, so the human's token authorizes it; it must be the computer's turn.
+    /// <paramref name="type"/> is "move" or "place" (placements use <paramref name="pieceCode"/>).
+    /// </summary>
+    public async Task SubmitComputerMove(string playerToken, string type, int fromX, int fromY, int toX, int toY, string? pieceCode)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null || game.GameEnded || !game.IsComputerGame) return;
+        if (!IsAuthorizedPlayer(game, playerToken)) return;
+        if (game.Bidding != null && !game.Bidding.BothBid) return;
+
+        bool callerIsWhite = game.IsWhitePlayer(playerToken);
+        if (game.IsComputerSide(callerIsWhite)) return;                 // caller must be the human
+        if (!game.IsComputerSide(game.ActiveColor.IsWhite)) return;     // and it must be the computer's turn
+
+        bool applied;
+        if (type == "place")
+        {
+            var pieceType = PieceTypeFromCode(pieceCode ?? "");
+            applied = pieceType != null && game.TryPlacePiece(toX, toY, pieceType);
+        }
+        else
+        {
+            applied = game.TryMovePiece(fromX, fromY, toX, toY);
+        }
+
+        if (!applied)
+        {
+            await Clients.Caller.SendAsync("Error", "Illegal computer move.");
+            return;
+        }
+
+        game.EndTurn();
+        game.StartNewTurn();
+
+        // The human may have premoved
+        await TryExecutePremove(game);
+
+        await BroadcastState(game);
+    }
+
+    /// <summary>
     /// Called by the client when it detects the active player's clock has reached zero.
     /// The server re-validates: if the active player is genuinely out of time it ends the game.
     /// </summary>
@@ -259,11 +303,34 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         if (!game.SubmitBid(playerToken, amount)) return;
 
+        await OnBidSubmitted(game);
+    }
+
+    /// <summary>
+    /// Records the computer's bid in a game vs the computer with bidding. The bid is calculated
+    /// in the human player's browser (engine analysis of the starting position).
+    /// </summary>
+    public async Task SubmitComputerBid(string playerToken, int amount)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game?.Bidding == null || !game.IsComputerGame) return;
+        if (!IsAuthorizedPlayer(game, playerToken)) return;
+        if (game.IsComputerSide(game.IsWhitePlayer(playerToken))) return;   // caller must be the human
+
+        if (!game.SubmitBid(game.ComputerPlayerToken, amount)) return;
+
+        await OnBidSubmitted(game);
+    }
+
+    private async Task OnBidSubmitted(ServerGame game)
+    {
+        var bidding = game.Bidding!;
+
         // Broadcast bid placed (amounts revealed only after both have bid)
         await Clients.Group(game.GroupName)
-            .SendAsync("BidPlaced", BiddingStateDtoBuilder.Build(game.Bidding));
+            .SendAsync("BidPlaced", BiddingStateDtoBuilder.Build(bidding));
 
-        if (game.Bidding.BothBid)
+        if (bidding.BothBid)
         {
             // Persist post-bidding state for slow games (tokens may have been swapped by ResolveBidding)
             if (game.IsSlowGame)
@@ -272,9 +339,12 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             // Let clients display the revealed bids for 2 seconds
             await Task.Delay(2000);
 
-            // After SwapColors (if joiner won), WhiteConnectionId points to the actual white player
-            await Clients.Client(game.WhiteConnectionId!).SendAsync("ColorAssigned", true);
-            await Clients.Client(game.BlackConnectionId!).SendAsync("ColorAssigned", false);
+            // After SwapColors (if joiner won), WhiteConnectionId points to the actual white player.
+            // The computer has no connection.
+            if (game.WhiteConnectionId != null)
+                await Clients.Client(game.WhiteConnectionId).SendAsync("ColorAssigned", true);
+            if (game.BlackConnectionId != null)
+                await Clients.Client(game.BlackConnectionId).SendAsync("ColorAssigned", false);
             await Clients.Group(game.GroupName)
                 .SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
         }
@@ -358,11 +428,11 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         if (game == null || game.GameEnded) return [];
         if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite) return [];
 
-        var isPawn = pieceCode.Equals("p", StringComparison.OrdinalIgnoreCase);
-        var pf = new PathFinder(game.GetMap());
-        return pf.FindLegalDestinationsForPiecePlacement(game.ActiveColor.IsWhite, isPawn)
-                 .Select(s => new[] { s.X, s.Y })
-                 .ToArray();
+        var type = PieceTypeFromCode(pieceCode);
+        if (type == null) return [];
+        return game.FindLegalPlacements(type)
+                   .Select(s => new[] { s.X, s.Y })
+                   .ToArray();
     }
 
     /// <summary>
@@ -504,6 +574,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             BiddingEnabled     = game.Settings.BiddingEnabled,
             MapMode            = game.Settings.MapMode,
             MapSeed            = actualMapSeed,
+            IsRanked           = game.Settings.IsRanked,
         };
 
         // Without bidding: swap colors. With bidding: same initial assignment (bidding will resolve).
@@ -574,6 +645,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         session.WhiteUserId      = game.WhiteUserId;
         session.BlackUserId      = game.BlackUserId;
         session.BlackStartingGold = game.Black.Gold;
+        session.SettingsJson      = JsonSerializer.Serialize(game.Settings);   // ComputerIsWhite may have flipped
         if (game.TimeControlEnabled)
         {
             session.WhiteTimeMsRemaining = game.White.TimeMiliseconds;
@@ -640,6 +712,8 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
     private static async Task ApplyEloUpdates(AppDbContext db, ServerGame game, GameSession session)
     {
+        // Unranked games (incl. all games vs the computer) are stored in history but don't change ratings
+        if (!game.Settings.IsRanked || game.IsComputerGame) return;
         if (!game.WhiteUserId.HasValue || !game.BlackUserId.HasValue) return;
 
         bool? whiteWon = game.Result switch

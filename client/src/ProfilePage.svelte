@@ -240,7 +240,7 @@
                   <span class="result-badge result-{g.result}">{g.resultDetail}</span>
                 </td>
                 <td class="col-delta" class:delta-pos={g.eloDelta > 0} class:delta-neg={g.eloDelta < 0}>
-                  {fmtDelta(g.eloDelta)}
+                  {#if g.isRanked === false}<span class="unranked">unranked</span>{:else}{fmtDelta(g.eloDelta)}{/if}
                 </td>
                 <td class="col-tc">{tcLabel(g)}</td>
                 <td class="col-moves">{g.moveCount}</td>
@@ -267,6 +267,7 @@
 </main>
 
 <style>
+  .unranked { color: var(--faint); font-size: 0.8em; font-style: italic; }
   main {
     display: flex;
     flex-direction: column;
@@ -279,7 +280,7 @@
     margin: 0 auto;
   }
 
-  .muted  { color: #666; }
+  .muted  { color: var(--faint); }
   .error  { color: #e07070; }
   .no-games { margin: 1rem 0; }
 
@@ -294,9 +295,9 @@
     margin: 0;
     font-size: 1.7rem;
     font-weight: 700;
-    color: #eee;
+    color: var(--fg);
   }
-  .username-sub { color: #666; font-size: 0.95rem; }
+  .username-sub { color: var(--faint); font-size: 0.95rem; }
 
   /* ── Stats cards ── */
   .stats-row {
@@ -306,23 +307,23 @@
   }
   .stat-card {
     flex: 1;
-    background: #22223a;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 8px;
     padding: 1rem 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
   }
-  .stat-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: #777; }
-  .stat-elo   { font-size: 2rem; font-weight: 700; color: #eee; line-height: 1.1; }
-  .stat-games { font-size: 0.82rem; color: #666; }
+  .stat-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+  .stat-elo   { font-size: 2rem; font-weight: 700; color: var(--fg); line-height: 1.1; }
+  .stat-games { font-size: 0.82rem; color: var(--faint); }
 
   /* ── Graph ── */
   .graph-wrap {
     width: 100%;
-    background: #22223a;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 8px;
     padding: 0.75rem 0.5rem 0.5rem;
   }
@@ -331,19 +332,19 @@
     gap: 1rem;
     padding: 0 0.75rem 0.5rem;
     font-size: 0.8rem;
-    color: #aaa;
+    color: var(--muted);
   }
   .legend-item { display: flex; align-items: center; gap: 0.4rem; }
   .graph-svg { display: block; }
 
-  .gridline { stroke: #2a2a4a; stroke-width: 1; }
-  .axis     { stroke: #3a3a5a; stroke-width: 1; }
-  .grid-label { fill: #555; font-size: 11px; text-anchor: end; }
+  .gridline { stroke: var(--line); stroke-width: 1; }
+  .axis     { stroke: var(--line-strong); stroke-width: 1; }
+  .grid-label { fill: var(--faint); font-size: 11px; text-anchor: end; }
 
   /* ── Tabs ── */
   .tabs {
     display: flex;
-    border-bottom: 2px solid #2a2a4a;
+    border-bottom: 2px solid var(--line);
     width: 100%;
   }
   .tab {
@@ -351,14 +352,14 @@
     padding: 0.65rem 0.5rem;
     background: none;
     border: none;
-    color: #888;
+    color: var(--muted);
     font-size: 0.9rem;
     border-bottom: 2px solid transparent;
     margin-bottom: -2px;
   }
-  .tab.active { color: #eee; border-bottom-color: #7b8cde; }
-  .tab:hover:not(.active) { color: #ccc; }
-  .tab-count { font-size: 0.78rem; color: #555; margin-left: 0.2rem; }
+  .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .tab:hover:not(.active) { color: var(--fg-2); }
+  .tab-count { font-size: 0.78rem; color: var(--faint); margin-left: 0.2rem; }
 
   /* ── Table ── */
   .table-wrap {
@@ -373,20 +374,20 @@
   thead th {
     text-align: left;
     padding: 0.5rem 0.75rem;
-    color: #777;
+    color: var(--faint);
     font-weight: 600;
     font-size: 0.78rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    border-bottom: 1px solid #2a2a4a;
+    border-bottom: 1px solid var(--line);
     cursor: pointer;
     white-space: nowrap;
     user-select: none;
   }
-  thead th:hover { color: #bbb; }
+  thead th:hover { color: var(--fg-2); }
   tbody td {
     padding: 0.55rem 0.75rem;
-    border-bottom: 1px solid #1e1e36;
+    border-bottom: 1px solid var(--line);
     vertical-align: middle;
     white-space: nowrap;
   }
@@ -395,17 +396,17 @@
     cursor: pointer;
     transition: background 0.1s;
   }
-  .game-row:hover { background: #22223a; }
+  .game-row:hover { background: var(--surface); }
   .game-row.win  { border-left: 3px solid rgba(100,220,80,0.35); }
   .game-row.loss { border-left: 3px solid rgba(220,80,80,0.35); }
 
-  .col-date  { color: #888; font-size: 0.82rem; }
-  .col-opp   { font-weight: 600; color: #ddd; }
-  .opp-elo   { font-weight: 400; font-size: 0.8rem; color: #777; margin-left: 0.25rem; }
-  .opp-name  { color: #ddd; }
+  .col-date  { color: var(--muted); font-size: 0.82rem; }
+  .col-opp   { font-weight: 600; color: var(--fg); }
+  .opp-elo   { font-weight: 400; font-size: 0.8rem; color: var(--faint); margin-left: 0.25rem; }
+  .opp-name  { color: var(--fg); }
   .opp-link  {
     background: none; border: none; padding: 0;
-    color: #7b8cde; font-weight: 600; font-size: inherit;
+    color: var(--accent); font-weight: 600; font-size: inherit;
     font-family: inherit; cursor: pointer;
   }
   .opp-link:hover { text-decoration: underline; }
@@ -421,14 +422,14 @@
   }
   .result-win  { color: #7cfc00; background: rgba(124,252,0,0.1);  border: 1px solid rgba(124,252,0,0.25); }
   .result-loss { color: #e07070; background: rgba(220,80,80,0.1);  border: 1px solid rgba(220,80,80,0.25); }
-  .result-draw { color: #aaa;    background: rgba(180,180,180,0.1); border: 1px solid rgba(180,180,180,0.2); }
-  .col-delta { font-variant-numeric: tabular-nums; font-weight: 600; color: #888; }
+  .result-draw { color: var(--muted);    background: rgba(180,180,180,0.1); border: 1px solid rgba(180,180,180,0.2); }
+  .col-delta { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); }
   .delta-pos { color: #7cfc00; }
   .delta-neg { color: #e07070; }
 
-  .col-tc    { color: #aaa; font-variant-numeric: tabular-nums; }
-  .col-moves { color: #aaa; }
-  .col-board { color: #aaa; }
+  .col-tc    { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .col-moves { color: var(--muted); }
+  .col-board { color: var(--muted); }
 
   /* ── Pagination ── */
   .pagination {
@@ -440,17 +441,17 @@
     width: 100%;
   }
   .page-btn {
-    background: #22223a;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 6px;
-    color: #aaa;
+    color: var(--muted);
     padding: 0.35rem 0.85rem;
     font-size: 0.85rem;
     cursor: pointer;
   }
-  .page-btn:hover:not(:disabled) { background: #2a2a4a; color: #eee; }
+  .page-btn:hover:not(:disabled) { background: var(--line); color: var(--fg); }
   .page-btn:disabled { opacity: 0.35; cursor: default; }
-  .page-info { font-size: 0.82rem; color: #666; }
+  .page-info { font-size: 0.82rem; color: var(--faint); }
 
   @media (max-width: 600px) {
     .stats-row { flex-direction: column; }

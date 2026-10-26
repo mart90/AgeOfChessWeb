@@ -32,6 +32,19 @@ public class ServerGame : Game
     public bool WhiteConnected => WhiteConnectionId != null;
     public bool BlackConnected => BlackConnectionId != null;
 
+    // ── Computer opponent ─────────────────────────────────────────────────
+    // The computer's moves are calculated in the human player's browser and submitted via
+    // GameHub.SubmitComputerMove. The computer's player token is never handed out.
+
+    public bool IsComputerGame => Settings.ComputerLevel != null;
+    public bool IsComputerSide(bool isWhite) => IsComputerGame && Settings.ComputerIsWhite == isWhite;
+
+    /// <summary>A side is ready to play when its player is connected, or when it's the computer.</summary>
+    public bool SideReady(bool isWhite) => (isWhite ? WhiteConnected : BlackConnected) || IsComputerSide(isWhite);
+
+    /// <summary>The computer side's token (used internally, e.g. to record its bid).</summary>
+    public string ComputerPlayerToken => Settings.ComputerIsWhite ? WhitePlayerToken : BlackPlayerToken;
+
     /// <summary>True once the initial GameStarted broadcast has been sent to both players.</summary>
     public bool HasGameStarted { get; set; }
 
@@ -135,6 +148,15 @@ public class ServerGame : Game
             new PieceColor(true, whitePlayerName),
             new PieceColor(false, blackPlayerName)
         };
+
+        // Name and rating of the computer side (also applies when resuming / replaying)
+        if (Services.ComputerLevels.Get(settings.ComputerLevel) is { } level)
+        {
+            var computer = settings.ComputerIsWhite ? White : Black;
+            computer.PlayedByStr = Services.ComputerLevels.Name(level.Number);
+            if (settings.ComputerIsWhite) WhiteElo = level.Elo;
+            else                          BlackElo = level.Elo;
+        }
 
         // With bidding the gold start is determined by the bid outcome, not the fixed 10g default
         if (settings.BiddingEnabled)
@@ -244,8 +266,8 @@ public class ServerGame : Game
     }
 
     /// <summary>
-    /// Swaps white/black tokens and connection IDs so the joiner becomes white.
-    /// The board is not modified — piece colours are determined by PieceColor.IsWhite.
+    /// Swaps white/black tokens, connection IDs, accounts, ratings and names so the joiner becomes
+    /// white. The board is not modified — piece colours are determined by PieceColor.IsWhite.
     /// </summary>
     public void SwapColors()
     {
@@ -253,6 +275,8 @@ public class ServerGame : Game
         (WhiteConnectionId, BlackConnectionId) = (BlackConnectionId, WhiteConnectionId);
         (WhiteUserId, BlackUserId) = (BlackUserId, WhiteUserId);
         (WhiteElo, BlackElo) = (BlackElo, WhiteElo);
+        (White.PlayedByStr, Black.PlayedByStr) = (Black.PlayedByStr, White.PlayedByStr);
+        if (IsComputerGame) Settings.ComputerIsWhite = !Settings.ComputerIsWhite;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

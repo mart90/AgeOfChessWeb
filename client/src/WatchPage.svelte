@@ -123,7 +123,7 @@
     padding: 1.5rem 1rem;
   }
 
-  .muted { color: #666; }
+  .muted { color: var(--faint); }
   .error { color: #e07070; }
 
   .grid {
@@ -138,15 +138,15 @@
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
-    background: #22223a;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 8px;
     padding: 0.75rem;
     text-align: left;
     color: inherit;
     cursor: pointer;
   }
-  .game-card:hover { background: #2a2a4a; border-color: #3a3a6a; }
+  .game-card:hover { background: var(--line); border-color: var(--surface-3); }
 
   .player-row {
     display: flex;
@@ -158,7 +158,7 @@
 
   .player-name {
     font-size: 0.88rem;
-    color: #ddd;
+    color: var(--fg);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -166,7 +166,7 @@
 
   .time-label {
     font-size: 0.82rem;
-    color: #7b8cde;
+    color: var(--accent);
     white-space: nowrap;
     flex-shrink: 0;
   }

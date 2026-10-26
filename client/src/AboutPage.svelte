@@ -38,7 +38,15 @@
     <p class="lead">
       Join the <a href="https://discord.gg/UhcU64NCs2">discord server</a> to discuss the game, give feedback, or find people to play with.
     </p>
-    
+
+    <h3>Credits</h3>
+    <ul class="credits">
+      <li>Chess pieces: "cburnett" by Colin M.L. Burnett, via <a href="https://github.com/lichess-org/lila">Lichess</a> (GPLv2+)</li>
+      <li>Mountain and tree artwork: <a href="https://github.com/jdecked/twemoji">Twemoji</a> (CC BY 4.0); the mine is drawn in the same style</li>
+      <li>Chest icon by Lorc, from <a href="https://game-icons.net">game-icons.net</a> (CC BY 3.0)</li>
+      <li>Wood textures: <a href="https://ambientcg.com">ambientCG</a> (CC0)</li>
+    </ul>
+
   </div>
 </div>
 
@@ -61,7 +69,7 @@
   h1 {
     font-size: 2rem;
     font-weight: 700;
-    color: #a0b0ff;
+    color: var(--accent-2);
     margin: 0 0 0.5rem;
     letter-spacing: 0.01em;
   }
@@ -69,14 +77,14 @@
   h2 {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #ccd;
+    color: var(--fg-2);
     margin: 1.5rem 0 0.6rem;
   }
 
   h3 {
     font-size: 1rem;
     font-weight: 600;
-    color: #9ab;
+    color: var(--muted);
     margin: 1.1rem 0 0.4rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -86,14 +94,14 @@
   p, li {
     font-size: 0.97rem;
     line-height: 1.7;
-    color: #ccc;
+    color: var(--fg-2);
   }
 
   p { margin: 0.4rem 0; }
 
   .lead {
     font-size: 1.05rem;
-    color: #bbb;
+    color: var(--fg-2);
     line-height: 1.75;
     margin-top: 0.75rem;
   }
@@ -106,31 +114,31 @@
     gap: 0.4rem;
   }
 
-  li { color: #bbb; }
-  li strong { color: #ddd; }
+  li { color: var(--fg-2); }
+  li strong { color: var(--fg); }
 
   .example {
-    background: #1e1e38;
-    border-left: 3px solid #4a6fa5;
+    background: var(--surface);
+    border-left: 3px solid var(--button);
     padding: 0.6rem 0.9rem;
     border-radius: 0 6px 6px 0;
-    color: #bbb;
+    color: var(--fg-2);
   }
-  .example strong { color: #ddd; }
+  .example strong { color: var(--fg); }
 
   a {
-    color: #8ab4f8;
+    color: var(--accent);
     text-decoration: none;
   }
 
   a:hover {
-    color: #aac7ff;
+    color: var(--accent-2);
     text-decoration: underline;
   }
 
   hr {
     border: none;
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid var(--line);
     margin: 1.75rem 0 0.25rem;
   }
 
