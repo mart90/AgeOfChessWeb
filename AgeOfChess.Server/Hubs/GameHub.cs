@@ -831,6 +831,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             game.BlackPremove = null;
 
         bool success = false;
+        // Position after the opponent's move, sent before the premove's position when the premove
+        // executes: clients keep one state per move (move list navigation, post-game analysis).
+        var stateBeforePremove = GameStateDtoBuilder.Build(game);
 
         try
         {
@@ -863,6 +866,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             // If anything goes wrong, silently fail (premove becomes illegal, just discard it)
             success = false;
         }
+
+        if (success)
+            await Clients.Group(game.GroupName).SendAsync("StateUpdated", stateBeforePremove);
 
         return success;
     }

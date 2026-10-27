@@ -45,6 +45,14 @@ const TT_UPPER: u8 = 3;
 
 pub struct Searcher {
     pub params: EvalParams,
+    /// Evaluation network (training/); when set and the board size matches, it replaces the
+    /// hand-written eval.
+    pub nnue: Option<std::sync::Arc<crate::nnue::Network>>,
+    /// Per-ply first-layer sums for incremental network evaluation (allocated on first use).
+    nn_stack: Option<crate::nnue::NnStack>,
+    /// Testing: also evaluate every position from scratch and count differences.
+    pub nn_verify: bool,
+    pub nn_mismatches: u64,
     tt: Vec<TTEntry>,
     tt_mask: usize,
     killers: [[Move; 2]; MAX_PLY],
@@ -68,6 +76,44 @@ pub struct Searcher {
 }
 
 impl Searcher {
+    /// Static evaluation for the side to move: the network if one is set for this board size,
+    /// otherwise the hand-written eval.
+    #[inline]
+    pub fn eval(&self, pos: &Position) -> i32 {
+        match &self.nnue {
+            Some(net) if net.board_size == pos.size() => net.evaluate_quantized(pos),
+            _ => evaluate(pos, &self.params),
+        }
+    }
+
+    /// Static evaluation inside the search at `ply` (incremental network evaluation).
+    #[inline]
+    fn eval_at(&mut self, pos: &Position, ply: usize) -> i32 {
+        if let Some(net) = &self.nnue {
+            if net.board_size == pos.size() {
+                let st = self.nn_stack.get_or_insert_with(|| crate::nnue::NnStack::new(MAX_PLY + 2, net.hidden));
+                let v = net.evaluate_incremental(st, pos, ply);
+                if self.nn_verify && v != net.evaluate_quantized(pos) {
+                    self.nn_mismatches += 1;
+                }
+                return v;
+            }
+        }
+        evaluate(pos, &self.params)
+    }
+
+    #[inline]
+    fn nn_record(&mut self, ply: usize, pos: &Position, u: &crate::position::Undo) {
+        if let Some(st) = &mut self.nn_stack {
+            st.record(ply, pos, u);
+        }
+    }
+
+    /// Network evaluation counters: (from-scratch refreshes, incremental updates).
+    pub fn nn_stats(&self) -> (u64, u64) {
+        self.nn_stack.as_ref().map(|s| (s.refreshes, s.updates)).unwrap_or((0, 0))
+    }
+
     /// `tt_mb`: transposition-table size in megabytes.
     pub fn new(params: EvalParams, tt_mb: usize) -> Self {
         let entries = (tt_mb * 1024 * 1024 / std::mem::size_of::<TTEntry>()).next_power_of_two() / 2;
@@ -80,6 +126,10 @@ impl Searcher {
         }
         Searcher {
             params,
+            nnue: None,
+            nn_stack: None,
+            nn_verify: false,
+            nn_mismatches: 0,
             tt: vec![TTEntry::default(); entries],
             tt_mask: entries - 1,
             killers: [[Move::NULL; 2]; MAX_PLY],
@@ -214,6 +264,9 @@ impl Searcher {
             *h /= 4;
         }
         self.killers = [[Move::NULL; 2]; MAX_PLY];
+        if let Some(st) = &mut self.nn_stack {
+            st.reset();
+        }
 
         let max_depth = limits.max_depth.unwrap_or(MAX_PLY as u32 - 10).min(MAX_PLY as u32 - 10);
         let mut result = SearchResult { best: None, score: 0, depth: 0, nodes: 0, time_ms: 0.0, pv: vec![] };
@@ -229,7 +282,7 @@ impl Searcher {
         // Only reply: play it instantly (not for multi-PV lines, which need a real score)
         if root_moves.len() == 1 && self.excluded_root.is_empty() {
             result.depth = 1;
-            result.score = evaluate(pos, &self.params);
+            result.score = self.eval_at(pos, 0);
             return result;
         }
 
@@ -375,7 +428,7 @@ impl Searcher {
             return MATE - ply as i32;
         }
 
-        let static_eval = if in_check { -INF } else { evaluate(pos, &self.params) };
+        let static_eval = if in_check { -INF } else { self.eval_at(pos, ply) };
 
         if !pv_node && !in_check && ply > 0 {
             // Reverse futility pruning
@@ -387,6 +440,9 @@ impl Searcher {
             if allow_null && depth >= 3 && static_eval >= beta && has_non_king(pos) {
                 let r = 2 + depth / 4;
                 let u = pos.make_null();
+                if let Some(st) = &mut self.nn_stack {
+                    st.record_null(ply + 1, pos, &u);
+                }
                 let s = -self.negamax(pos, depth - 1 - r, -beta, -beta + 1, ply + 1, false);
                 pos.unmake_null(&u);
                 if self.stop {
@@ -423,6 +479,7 @@ impl Searcher {
             }
 
             let u = pos.make(m);
+            self.nn_record(ply + 1, pos, &u);
             let gives_check = pos.in_check();
             let mut s;
             if searched == 0 {
@@ -505,7 +562,7 @@ impl Searcher {
             return MATE - ply as i32; // side to move wins (assumes it has a legal move)
         }
         if ply >= MAX_PLY - 2 {
-            return evaluate(pos, &self.params); // also bounds long check sequences
+            return self.eval_at(pos, ply); // also bounds long check sequences
         }
 
         let in_check = pos.in_check();
@@ -519,7 +576,7 @@ impl Searcher {
             }
             best = -INF;
         } else {
-            let stand = evaluate(pos, &self.params);
+            let stand = self.eval_at(pos, ply);
             if stand >= beta || ply >= MAX_PLY - 2 {
                 self.move_bufs[ply] = moves;
                 return stand;
@@ -536,6 +593,7 @@ impl Searcher {
         for i in 0..moves.len() {
             let m = Self::pick(&mut moves, &mut scores, i);
             let u = pos.make(m);
+            self.nn_record(ply + 1, pos, &u);
             let s = -self.qsearch(pos, -beta, -alpha, ply + 1);
             pos.unmake(&u);
             if self.stop {

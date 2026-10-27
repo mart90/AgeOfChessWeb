@@ -41,7 +41,7 @@ export function packGameTree(root) {
       san: node.san,
       s: { p, o, wg: st.white.gold, bg: st.black.gold, wa: st.white.isActive ? 1 : 0 },
       m: node.isGameMainline ? 1 : 0,
-      c: node.children.map(pack),
+      c: node.children.filter(c => c.boardState).map(pack),   // a node without a state can't be shown
     };
   };
   return { terrain, tree: pack(root) };

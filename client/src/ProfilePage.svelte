@@ -315,7 +315,7 @@
     flex-direction: column;
     gap: 0.2rem;
   }
-  .stat-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+  .stat-label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
   .stat-elo   { font-size: 2rem; font-weight: 700; color: var(--fg); line-height: 1.1; }
   .stat-games { font-size: 0.82rem; color: var(--faint); }
 
@@ -339,7 +339,7 @@
 
   .gridline { stroke: var(--line); stroke-width: 1; }
   .axis     { stroke: var(--line-strong); stroke-width: 1; }
-  .grid-label { fill: var(--faint); font-size: 11px; text-anchor: end; }
+  .grid-label { fill: var(--faint); font-size: 12px; text-anchor: end; }
 
   /* ── Tabs ── */
   .tabs {
@@ -359,7 +359,7 @@
   }
   .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
   .tab:hover:not(.active) { color: var(--fg-2); }
-  .tab-count { font-size: 0.78rem; color: var(--faint); margin-left: 0.2rem; }
+  .tab-count { font-size: 0.8rem; color: var(--faint); margin-left: 0.2rem; }
 
   /* ── Table ── */
   .table-wrap {
@@ -376,7 +376,7 @@
     padding: 0.5rem 0.75rem;
     color: var(--faint);
     font-weight: 600;
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     border-bottom: 1px solid var(--line);
@@ -413,7 +413,7 @@
 
   .col-result { display: flex; align-items: center; gap: 0.5rem; }
   .result-badge {
-    font-size: 0.75rem;
+    font-size: 0.79rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;

@@ -141,6 +141,10 @@ Self-play output (JSONL): `seed`, `moves` (notation), `scores` (White's view, pe
 king), `checks`, `captures`, `queens_lost`, `first_queen_ply`, `final_gold`, `final_mines`.
 Compare two runs: `python engine/tools/compare_selfplay.py A.jsonl B.jsonl`.
 
+Training data for the evaluation network: `gg gendata` (see [training.md](training.md)).
+Evaluation network in the engine: `src/nnue.rs`, `--nnue`/`--a-nnue`/`--b-nnue`, `gg nncheck`
+(see training.md, "Network in the engine").
+
 Rules: `Position.rules` (`Rules { queen_drops: bitmask, queen_cost }`), default = current rules.
 CLI `--classic` (pre-2026-10-26 rules) or `--queen-drops LETTERS --queen-cost C`; browser API
 override: `position.rules = { queenDrops: "", queenCost: 72 }`.

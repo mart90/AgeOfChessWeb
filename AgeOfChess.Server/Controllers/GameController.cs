@@ -467,12 +467,19 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
 
         if (session != null)
         {
-            if (session.Result == GameResult.InProgress) return NotFound();
             if (string.IsNullOrEmpty(session.MapSeed)) return NotFound();
 
             mapSeed = session.MapSeed;
             settingsJson = session.SettingsJson;
             movesJson = session.MovesJson;
+            if (session.Result == GameResult.InProgress)
+            {
+                // Live game (a player or spectator joining mid-game rebuilds its move history from
+                // this). The DB move list is only kept current for slow games, so use memory.
+                var live = sessions.GetById(gameId);
+                if (live == null) return NotFound();
+                movesJson = JsonSerializer.Serialize(live.MoveList.ToList().Select(m => m.ToNotation()));
+            }
             result = session.Result.ToString();
             whiteName = session.WhiteUser?.EffectiveDisplayName ?? "Player 1";
             blackName = session.BlackUser?.EffectiveDisplayName ?? "Player 2";

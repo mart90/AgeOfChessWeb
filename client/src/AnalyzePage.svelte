@@ -976,15 +976,15 @@
     </div>
 
     <!-- Map generation -->
-    <div class="section">
+    <div class="section map-section">
       <div class="section-label">Map</div>
       <div class="option-row">
         <label>Size: <strong>{genSize}×{genSize}</strong></label>
         <input type="range" min="6" max="16" step="2" bind:value={genSize} />
       </div>
       <label class="checkbox-label">
-        <input type="checkbox" bind:checked={genRandom} />
         Full random
+        <input type="checkbox" bind:checked={genRandom} />
       </label>
       <div class="seed-row">
         <input
@@ -1164,12 +1164,13 @@
     display: flex; flex-direction: column; gap: 0.5rem;
     padding-top: 0.6rem; border-top: 1px solid var(--line);
   }
+  .map-section { gap: 0.9rem; }
   .section-label {
-    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
+    font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
   }
 
   /* ── Shop ── */
-  .shop-label { font-size: 0.78rem; color: var(--muted); margin-bottom: -0.2rem; }
+  .shop-label { font-size: 0.8rem; color: var(--muted); margin-bottom: -0.2rem; }
   .shop-row { display: flex; gap: 0.2rem; }
   .shop-piece {
     display: flex; flex-direction: column; align-items: center;
@@ -1184,7 +1185,7 @@
   .shop-piece:disabled { opacity: 0.3; cursor: default; }
   .cost { font-size: 0.8rem; font-weight: 700; color: #f5c518; font-variant-numeric: tabular-nums; }
   .cost.dim { color: var(--faint); }
-  .shop-hint { font-size: 0.74rem; color: var(--faint); margin: 0; line-height: 1.4; }
+  .shop-hint { font-size: 0.8rem; color: var(--faint); margin: 0; line-height: 1.4; }
 
   /* ── Map generation ── */
   .option-row {
@@ -1193,7 +1194,7 @@
   }
   .option-row input[type="range"] { flex: 1; accent-color: var(--accent); }
   .checkbox-label {
-    display: flex; align-items: center; gap: 0.5rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
     font-size: 0.88rem; color: var(--fg-2); cursor: pointer;
   }
   .seed-row { display: flex; }

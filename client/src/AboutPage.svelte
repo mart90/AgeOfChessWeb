@@ -2,7 +2,7 @@
   <div class="content">
 
     <p class="lead">
-      Goldrush Gambit is a variant of Chess with an economy and randomly generated terrain on the board which restricts piece movement. You start with a lonely king
+      Goldrush Gambit is a variant of chess with an economy and randomly generated terrain on the board which restricts piece movement. You start with a lonely king
       and will need to buy new pieces for gold, which you earn by collecting treasures and owning mines. 
       <br><br>
       The game revolves mostly around gaining an advantage in gold income by securing more mines than your opponent, then converting that to a material advantage and 
@@ -16,7 +16,7 @@
     <p class="lead">
       The board can range from 6 by 6 squares to 16 by 16. It can either be fully randomly generated, or half generated and mirrored so that the players start with
       the same starting position. Fully random boards allow for more strategic diversity, but are less balanced and not recommended for beginners. It's recommended 
-      to have bidding enabled for fully random boards, because the value of having White will vary much more than with mirrored boards. Bidding ensures a balanced game.
+      to have bidding enabled for fully random boards, because the value of having White will vary much more than with mirrored boards. Bidding ensures neither side starts with an advantage.
     </p>
 
     <hr />
@@ -41,10 +41,10 @@
 
     <h3>Credits</h3>
     <ul class="credits">
-      <li>Chess pieces: "cburnett" by Colin M.L. Burnett, via <a href="https://github.com/lichess-org/lila">Lichess</a> (GPLv2+)</li>
-      <li>Mountain and tree artwork: <a href="https://github.com/jdecked/twemoji">Twemoji</a> (CC BY 4.0); the mine is drawn in the same style</li>
-      <li>Chest icon by Lorc, from <a href="https://game-icons.net">game-icons.net</a> (CC BY 3.0)</li>
-      <li>Wood textures: <a href="https://ambientcg.com">ambientCG</a> (CC0)</li>
+      <li>Chess pieces: "cburnett" by Colin M.L. Burnett, via <a href="https://github.com/lichess-org/lila">Lichess</a></li>
+      <li>Mountain and tree artwork: <a href="https://github.com/jdecked/twemoji">Twemoji</a>; the mine is drawn in the same style</li>
+      <li>Chest icon by Lorc, from <a href="https://game-icons.net">game-icons.net</a></li>
+      <li>Wood textures: <a href="https://ambientcg.com">ambientCG</a></li>
     </ul>
 
   </div>

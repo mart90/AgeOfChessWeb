@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """
 Goldrush Gambit — deployment script
-Must be run as root (sudo python3 deploy.py ...).
+Runs on the server as root (sudo python3 deploy.py ...), or from a dev machine with --remote.
 
 Usage:
+  From a dev machine (pushes nothing; deploys what is on origin/master):
+    python deploy.py --remote [--frontend-only] [--host goldrush]
+  This checks the working tree is clean and pushed, then runs this script on the server over
+  SSH. The host is an alias in ~/.ssh/config (default "goldrush"; override with --host or
+  GOLDRUSH_DEPLOY_HOST), and the server's sudoers must allow this script without a password
+  for non-interactive runs:
+    <user> ALL=(root) NOPASSWD: /usr/bin/python3 /var/www/AgeOfChessWeb/deploy.py*
+
+  The browser engine (client/src/lib/engine/goldrush_engine.wasm) is committed, so the server
+  needs no Rust toolchain. After changing engine/src (other than bin/, nnue.rs, traindata.rs),
+  run `npm run build:engine` in client/ and commit the .wasm before deploying.
+
   Full deploy (server + frontend):
     sudo python3 deploy.py
 
@@ -47,6 +59,37 @@ RED   = '\033[31m'
 RESET = '\033[0m'
 
 
+def output(cmd, cwd=None):
+    return subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True).stdout.strip()
+
+
+def deploy_remote(args):
+    """Preflight checks locally, then run this script on the server over SSH."""
+    repo = Path(__file__).resolve().parent
+    host = args.host or os.environ.get('GOLDRUSH_DEPLOY_HOST') or 'goldrush'
+    step('Checking local repository')
+    dirty = output('git status --porcelain --untracked-files=no', cwd=repo)
+    if dirty:
+        print(f'{RED}Uncommitted changes — commit (and push) them first, or they will not be deployed:{RESET}')
+        print(dirty)
+        sys.exit(1)
+    run('git fetch origin', cwd=repo)
+    branch = output('git rev-parse --abbrev-ref HEAD', cwd=repo)
+    if branch != 'master':
+        print(f'{RED}On branch {branch}; the server deploys master.{RESET}')
+        sys.exit(1)
+    ahead = output('git rev-list --count origin/master..HEAD', cwd=repo)
+    if ahead != '0':
+        print(f'{RED}{ahead} local commit(s) not pushed to origin/master — push first.{RESET}')
+        sys.exit(1)
+    print('Deploying ' + output('git log -1 --format="%h %s"', cwd=repo))
+
+    remote = f'sudo -n python3 {REPO_DEFAULT.as_posix()}/deploy.py' + (' --frontend-only' if args.frontend_only else '')
+    tty = '-t ' if sys.stdin.isatty() else ''
+    step(f'Running on {host}')
+    run(f'ssh {tty}{host} "{remote}"')
+
+
 def run(cmd, cwd=None):
     print(f'{CYAN}$ {cmd}{RESET}')
     result = subprocess.run(cmd, shell=True, cwd=cwd)
@@ -61,7 +104,8 @@ def step(title):
 
 def git_pull(repo):
     step('Fetching latest code')
-    run('git pull', cwd=repo)
+    run('git pull --ff-only', cwd=repo)
+    run('git log -1 --format="Deploying %h %s"', cwd=repo)
 
 
 def build_client(repo):
@@ -192,6 +236,7 @@ server {{
 
 
 def main():
+    sys.stdout.reconfigure(encoding='utf-8')  # box-drawing chars on a Windows console
     parser = argparse.ArgumentParser(description='Deploy Goldrush Gambit')
     parser.add_argument(
         '--repo', type=Path, default=REPO_DEFAULT,
@@ -201,7 +246,19 @@ def main():
         '--frontend-only', action='store_true',
         help='Rebuild and copy only the frontend — skips server build and service restart',
     )
+    parser.add_argument('--remote', action='store_true',
+                        help='Run from a dev machine: deploy origin/master on the server over SSH')
+    parser.add_argument('--host', help='SSH host alias for --remote (default: goldrush)')
     args = parser.parse_args()
+
+    if args.remote:
+        deploy_remote(args)
+        print(f'\n{GREEN}=== Done ==={RESET}')
+        return
+
+    if os.geteuid() != 0:
+        print(f'{RED}Error: this script must be run as root (sudo python3 deploy.py ...){RESET}')
+        sys.exit(1)
 
     repo = args.repo.resolve()
     if not (repo / '.git').is_dir():
@@ -229,7 +286,4 @@ def main():
 
 
 if __name__ == '__main__':
-    if os.geteuid() != 0:
-        print(f'{RED}Error: this script must be run as root (sudo python3 deploy.py ...){RESET}')
-        sys.exit(1)
     main()

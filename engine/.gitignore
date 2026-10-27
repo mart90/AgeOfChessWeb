@@ -2,3 +2,5 @@ target/
 testdata/*
 !testdata/oracle.jsonl
 !testdata/seeds_*.txt
+# large regenerable seed lists (RulesOracle seeds mode)
+testdata/seeds_*k.txt

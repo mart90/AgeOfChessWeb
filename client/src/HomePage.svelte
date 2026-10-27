@@ -388,27 +388,29 @@
     {#if tab === 'lobby'}
       <div class="option-row">
         <label class="checkbox-label">
-          <input type="checkbox" bind:checked={biddingEnabled} />
           Bid for colors
+          <input type="checkbox" bind:checked={biddingEnabled} />
         </label>
-        {#if authState.token}
-          <span class="checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" bind:checked={isRanked} />
-              Ranked
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" bind:checked={isPrivate} />
-              Private
-            </label>
-          </span>
-        {/if}
       </div>
+      {#if authState.token}
+        <div class="option-row">
+          <label class="checkbox-label">
+            Ranked
+            <input type="checkbox" bind:checked={isRanked} />
+          </label>
+        </div>
+        <div class="option-row">
+          <label class="checkbox-label">
+            Private
+            <input type="checkbox" bind:checked={isPrivate} />
+          </label>
+        </div>
+      {/if}
     {:else if tab === 'computer'}
       <div class="option-row">
         <label class="checkbox-label">
-          <input type="checkbox" bind:checked={computerBidding} />
           Bid for colors
+          <input type="checkbox" bind:checked={computerBidding} />
         </label>
       </div>
       <div class="option-row">
@@ -591,7 +593,7 @@
     gap: 0.35rem;
   }
   .section-label {
-    font-size: 0.75rem;
+    font-size: 0.79rem;
     text-transform: uppercase;
     letter-spacing: 0.07em;
     color: var(--faint);
@@ -672,17 +674,18 @@
     cursor: pointer;
     border: 2px solid var(--surface);
   }
-  .checkbox-group { display: flex; gap: 1rem; }
   .level-btn { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; white-space: nowrap; }
-  .level-elo { font-size: 0.75rem; color: var(--muted); }
+  .level-elo { font-size: 0.79rem; color: var(--muted); }
   .mode-btn.selected .level-elo { color: var(--fg-2); }
   .hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
   .unranked-tag {
-    font-size: 0.72rem; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 0.35rem;
+    font-size: 0.76rem; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 0.35rem;
   }
   .checkbox-label {
     display: flex;
+    flex: 1;
     align-items: center;
+    justify-content: space-between;
     gap: 0.5rem;
     font-size: 0.95rem;
     color: var(--fg-2);
@@ -781,7 +784,7 @@
     margin-bottom: 1.25rem;
   }
   .ongoing-label {
-    font-size: 0.75rem;
+    font-size: 0.79rem;
     text-transform: uppercase;
     letter-spacing: 0.07em;
     color: var(--faint);
@@ -816,7 +819,7 @@
   }
   .ongoing-tc { color: var(--muted); font-size: 0.85rem; }
   .your-turn {
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     color: #7cfc00;
     background: rgba(124, 252, 0, 0.1);
     border: 1px solid rgba(124, 252, 0, 0.3);
@@ -824,7 +827,7 @@
     padding: 0.1rem 0.45rem;
   }
   .cancel-challenge-btn {
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     color: #e07070;
     background: rgba(224, 112, 112, 0.1);
     border: 1px solid rgba(224, 112, 112, 0.3);
@@ -852,7 +855,7 @@
     font-size: 0.9rem;
   }
   .seed-copy-btn {
-    font-size: 0.75rem;
+    font-size: 0.79rem;
     color: var(--faint);
     background: none;
     border: 1px solid var(--line-strong);
@@ -863,7 +866,7 @@
   }
   .seed-copy-btn:hover { color: var(--muted); border-color: var(--line-strong); }
   .join-lobby-btn {
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     color: var(--accent);
     background: rgba(216, 166, 74, 0.1);
     border: 1px solid rgba(216, 166, 74, 0.35);

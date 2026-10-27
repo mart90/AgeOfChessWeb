@@ -162,7 +162,7 @@
     font-size: 0.9rem;
     color: var(--fg-2);
   }
-  .hint { font-size: 0.78rem; color: var(--faint); }
+  .hint { font-size: 0.8rem; color: var(--faint); }
   input[type="text"],
   input[type="password"] {
     padding: 0.5rem 0.75rem;
@@ -193,7 +193,6 @@
     cursor: pointer;
     flex-direction: row;
   }
-  .checkbox-label input[type="checkbox"] { width: auto; }
 
   button[type="submit"] {
     padding: 0.6rem;

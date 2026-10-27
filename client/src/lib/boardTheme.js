@@ -153,12 +153,13 @@ export function drawMineBadge(ctx, owner, px, py, cell) {
   ctx.lineWidth = cell * 0.025;
   ctx.strokeStyle = '#c79a2c';
   ctx.stroke();
-  // Centre on the measured glyph box: textBaseline "middle" sits low for digits.
+  // Centre on the measured glyph box (textBaseline "middle" sits low for digits), then lift by 5%
+  // of the radius: mathematically centred "+3" still looks low (its weight is in the bottom half).
   ctx.fillStyle = owner === 'white' ? '#1e1b18' : '#f5f1e8';
   ctx.font = `700 ${Math.round(cell * 0.15)}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const label = `+${MINE_INCOME}`;
   const m = ctx.measureText(label);
-  ctx.fillText(label, cx, cy + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
+  ctx.fillText(label, cx, cy + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2 - r * 0.05);
 }

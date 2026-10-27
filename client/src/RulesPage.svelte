@@ -22,7 +22,7 @@
 
     <h3>Piece movement</h3>
     <ul>
-      <li>Pieces other than pawns move as in Chess.</li>
+      <li>Pieces other than pawns move as in chess.</li>
       <li>Pawns can move any direction in a straight line, and capture any direction diagonally.</li>
       <li><strong>Mountains</strong> block movement along files and diagonals and nothing can stand
           on them.</li>
@@ -32,8 +32,8 @@
 
     <h3>Piece placement</h3>
     <ul>
-      <li>Instead of moving a piece, a new piece can be placed on the board.</li>
-      <li>New pieces can always be placed around the king.</li>
+      <li>We can spend our turn and some gold to place a new piece on the board.</li>
+      <li>All pieces can be placed around the king.</li>
       <li>Rooks, bishops and knights can also be placed around any of your queens.</li>
       <li>Pawns can be placed around any piece except other pawns.</li>
       <li>Pieces can't be placed on top of enemy pieces or treasures.</li>
@@ -61,10 +61,9 @@
 
     <h2>Piece movement example</h2>
     <p>
-      In the position below, we are trying to move our queen. She can move one space to her right
-      onto the mine, but no further. This "here and no further" also applies to the treasure on
-      i7, which she could capture for 20 gold, and the forest on e5. It does not apply to the
-      rocks on g3 and f11, which she can't move to at all.
+      In the position below, we are trying to move our queen. She can move one space on the left-down diagonal onto the forest, but no further. 
+      This "here and no further" also applies to the mine above her. It does not apply to the
+      mountains, which she can't move to at all.
     </p>
     <div class="board-img-wrap">
       <img
@@ -165,12 +164,13 @@
     justify-content: center;
   }
 
+  /* Full text width; the 1204px source is downscaled smoothly (no `pixelated`) */
   .board-img {
+    display: block;
     width: 100%;
-    max-width: 560px;
+    height: auto;
     border-radius: 6px;
     box-shadow: 0 4px 24px rgba(0,0,0,0.5);
-    image-rendering: pixelated;
   }
 
   @media (max-width: 640px) {

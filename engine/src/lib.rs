@@ -12,6 +12,8 @@ pub mod search;
 pub mod clock;
 pub mod api;
 pub mod bid;
+pub mod traindata;
+pub mod nnue;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 

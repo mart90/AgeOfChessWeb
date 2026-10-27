@@ -8,9 +8,10 @@ Source of truth for the rules is the server: `AgeOfChess.Server/GameLogic/` (mai
 `Map/PathFinder.cs`, `Map/MapGenerator.cs`). The player-facing text is in
 `client/src/RulesPage.svelte` and `client/src/AboutPage.svelte`.
 
-> The rules are implemented **three times**: C# (server, authoritative), JS
-> (`client/src/lib/pathFinder.js` + `analysis.js`, for the analysis board / bot) and Python
-> (`policyNetwork/board.py`, for NN self-play). Rule changes must be applied to all three.
+> The rules are implemented **three times**: C# (server, authoritative), Rust (`engine/`, the
+> computer opponent and training-data generator; checked against C# by `tools/RulesOracle`) and
+> JS (`client/src/lib/pathFinder.js` + `analysis.js`, for the analysis board). Rule changes must
+> be applied to all three.
 
 ## Design intent
 

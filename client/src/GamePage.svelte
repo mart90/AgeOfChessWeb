@@ -960,7 +960,11 @@
       gameState = state; biddingState = null; syncLocalTimes(state); statusMsg = ''; inviteUrl = '';
     });
     hub.on('StateUpdated', (state) => {
-      stateHistory = [...stateHistory, state];
+      // One state per move (stateHistory[n] = after n moves); an update without a new move
+      // (e.g. a clock sync) replaces the last one.
+      stateHistory = state.moves.length > (gameState?.moves.length ?? -1)
+        ? [...stateHistory, state]
+        : [...stateHistory.slice(0, -1), state];
 
       // Clear premove on any state update (either executed or became invalid)
       premove = null;
@@ -977,12 +981,23 @@
       if (replayIndex !== null) replayIndex = null;
       keepInteractionAfterUpdate();
     });
-    hub.on('GameEnded', (state) => {
-      stateHistory = [...stateHistory, state];
+    hub.on('GameEnded', async (state) => {
+      // Same bookkeeping as StateUpdated (a resign/timeout adds no move: replace the last state)
+      let history = state.moves.length > (gameState?.moves.length ?? -1)
+        ? [...stateHistory, state]
+        : [...stateHistory.slice(0, -1), state];
+      // History incomplete (joined mid-game, missed updates): rebuild it from the server's replay.
+      // Fetched before any state is applied, so the switch to analysis mode happens in one render
+      // (otherwise the shop disappears while awaiting and the board briefly resizes).
+      if (history.length !== state.moves.length + 1) {
+        const snapshots = await fetchFullHistory(state.moves.length + 1);
+        if (snapshots) history = snapshots;
+      }
+      stateHistory = history;
       gameState = state; syncLocalTimes(state);
       statusMsg = formatResult(state.result); clearDrag();
-      replayIndex = stateHistory.length - 1;  // enable replayer
       localStorage.removeItem(`inviteUrl_${gameId}`);
+      replayIndex = stateHistory.length - 1;  // enable replayer
       // Build variation tree from mainline
       moveTree = buildFromMainline(state.moves, stateHistory);
       currentNode = lastMainlineNode(moveTree);
@@ -1049,6 +1064,22 @@
     if (!hub || rematchRequested) return;
     rematchRequested = true;
     hub.invoke('RequestRematch', playerToken, sameSeedRematch);
+  }
+
+  /** Full state history from the server (one state per move); retries briefly because the result
+   *  is stored just after the game-end broadcast. Returns null if it can't be loaded. */
+  async function fetchFullHistory(expectedLength) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const r = await fetch(`/api/game/${gameId}/replay`);
+        if (r.ok) {
+          const { snapshots } = await r.json();
+          if (snapshots?.length === expectedLength) return snapshots;
+        }
+      } catch { /* retry */ }
+      await new Promise(res => setTimeout(res, 400));
+    }
+    return null;
   }
 
   function openAnalyzePage() {
@@ -1415,7 +1446,7 @@
 </div><!-- /.page -->
 
 <style>
-  .thinking-label { font-size: 0.78rem; color: var(--muted); font-style: italic; margin-left: 0.4rem; display: inline-flex; align-items: center; gap: 0.35rem; }
+  .thinking-label { font-size: 0.8rem; color: var(--muted); font-style: italic; margin-left: 0.4rem; display: inline-flex; align-items: center; gap: 0.35rem; }
   .spinner {
     display: inline-block; width: 0.85em; height: 0.85em; flex-shrink: 0;
     border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%;
@@ -1515,7 +1546,7 @@
     border-radius: 999px;
     background: #d04040;
     color: #fff;
-    font-size: 0.72rem;
+    font-size: 0.76rem;
     font-weight: 700;
     line-height: 1;
   }
@@ -1683,7 +1714,7 @@
   .resign-flag:hover { background: #5a1f1f; border-color: #a03030; color: #e8a0a0; }
 
   .resign-confirm, .resign-cancel {
-    border: none; border-radius: 3px; font-size: 0.75rem;
+    border: none; border-radius: 3px; font-size: 0.79rem;
     padding: 0.1rem 0.35rem; cursor: pointer; line-height: 1.3;
     vertical-align: middle; margin-left: 0.15rem;
   }
@@ -1704,7 +1735,7 @@
     background: var(--surface-2);
     border: 1px solid var(--faint);
     color: var(--accent);
-    font-size: 0.75rem;
+    font-size: 0.79rem;
     font-weight: 700;
     cursor: default;
     display: inline-flex;
@@ -1757,9 +1788,8 @@
   /* ── Rematch bar ── */
   .rematch-bar {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.5rem;
     flex: 1;
     min-width: 0;
     padding: 0.2rem 0.3rem;
@@ -1767,19 +1797,19 @@
   .rematch-option {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.35rem;
     font-size: 0.85rem;
     color: var(--muted);
     cursor: pointer;
     user-select: none;
+    white-space: nowrap;
   }
-  .rematch-option input[type="checkbox"] {
-    cursor: pointer;
-    width: 15px;
-    height: 15px;
-  }
+  /* Compact switch: the footer is a fixed-width column and must stay on one row */
+  .rematch-option input[type="checkbox"] { font-size: 0.8em; }
   .rematch-btn {
-    padding: 0.35rem 0.9rem;
+    margin-left: auto;
+    padding: 0.35rem 0.75rem;
+    white-space: nowrap;
     background: var(--surface-2);
     border: 1px solid var(--line-strong);
     border-radius: 6px;

@@ -99,11 +99,14 @@
     --font-display: "Alegreya SC", Georgia, "Times New Roman", serif;
     --font-body:    "Alegreya Sans", "Segoe UI", system-ui, sans-serif;
   }
+  /* Slightly above the browser default (16px → 18px); everything sized in rem scales with it.
+     A percentage keeps the user's own browser font-size setting in effect. */
+  :global(html) { font-size: 112.5%; }
   :global(*, *::before, *::after) { box-sizing: border-box; }
   :global(body) {
     margin: 0;
     font-family: var(--font-body);
-    font-size: 16px;
+    font-size: 1rem;
     background: var(--bg);
     color: var(--fg);
     min-height: 100vh;
@@ -121,4 +124,45 @@
   :global(button) {
     cursor: pointer;
   }
+  /* Checkboxes render as on/off switches site-wide. Sized in em so they follow the label's text. */
+  :global(input[type="checkbox"]) {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    flex-shrink: 0;
+    width: 2.8em;
+    height: 1.55em;
+    margin: 0;
+    border: none;
+    border-radius: 999px;
+    background: var(--surface-3);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    vertical-align: middle;
+    cursor: pointer;
+    transition: background 0.18s, box-shadow 0.18s;
+  }
+  :global(input[type="checkbox"]::before) {
+    content: "";
+    position: absolute;
+    top: 0.2em;
+    left: 0.2em;
+    width: 1.15em;
+    height: 1.15em;
+    border-radius: 50%;
+    background: var(--muted);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    transition: transform 0.18s, background 0.18s;
+  }
+  :global(input[type="checkbox"]:hover::before) { background: var(--fg-2); }
+  :global(input[type="checkbox"]:checked) {
+    background: var(--button);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  :global(input[type="checkbox"]:checked:hover) { background: var(--button-hover); }
+  :global(input[type="checkbox"]:checked::before) {
+    transform: translateX(1.25em);
+    background: var(--fg);
+  }
+  :global(input[type="checkbox"]:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  :global(input[type="checkbox"]:disabled) { opacity: 0.4; cursor: default; }
 </style>

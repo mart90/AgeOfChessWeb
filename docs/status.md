@@ -8,7 +8,7 @@ _Last updated: 2026-10-26_
 Mart found attacking rarely viable without a big advantage, and queens weak. Now R/B/N may
 also be placed next to your queen, and a queen costs 75. Implemented everywhere: C# server,
 Rust engine (default `Rules`; eval queen value 750), JS rules (`analysis.js`, `constants.js`),
-Python (`policyNetwork/`, unvalidated), rules page. Old rules: `Rules::classic()`, `gg --classic`.
+Python (`policyNetwork/`, since removed), rules page. Old rules: `Rules::classic()`, `gg --classic`.
 Note: computer level Elos, bidding calibration and the colour balance (Black 6 gold) were
 measured under the old rules and may need re-checking.
 Engine self-play comparison: `engine/tools/compare_selfplay.py` on `testdata/qd_base.jsonl`
@@ -24,6 +24,16 @@ vs `qd_var.jsonl` (1000 games each, 60k nodes, mirrored 10×10). Results (standa
   33.6% → 53.6%, gold victories 62.3% → 43.0%, mates before 120 gold 29.2% → 48.1%; White
   43.4% → 45.8%; queens 1.04 → 0.84 per game (in 63% → 62% of games, first at ply 76 → 80),
   lost 0.55 → 0.28; queen drops 1.60 per game (7.9% of non-pawn buys); median length 114 → 111.
+
+**Evaluation-network training — environment set up 2026-10-26** (see training.md): `gg gendata`
+writes labelled positions from engine-vs-engine games, `training/` trains an NNUE-style value
+network on CPU. Dev run (2,000 games): val winner prediction 74.1% vs 76.5% for the engine's
+own search score. First real run (Mart, 2026-10-27): 1M positions at 20k nodes (`m10_1m`, 567k
+train positions). On 600 unseen games (`training/evaluate.py`, `holdout_20k.bin`) it is roughly on
+par with the hand-written eval: winner 77.4% vs 76.1% (close positions 56.1% vs 53.9%), gap to
+search 6.8 vs 6.0 points. Rust inference done (`engine/src/nnue.rs`, exact vs PyTorch, 3.9x fewer
+nodes/s). **Equal-nodes match (12k nodes, 200 holdout boards x 2): network 294 - hand-written 106,
+73.5%, +177 ± 39 Elo.** Next: equal-time match, 3M-position learning-curve run (Mart).
 
 **Earlier focus: computer opponent.**
 **Computer opponent.** Question being investigated: is it realistic to generate the first NN
@@ -72,7 +82,8 @@ training games with the brute-force engine? Known problems:
 
 ## Neural network history (paused, last work 2026-03-28)
 
-See `policyNetwork/`. Summary of what was tried:
+Code removed on 2026-10-26 (in git history; logging conventions kept in training.md).
+Summary of what was tried:
 - 10×10 boards, ResNet (15 blocks × 256 filters), policy head; trained on winner-only positions
   from self-play, draws discarded. Started from heuristic play (`config.py` heuristics).
 - Value head tried and removed (worse); later re-added together with a small MCTS

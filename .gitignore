@@ -40,3 +40,12 @@ Thumbs.db
 policyNetwork/__pycache__
 policyNetwork/replays
 policyNetwork/checkpoints
+# Eval-network training (training/): generated data and run outputs
+training/data/
+training/runs/
+training/__pycache__/
+
+# `bin/` above is meant for .NET build output; the engine's CLI source lives in engine/src/bin/
+!engine/src/bin/
+
+policyNetworkOld
