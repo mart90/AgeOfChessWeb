@@ -35,15 +35,6 @@
       Join the <a href="https://discord.gg/UhcU64NCs2">discord server</a> to discuss the game, give feedback, or find people to play with.
     </p>
 
-    <h3>Roadmap</h3>
-    <ul class="roadmap">
-      <li>Stronger engine for 10x10 boards (supported by a neural network)</li>
-      <li>Social features (more extensive profiles, friends list, etc)</li>
-      <li>Correspondence time controls</li>
-      <li>Game review tools</li>
-      <li>Tactics puzzles</li>
-    </ul>
-
     <h3>Credits</h3>
     <ul class="credits">
       <li>Chess pieces (and the knight in the logo): "cburnett" by Colin M.L. Burnett, via <a href="https://github.com/lichess-org/lila">Lichess</a></li>
