@@ -97,9 +97,10 @@
     font-size: 0.8rem;
   }
 
+  /* Same size as the Rules page's text */
   p, li {
-    font-size: 0.97rem;
-    line-height: 1.7;
+    font-size: 1.05rem;
+    line-height: 1.75;
     color: var(--fg-2);
   }
 
@@ -150,6 +151,5 @@
 
   @media (max-width: 640px) {
     h1 { font-size: 1.5rem; }
-    p, li { font-size: 0.92rem; }
   }
 </style>
