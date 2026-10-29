@@ -19,6 +19,12 @@ Usage:
   Full deploy (server + frontend):
     sudo python3 deploy.py
 
+  Database migrations: EF's migration designer files are git-ignored, so the server can't run
+  migrations itself. For a deploy that needs one, generate an idempotent script
+    dotnet ef migrations script <LastAppliedMigration> --idempotent -o db-migrations/<name>.sql
+  (from AgeOfChess.Server/), commit it, deploy, then delete it again. A full deploy applies every
+  db-migrations/*.sql to the production database before restarting the service.
+
   Frontend only (no service restart):
     sudo python3 deploy.py --frontend-only
 
@@ -50,6 +56,7 @@ SERVICE_NAME = 'goldrushgambit'
 SERVICE_USER = 'www-data'
 DOMAIN       = 'goldrushgambit.com'
 PORT         = 5004
+MIGRATIONS_DIR = 'db-migrations'   # *.sql applied on full deploys (see above)
 # ───────────────────────────────────────────────────────────────────────────────
 
 CYAN  = '\033[36m'
@@ -106,6 +113,26 @@ def git_pull(repo):
     step('Fetching latest code')
     run('git pull --ff-only', cwd=repo)
     run('git log -1 --format="Deploying %h %s"', cwd=repo)
+
+
+def apply_db_migrations(repo):
+    scripts = sorted((repo / MIGRATIONS_DIR).glob('*.sql'))
+    if not scripts:
+        return
+    step('Applying database migrations')
+    import json, tempfile
+    settings = json.loads((DEPLOY_PATH / 'appsettings.Production.json').read_text(encoding='utf-8-sig'))
+    conn = dict(part.split('=', 1) for part in settings['ConnectionStrings']['Default'].split(';') if '=' in part)
+    conn = {k.strip().lower(): v for k, v in conn.items()}
+    # Credentials go in a private option file, not on the command line
+    with tempfile.NamedTemporaryFile('w', suffix='.cnf', delete=False) as cnf:
+        cnf.write(f'[client]\nhost={conn["server"]}\nuser={conn["user"]}\npassword="{conn["password"]}"\n')
+    try:
+        os.chmod(cnf.name, 0o600)
+        for script in scripts:
+            run(f'mysql --defaults-extra-file={cnf.name} {conn["database"]} < {script}')
+    finally:
+        os.unlink(cnf.name)
 
 
 def build_client(repo):
@@ -270,13 +297,20 @@ def main():
     print(f'Repo:   {repo}')
     print(f'Deploy: {DEPLOY_PATH}')
 
+    old_script = Path(__file__).read_bytes()
     git_pull(repo)
+    # Rerun the freshly pulled version of this script if the pull changed it
+    if os.environ.get('GOLDRUSH_DEPLOY_REEXEC') != '1' and Path(__file__).read_bytes() != old_script:
+        print('deploy.py changed; restarting it')
+        os.environ['GOLDRUSH_DEPLOY_REEXEC'] = '1'
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())] + sys.argv[1:])
     build_client(repo)
 
     if args.frontend_only:
         deploy_frontend_only(repo)
     else:
         build_server(repo)
+        apply_db_migrations(repo)
         ensure_service()
         deploy_full()
         restart_service()
