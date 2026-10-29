@@ -8,7 +8,7 @@ _Last updated: 2026-10-28_
 after a game (GamePage; again = update the same entry), "Save to library" on the analysis board
 (updates the entry it was opened from). `/library` page (nav: between Analyze and Rules) lists
 entries; click opens them on the analysis board, ✕ removes. Server: `LibraryGame` table (migration
-`AddLibraryGames`, applied to the dev DB; **production still needs `dotnet ef database update`**),
+`AddLibraryGames`),
 `LibraryController` (`/api/library`). Entries store positions, not just moves (client packed
 format, `gameTransfer.js` `packGameTree`/`packAnalyzeTree`), so they survive rule changes.
 `tools/LibraryImport` replays seed + moves (e.g. `gg match --out`) with the server rules and adds
@@ -17,7 +17,7 @@ Sharing (2026-10-29): each entry has a `ShareId` GUID and `IsPublic`; the analys
 `/analyze/{shareId}` for library entries. "Publish" switch + "Copy link" under Library. Published
 entries open for anyone (`GET /api/library/shared/{shareId}`, anonymous); non-owners can play on and
 "Save to my library", which adds a copy (new GUID, URL changes) — only the owner updates the original.
-Migrations `RemoveLibrarySource`, `AddLibrarySharing` are also dev-only so far.
+All library migrations are on production (2026-10-29, via deploy.py's `db-migrations/` step).
 
 **Rejected 2026-10-27: mine upgrades.** Tried as a test rule (spend the turn + 40 gold to raise a
 mine's income from +3 to +5, once per mine, reset on capture) in engine, server and client, then
