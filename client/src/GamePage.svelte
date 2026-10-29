@@ -6,14 +6,14 @@
   import MoveList from './MoveList.svelte';
   import { settings } from './lib/settings.svelte.js';
   import { currentGame } from './lib/currentGame.svelte.js';
-  import { playSound, stopClockSound } from './lib/sound.js';
+  import { playSound, stopClockSound, preloadClockSound } from './lib/sound.js';
   import { SHOP as SHOP_BASE } from './lib/constants.js';
   import { buildFromMainline, lastMainlineNode, addChild } from './lib/moveTree.js';
   import { getNodePath } from './lib/treeStorage.js';
   import { packGameTree, mainlineLength, GAME_TRANSFER_KEY, GAME_TRANSFER_FORMAT } from './lib/gameTransfer.js';
   import { addLibraryGame, updateLibraryGame } from './lib/api.js';
   import { authState } from './lib/auth.svelte.js';
-  import { applyMoveToState, moveToNotation, applyPlacementToState, placementToNotation } from './lib/boardUtils.js';
+  import { applyMoveToState, moveToNotation, applyPlacementToState, placementToNotation, sameSquare } from './lib/boardUtils.js';
   import { computeLegalMoves } from './lib/pathFinder.js';
   import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js';
   import { EngineClient } from './lib/engine/engine.js';
@@ -699,7 +699,7 @@
   }
 
   function onHoverSquare(sq) {
-    if (dragging) dragOverSquare = sq;
+    if (dragging && !sameSquare(sq, dragOverSquare)) dragOverSquare = sq;
   }
 
   /**
@@ -788,7 +788,9 @@
   function globalPointerMove(e) {
     if (!dragging) return;
     dragging = { ...dragging, ghostX: e.clientX, ghostY: e.clientY };
-    dragOverSquare = globalCursorToBoard(e.clientX, e.clientY);
+    // Only on a new square: each change redraws the board
+    const over = globalCursorToBoard(e.clientX, e.clientY);
+    if (!sameSquare(over, dragOverSquare)) dragOverSquare = over;
 
     // Auto-scroll when dragging near viewport edges (for mobile piece placement)
     const EDGE_THRESHOLD = 80;
@@ -843,6 +845,7 @@
   // ── SignalR ───────────────────────────────────────────────────────────────
 
   onMount(async () => {
+    preloadClockSound();
     // Global event listeners and clock — needed for both replay and live paths.
     window.addEventListener('pointermove', globalPointerMove);
     window.addEventListener('pointerup',   globalPointerUp);

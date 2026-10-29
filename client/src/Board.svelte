@@ -82,17 +82,43 @@
   const lastMoveSet = $derived(new Set(lastMoveSquares.map(d => `${d.x},${d.y}`)));
 
   // ── Draw ────────────────────────────────────────────────────────────────
+  // Squares and terrain don't change during a game but are the expensive part (textures, shadows,
+  // vector artwork), so they're rendered once into two offscreen layers and copied in on each
+  // redraw. Pieces and the chest are cached as bitmaps per size. All of it is rebuilt when the
+  // board size, orientation, theme, terrain or loaded images change.
+
+  let layers = null;          // { key, squares: canvas, terrain: canvas }
+  const sprites = new Map();  // `${src}|${size}` → canvas
+  let spriteSize = 0;
+
+  function newCanvas(w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    return c;
+  }
+
+  /** A bitmap of `size`×`size` drawn once by `paint(ctx)`. */
+  function sprite(key, size, paint) {
+    const k = `${key}|${size}`;
+    let c = sprites.get(k);
+    if (!c) { c = newCanvas(size, size); paint(c.getContext('2d')); sprites.set(k, c); }
+    return c;
+  }
 
   function draw() {
     if (!canvas || !squares.length) return;
     const n = mapSize;
 
-    // Size canvas to device pixels so no CSS scaling occurs (avoids blur on HiDPI)
+    // Size canvas to device pixels so no CSS scaling occurs (avoids blur on HiDPI).
+    // Only on a change: setting the size reallocates the canvas.
     const dpr    = window.devicePixelRatio || 1;
     const cssW   = canvas.clientWidth;
     if (!cssW) return;
-    canvas.width  = Math.round(cssW * dpr);
-    canvas.height = Math.round(cssW * dpr);
+    const size = Math.round(cssW * dpr);
+    if (canvas.width !== size || canvas.height !== size) { canvas.width = size; canvas.height = size; }
 
     const ctx  = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = true;
@@ -103,19 +129,34 @@
     const ex = (d) => Math.round(d * canvas.width  / n);  // left edge of column d
     const ey = (d) => Math.round(d * canvas.height / n);  // top edge of row d
 
-    for (const sq of squares) {
-      // White: Y=0 is their home rank → flip Y so it sits at canvas bottom.
-      //        X is left-to-right as-is.
-      // Black: board is rotated 180°, so flip X; Y=0 (white home) ends up at canvas top.
+    // White: Y=0 is their home rank → flip Y so it sits at canvas bottom.
+    //        X is left-to-right as-is.
+    // Black: board is rotated 180°, so flip X; Y=0 (white home) ends up at canvas top.
+    const cellRect = (sq) => {
       const dx = isWhite ? sq.x         : n - 1 - sq.x;
       const dy = isWhite ? n - 1 - sq.y : sq.y;
       const px = ex(dx), py = ey(dy);
-      const cw = ex(dx + 1) - px;   // this cell's pixel width
-      const ch = ey(dy + 1) - py;   // this cell's pixel height (may differ by 1px from cw)
-      const key = `${sq.x},${sq.y}`;
+      return [px, py, ex(dx + 1) - px, ey(dy + 1) - py];   // cells may differ by 1px in size
+    };
 
-      // Square background (a1 is dark)
-      drawSquare(ctx, theme, img, (sq.x + sq.y) % 2 === 0, sq.x, sq.y, px, py, cw, ch);
+    const layerKey = `${size}|${n}|${isWhite}|${theme.id}|${images.size}|${squares.map(sq => sq.type).join()}`;
+    if (layers?.key !== layerKey) {
+      const sqLayer = newCanvas(size, size), terrainLayer = newCanvas(size, size);
+      const sg = sqLayer.getContext('2d'), tg = terrainLayer.getContext('2d');
+      for (const sq of squares) {
+        const [px, py, cw, ch] = cellRect(sq);
+        drawSquare(sg, theme, img, (sq.x + sq.y) % 2 === 0, sq.x, sq.y, px, py, cw, ch);   // a1 is dark
+        drawTerrain(tg, img, sq.type, px, py, cw);   // mountains, forests, mines
+      }
+      layers = { key: layerKey, squares: sqLayer, terrain: terrainLayer };
+    }
+    if (spriteSize !== size) { sprites.clear(); spriteSize = size; }
+
+    ctx.drawImage(layers.squares, 0, 0);
+
+    for (const sq of squares) {
+      const [px, py, cw, ch] = cellRect(sq);
+      const key = `${sq.x},${sq.y}`;
 
       // Last-move highlight (subtle warm yellow, drawn early so other overlays sit on top)
       if (lastMoveSet.has(key)) {
@@ -147,9 +188,14 @@
         ctx.lineWidth = Math.round(3 * dpr);
         ctx.strokeRect(px + 1, py + 1, cw - 2, ch - 2);
       }
+    }
 
-      // Terrain: mountains, forests, mines
-      drawTerrain(ctx, img, sq.type, px, py, cw);
+    // Terrain above the highlights
+    ctx.drawImage(layers.terrain, 0, 0);
+
+    for (const sq of squares) {
+      const [px, py, cw, ch] = cellRect(sq);
+      const key = `${sq.x},${sq.y}`;
 
       // Legal destination dot on empty squares
       if (legalSet.has(key) && !sq.piece) {
@@ -162,13 +208,14 @@
       // Treasure or piece
       const isGrabbed = selectedSquare && sq.x === selectedSquare.x && sq.y === selectedSquare.y && _dragging;
       if (sq.piece?.type === 'Treasure') {
-        drawTreasure(ctx, img, px, py, cw);
+        ctx.drawImage(sprite(`treasure|${images.size}`, cw, g => drawTreasure(g, img, 0, 0, cw)), px, py);   // rebuilt once its images load
       } else if (sq.piece) {
-        const pi = img(pieceSrc(sq.piece.type, sq.piece.isWhite));
+        const src = pieceSrc(sq.piece.type, sq.piece.isWhite);
+        const pi = img(src);
         if (pi) {
-          const s = cw * 0.86;
+          const s = Math.round(cw * 0.86);
           if (isGrabbed) ctx.globalAlpha = 0.3;
-          ctx.drawImage(pi, px + (cw - s) / 2, py + (ch - s) / 2, s, s);
+          ctx.drawImage(sprite(src, s, g => g.drawImage(pi, 0, 0, s, s)), px + Math.round((cw - s) / 2), py + Math.round((ch - s) / 2));
           if (isGrabbed) ctx.globalAlpha = 1.0;
         }
       }

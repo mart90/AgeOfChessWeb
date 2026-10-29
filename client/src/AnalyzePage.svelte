@@ -8,6 +8,7 @@
   import MoveList from './MoveList.svelte';
   import { MoveNode, addChild } from './lib/moveTree.js';
   import { wheelNav } from './lib/wheelNav.js';
+  import { sameSquare } from './lib/boardUtils.js';
   import { serializeTree, deserializeTree, getNodePath, nodeAtPath } from './lib/treeStorage.js';
   import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js'
   import { engineSearch, cancelSearch } from './lib/engine/engine.js';
@@ -857,7 +858,7 @@
   }
 
   function handleHover(sq) {
-    if (dragging) dragOverSq = sq;
+    if (dragging && !sameSquare(sq, dragOverSq)) dragOverSq = sq;
   }
 
   // ── Shop drag ─────────────────────────────────────────────────────────────
@@ -882,7 +883,9 @@
   function globalPointerMove(e) {
     if (!dragging) return;
     dragging = { ...dragging, ghostX: e.clientX, ghostY: e.clientY };
-    dragOverSq = globalCursorToBoard(e.clientX, e.clientY);
+    // Only on a new square: each change redraws the board
+    const over = globalCursorToBoard(e.clientX, e.clientY);
+    if (!sameSquare(over, dragOverSq)) dragOverSq = over;
   }
 
   function globalPointerUp(e) {

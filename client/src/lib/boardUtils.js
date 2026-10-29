@@ -12,6 +12,11 @@ import { MINE_INCOME } from './constants.js';
 
 function col(x) { return String.fromCharCode(97 + x); }
 
+/** Same {x, y} square (or both null). For skipping no-op state updates, e.g. while dragging. */
+export function sameSquare(a, b) {
+  return a === b || (!!a && !!b && a.x === b.x && a.y === b.y);
+}
+
 /**
  * Returns notation string for a regular piece move.
  */

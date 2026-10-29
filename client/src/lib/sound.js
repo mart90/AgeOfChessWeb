@@ -4,6 +4,12 @@ const sounds = {
   game_started: new Audio('/sounds/game_started.mp3'),
   clock: new Audio('/sounds/clock.mp3')
 };
+// The low-time warning is much larger than the rest: only fetched once a game page opens
+sounds.clock.preload = 'none';
+
+export function preloadClockSound() {
+  if (sounds.clock.readyState === 0) sounds.clock.load();
+}
 
 let enabled = true;
 
