@@ -43,7 +43,20 @@
   let libraryMsg     = $state('');
   let librarySaving  = $state(false);
   let linkCopied     = $state(false);
+  let savedHash      = $state(null);    // libraryHash when last saved / opened
   const libraryOwned = $derived(libraryId != null);
+  // Hash of what saving would store (tree + title): "Saved" until it changes
+  const libraryHash  = $derived.by(() => {
+    treeRevision;
+    return moveTree ? hashString(JSON.stringify(packAnalyzeTree(moveTree)) + '|' + libraryTitle.trim()) : null;
+  });
+  const librarySaved = $derived(libraryOwned && libraryHash === savedHash);
+
+  function hashString(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = (h * 33 + str.charCodeAt(i)) | 0;
+    return h;
+  }
 
   // ── Selection / drag ────────────────────────────────────────────────────────
   let boardCanvas   = null;
@@ -81,9 +94,8 @@
     const data = {
       mapSize,
       mapSeed,
-      viewAsWhite,
       library:     { id: libraryId, shareId: libraryShareId, isPublic: libraryPublic, owner: libraryOwner,
-                     title: libraryTitle, result: libraryResult },
+                     title: libraryTitle, result: libraryResult, savedHash },
       treeData:    serializeTree(moveTree),
       currentPath: currentNode ? getNodePath(moveTree, currentNode) : [],
     };
@@ -427,6 +439,7 @@
       : null;
     libraryTitle   = entry.title ?? '';
     libraryResult  = entry.result ?? null;
+    savedHash      = entry.savedHash ?? null;
     libraryMsg     = '';
   }
 
@@ -450,7 +463,7 @@
         libraryOwner   = null;
       }
       libraryTitle = title;
-      libraryMsg = 'Saved ✓';
+      savedHash = libraryHash;
     } catch (e) {
       libraryMsg = e.message;
     } finally {
@@ -485,7 +498,7 @@
   function loadSavedAnalyzeState(data) {
     const rawTree = deserializeTree(data.treeData);
     setLibrary(data.library ?? {});
-    applyLoadedTree(rawTree, data.currentPath, data.mapSize, data.mapSeed, data.viewAsWhite);
+    applyLoadedTree(rawTree, data.currentPath, data.mapSize, data.mapSeed, true);
   }
 
   function navigateToNode(node) {
@@ -615,27 +628,6 @@
     if (!squares.length) return;
     pushHistory();
     squares = squares.map(s => ({ ...s, piece: null }));
-    clearSelection();
-
-    if (analyzing && analysisWorker) {
-      analysisResults = [];
-      analysisWorker.postMessage({
-        type: 'update',
-        payload: getCurrentPosition()
-      });
-    }
-  }
-
-  // ── Turn management ─────────────────────────────────────────────────────────
-  function passTurn() {
-    pushHistory();
-    const nextWhite = !whiteIsActive;
-    const income = squares
-      .filter(s => s.type?.includes('Mine') && s.mineOwner === (nextWhite ? 'white' : 'black'))
-      .length * MINE_INCOME;
-    if (nextWhite) whiteGold = Math.max(0, whiteGold + income);
-    else           blackGold = Math.max(0, blackGold + income);
-    whiteIsActive = nextWhite;
     clearSelection();
 
     if (analyzing && analysisWorker) {
@@ -908,6 +900,7 @@
     try {
       applyLoadedTree(unpackGameTree(entry.data), [], entry.mapSize, entry.mapSeed, true);
       setLibrary(entry);
+      savedHash = libraryHash;
     } catch (e) {
       console.error('Failed to open library game', e);
       genError = 'Could not open this library game.';
@@ -1093,15 +1086,9 @@
       </div>
     </div>
 
-    <!-- Turn + board controls -->
-    <div class="ctrl-row">
-      <button class="ctrl-btn" onclick={passTurn} disabled={!squares.length}>Pass turn</button>
-      <button class="ctrl-btn" onclick={() => viewAsWhite = !viewAsWhite} disabled={!squares.length}>Flip</button>
-    </div>
     <!-- Shop: place pieces (desktop; mobile has the shop under the board) -->
     <div class="section desktop-only">
       <div class="section-label">Place piece</div>
-      <div class="shop-label">White</div>
       <div class="shop-row">
         {#each SHOP as item}
           {@const canAfford = whiteGold >= item.cost}
@@ -1117,7 +1104,6 @@
           </button>
         {/each}
       </div>
-      <div class="shop-label">Black</div>
       <div class="shop-row">
         {#each SHOP as item}
           {@const canAfford = blackGold >= item.cost}
@@ -1133,11 +1119,10 @@
           </button>
         {/each}
       </div>
-      <p class="shop-hint">Drag a piece onto the board to place it.</p>
     </div>
 
     <!-- My library -->
-    {#if moveTree && (authState.token || libraryShareId)}
+    {#if authState.token || libraryShareId}
       <div class="section">
         <div class="section-label">Library</div>
         {#if libraryOwner}
@@ -1150,8 +1135,9 @@
         <input class="title-input" type="text" bind:value={libraryTitle} maxlength="200"
                placeholder="Title (optional)" spellcheck="false" />
         {#if authState.token}
-          <button class="action-btn" onclick={saveToLibrary} disabled={librarySaving}>
+          <button class="action-btn" onclick={saveToLibrary} disabled={!moveTree || librarySaving || librarySaved}>
             {librarySaving ? 'Saving…'
+              : librarySaved ? 'Saved'
               : libraryOwned ? 'Save changes to library'
               : libraryShareId ? 'Save to my library' : 'Save to library'}
           </button>
@@ -1159,23 +1145,22 @@
           <button class="action-btn" onclick={() => navigate('/login')}>Log in to save to your library</button>
         {/if}
         <div class="share-row">
-          <label class="switch" class:disabled={!libraryOwned}
+          <label class="publish" class:disabled={!libraryOwned}
                  title={libraryOwned ? 'Anyone with the link can open this game' : 'Save to your library first'}>
-            <input type="checkbox" role="switch" checked={libraryPublic} disabled={!libraryOwned} onchange={togglePublic} />
-            <span class="track"><span class="thumb"></span></span>
+            <input type="checkbox" checked={libraryPublic} disabled={!libraryOwned} onchange={togglePublic} />
             Publish
           </label>
           <button class="ctrl-btn copy-btn" onclick={copyShareLink} disabled={!libraryShareId}>
             {linkCopied ? 'Copied' : 'Copy link'}
           </button>
         </div>
-        {#if libraryMsg}<p class:error={libraryMsg !== 'Saved ✓'} class="library-msg">{libraryMsg}</p>{/if}
+        {#if libraryMsg}<p class="library-msg error">{libraryMsg}</p>{/if}
       </div>
     {/if}
 
     <!-- Map generation -->
     <div class="section map-section">
-      <div class="section-label">Map</div>
+      <div class="section-label">Board</div>
       <div class="option-row">
         <label>Size: <strong>{genSize}×{genSize}</strong></label>
         <input type="range" min="6" max="16" step="2" bind:value={genSize} />
@@ -1348,25 +1333,11 @@
   .library-owner a { color: var(--accent); }
   .share-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
   .copy-btn { flex: 0 0 auto; }
-  /* Toggle switch (a checkbox underneath) */
-  .switch {
+  .publish {
     display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
     font-size: 0.88rem; color: var(--fg-2); user-select: none;
   }
-  .switch.disabled { opacity: 0.45; cursor: default; }
-  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-  .track {
-    position: relative; width: 2.1rem; height: 1.2rem; border-radius: 0.6rem; flex: none;
-    background: var(--surface-2); border: 1px solid var(--line-strong);
-    transition: background 0.15s, border-color 0.15s;
-  }
-  .thumb {
-    position: absolute; top: 50%; left: 0.15rem; width: 0.8rem; height: 0.8rem; border-radius: 50%;
-    background: var(--muted); transform: translateY(-50%); transition: left 0.15s, background 0.15s;
-  }
-  .switch input:checked + .track { background: var(--button); border-color: var(--button); }
-  .switch input:checked + .track .thumb { left: calc(100% - 0.95rem); background: #fff; }
-  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .publish.disabled { color: var(--faint); cursor: default; }
   .gold-input {
     width: 62px;
     background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 4px;
@@ -1396,7 +1367,6 @@
   }
 
   /* ── Shop ── */
-  .shop-label { font-size: 0.8rem; color: var(--muted); margin-bottom: -0.2rem; }
   .shop-row { display: flex; gap: 0.2rem; }
   .shop-piece {
     display: flex; flex-direction: column; align-items: center;
@@ -1411,7 +1381,6 @@
   .shop-piece:disabled { opacity: 0.3; cursor: default; }
   .cost { font-size: 0.8rem; font-weight: 700; color: #f5c518; font-variant-numeric: tabular-nums; }
   .cost.dim { color: var(--faint); }
-  .shop-hint { font-size: 0.8rem; color: var(--faint); margin: 0; line-height: 1.4; }
 
   /* ── Map generation ── */
   .option-row {

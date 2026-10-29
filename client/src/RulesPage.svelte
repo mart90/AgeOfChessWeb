@@ -40,7 +40,7 @@
     </ul>
     
     <h3>Additional win conditions</h3>
-    <p>Two additional win conditions compared to regular Chess:</p>
+    <p>Two additional win conditions compared to regular chess:</p>
     <ul>
       <li>If a player stores a high amount of gold, they win the game. This is 150 gold for 6x6 boards, and increases by 25 
           per board size up to 275 for 16x16. You win at the start of your turn if you have enough gold and your king is not in check.</li>

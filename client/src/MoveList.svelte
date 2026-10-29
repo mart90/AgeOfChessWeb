@@ -102,7 +102,9 @@
 
   let listEl = $state(null);
 
+  // Runs after every new move / navigation, so the list follows the game as it grows
   $effect(() => {
+    void activeNode; void activeIndex; void treeRevision; void moves.length;
     if (!listEl) return;
     let el = null;
     if (rootNode) {
@@ -111,11 +113,10 @@
       el = listEl.querySelector(`[data-move-idx="${activeIndex}"]`);
     }
     if (!el) return;
-    const top    = el.offsetTop;
-    const bottom = top + el.offsetHeight;
-    if (top    < listEl.scrollTop)                       listEl.scrollTop = top;
-    else if (bottom > listEl.scrollTop + listEl.clientHeight)
-                                                          listEl.scrollTop = bottom - listEl.clientHeight;
+    // Positions relative to the list's visible area
+    const list = listEl.getBoundingClientRect(), r = el.getBoundingClientRect();
+    if (r.top < list.top)            listEl.scrollTop += r.top - list.top;
+    else if (r.bottom > list.bottom) listEl.scrollTop += r.bottom - list.bottom;
   });
 
   // ── Tree mode nav helpers ─────────────────────────────────────────────────
