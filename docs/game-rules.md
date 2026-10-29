@@ -94,7 +94,14 @@ see status.md. Old rules remain available in the engine as `Rules::classic()` / 
 | `w+s` / `b+s` | Stalemate — **the stalemating side wins** |
 | `w+g` / `b+g` | Gold victory |
 | `w+t` / `b+t` | Win on time |
-| resign / abort | via `ForceEnd` |
+| `w+r` / `b+r` | Win by resignation (via `ForceEnd`) |
+| `draw` | Draw by agreement (via `ForceEnd`; ½ point for Elo) |
+| `abandoned` | Ended by the server's cleanup (no Elo) |
+
+- **Draw offers** (server-only, not a rules-engine concept): a player may offer a draw; it stands
+  until the opponent accepts or declines, or makes a move instead. A player can offer again only a
+  full move (2 plies) after their previous offer. Vs the computer the engine (in the human's
+  browser) answers at once: it accepts unless it's **more than 10 gold ahead**.
 
 - **Gold victory**: reach `150 + 25 * (size - 6) / 2` gold (6×6 → 150, 8×8 → 175, 10×10 → 200,
   12×12 → 225, 16×16 → 275). Only checked for the player **whose turn is starting** (after

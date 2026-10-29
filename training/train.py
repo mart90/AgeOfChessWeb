@@ -102,7 +102,7 @@ def targets(records, k, lam):
     return lam / (1.0 + np.exp(np.clip(-score / k, -50.0, 50.0))) + (1.0 - lam) * result
 
 
-def batches(files, rows, batch_size, k, lam, augment, rng):
+def batches(files, rows, batch_size, k, lam, augment, rng, num_dense):
     """Background thread: encode batch i+1 while the model trains on batch i."""
     q = queue.Queue(maxsize=4)
 
@@ -110,7 +110,7 @@ def batches(files, rows, batch_size, k, lam, augment, rng):
         for s in range(0, len(rows), batch_size):
             rec = gather(files, rows[s:s + batch_size])
             sym = int(rng.integers(8)) if augment else 0
-            feats = encode(rec, sym)
+            feats = encode(rec, sym, num_dense)
             q.put((feats, targets(rec, k, lam), rec["result"].astype(np.int8)))
         q.put(None)
 
@@ -163,7 +163,7 @@ def evaluate(model, files, rows, args, k):
     model.eval()
     total, n, preds, results = 0.0, 0, [], []
     with torch.no_grad():
-        for feats, tgt, res in batches(files, rows, args.batch_size, k, args.lam, False, None):
+        for feats, tgt, res in batches(files, rows, args.batch_size, k, args.lam, False, None, args.dense):
             out = model(*to_torch(feats))
             total += torch.mean((torch.sigmoid(out) - torch.from_numpy(tgt)) ** 2).item() * len(tgt)
             n += len(tgt)
@@ -184,6 +184,11 @@ def main():
     p.add_argument("--min-lr", type=float, default=1e-5)
     p.add_argument("--lam", type=float, default=0.75, help="weight of the search score vs. the game result")
     p.add_argument("--hidden", type=int, default=256)
+    p.add_argument("--dense", type=int, default=8, choices=[4, 8],
+                   help="dense inputs: 4 = v1 (gold, mines), 8 = v2 (+ gold race)")
+    p.add_argument("--race-residual", type=float, default=0.0,
+                   help="add the hand-written eval's gold-race term with this weight (eval units, its "
+                        "default is 2000) to the output; the network learns the rest. 0 = off")
     p.add_argument("--patience", type=int, default=4, help="early stopping: epochs without val improvement")
     p.add_argument("--val-fraction", type=float, default=0.05)
     p.add_argument("--max-positions", type=int, default=0, help="subsample training positions (0 = all)")
@@ -236,7 +241,13 @@ def main():
     else:
         print("  hand-written static eval: n/a (data files from before format version 2)")
 
-    model = EvalNet(num_features(size), hidden=args.hidden)
+    race = args.race_residual / k if args.race_residual else 0.0
+    if race and args.dense < 8:
+        raise SystemExit("--race-residual needs --dense 8")
+    model = EvalNet(num_features(size), hidden=args.hidden, num_dense=args.dense, race=race)
+    if race:
+        print(f"Race residual: fixed gold-race term {args.race_residual:g} eval units "
+              f"({race:.2f} logit) x (1/(t_us+1) - 1/(t_them+1)) added to the network")
     print(f"Model parameters: {model.param_count():,}")
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     # Lower the learning rate when validation loss stalls (instead of a fixed per-epoch decay)
@@ -253,7 +264,7 @@ def main():
         total, n, preds, results = 0.0, 0, [], []
         nan_batches = clipped = 0
         with Ticker():
-            for feats, tgt, res in batches(files, order, args.batch_size, k, args.lam, args.augment, rng):
+            for feats, tgt, res in batches(files, order, args.batch_size, k, args.lam, args.augment, rng, args.dense):
                 out = model(*to_torch(feats))
                 loss = torch.mean((torch.sigmoid(out) - torch.from_numpy(tgt)) ** 2)
                 if not torch.isfinite(loss):

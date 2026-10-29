@@ -8,6 +8,7 @@
 //!                per-engine limits: --a-nodes/--b-nodes, --a-time/--b-time, --a-depth/--b-depth;
 //!                weak play: --a-mistake RATE,MAXLOSS / --b-mistake = second-best move with probability
 //!                RATE when it is at most MAXLOSS gold worse)
+//!               [--out games.jsonl]  (every game, with "a_is_white"; scores are the mover's search)
 //!   gg play     --seed S [--time MS ...]   (one verbose game to stdout)
 //!   gg bidmatch --seeds F --nodes N [--bid-budget B (default 30·N)] [--fixed-bid 6] [--games N] [--threads T]
 //!               [--bid-shares 0.3,0.25,0.2,0.15,0.1] [--bid-scales-m 1.5,1.25,1,0.75,0.5] [--bid-scales-r 5,4,3,2,1] [--skip-bids LO,HI]
@@ -16,7 +17,7 @@
 //!               (A bids with goldrush_engine::bid, B always bids the fixed amount; both play with N nodes)
 //!   gg gendata  --seeds F --out FILE [--seed-offset N] [--games N] [--threads T] [--nodes N] [--random-plies K]
 //!               [--random-multipv M] [--random-margin GOLD] [--random-nodes N] [--first-game-id I]
-//!               [--rng-seed S] [--overwrite]  (training data for the eval network, see docs/training.md)
+//!               [--rng-seed S] [--overwrite] [--nnue NET]  (training data for the eval network, see docs/training.md)
 //!   gg nncheck  --net NET.ggnn --check CHECK.bin  (engine network vs PyTorch outputs, eval speed)
 //!   Networks: --nnue NET.ggnn (bench/selfplay/play), --a-nnue/--b-nnue (match): use the evaluation
 //!             network instead of the hand-written eval (training/export.py writes NET.ggnn)
@@ -432,6 +433,10 @@ fn run_match(a: &Args) {
     let pa = load_params(a.get("a"));
     let pb = load_params(a.get("b"));
     let (na, nb) = (load_nnue(a, "a"), load_nnue(a, "b"));
+    let out: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(match a.get("out") {
+        Some(p) => Box::new(std::io::BufWriter::new(std::fs::File::create(p).unwrap())),
+        None => Box::new(std::io::sink()),
+    }));
     let next = Arc::new(AtomicUsize::new(0));
     let seeds = Arc::new(seeds);
     // (a wins, b wins, draws, reasons)
@@ -439,7 +444,8 @@ fn run_match(a: &Args) {
     let start = Instant::now();
     let handles: Vec<_> = (0..threads)
         .map(|_| {
-            let (next, seeds, tally, pa, pb, na, nb) = (next.clone(), seeds.clone(), tally.clone(), pa.clone(), pb.clone(), na.clone(), nb.clone());
+            let (next, seeds, tally, pa, pb, na, nb, out) =
+                (next.clone(), seeds.clone(), tally.clone(), pa.clone(), pb.clone(), na.clone(), nb.clone(), out.clone());
             std::thread::spawn(move || {
                 let mut ea = Searcher::new(pa, 32);
                 let mut eb = Searcher::new(pb, 32);
@@ -459,6 +465,12 @@ fn run_match(a: &Args) {
                     } else {
                         play_game(seed, [&mut eb, &mut ea], [lb, la], max_plies, false, None, None, [mb, ma], i as u64 * 7919 + 1)
                     };
+                    {
+                        let mut v = serde_json::to_value(&rec).unwrap();
+                        v["a_is_white"] = serde_json::Value::Bool(a_is_white);
+                        v["game"] = serde_json::Value::from(i);
+                        writeln!(out.lock().unwrap(), "{v}").unwrap();
+                    }
                     let mut t = tally.lock().unwrap();
                     *t.3.entry(rec.result.clone()).or_default() += 1;
                     match rec.result.chars().next() {
@@ -824,6 +836,7 @@ fn run_gendata(a: &Args) {
         skipped_size: usize,
     }
     let tally = Arc::new(Mutex::new(Tally::default()));
+    let net = load_nnue(a, ""); // --nnue: the network drives the search (static_eval stays hand-written)
     let next = Arc::new(AtomicUsize::new(0));
     let seeds = Arc::new(seeds);
     let start = Instant::now();
@@ -832,9 +845,10 @@ fn run_gendata(a: &Args) {
 
     let handles: Vec<_> = (0..threads)
         .map(|_| {
-            let (next, seeds, out, tally) = (next.clone(), seeds.clone(), out.clone(), tally.clone());
+            let (next, seeds, out, tally, net) = (next.clone(), seeds.clone(), out.clone(), tally.clone(), net.clone());
             std::thread::spawn(move || {
                 let mut s = Searcher::new(EvalParams::default(), 32);
+                s.nnue = net;
                 loop {
                     let i = next.fetch_add(1, Ordering::SeqCst);
                     if i >= games {

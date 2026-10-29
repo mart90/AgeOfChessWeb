@@ -167,6 +167,8 @@ public class UserController(AppDbContext db) : ControllerBase
                 "b+s" => "B+S",
                 "b+t" => "B+T",
                 "b+r" => "B+R",
+                "draw"      => "½–½",
+                "abandoned" => "Abandoned",
                 _     => "—",
             };
 

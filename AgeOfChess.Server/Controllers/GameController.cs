@@ -179,47 +179,29 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         });
     }
 
-    // GET /api/game/live  — list of all in-progress games for the Watch page
-    [HttpGet("live")]
-    public async Task<IActionResult> GetLiveGames()
-    {
-        var games = sessions.GetAll().ToList();
+    // GET /api/game/live  — public in-progress games for the Watch page: the strongest/most recently
+    // active ones (capped, so the page stays light however many games run) plus the total count.
+    private const int LiveGamesLimit = 30;
 
-        // Batch-fetch user records for any registered players
-        var userIds = games
-            .SelectMany(g => new[] { g.WhiteUserId, g.BlackUserId })
-            .Where(id => id.HasValue)
-            .Select(id => id!.Value)
-            .Distinct()
+    [HttpGet("live")]
+    public IActionResult GetLiveGames()
+    {
+        var live = sessions.GetAll()
+            .Where(g => g.HasGameStarted && !g.GameEnded && !g.IsPrivate)
             .ToList();
 
-        var users = (await db.Users
-            .Where(u => userIds.Contains(u.Id))
-            .ToListAsync())
-            .ToDictionary(u => u.Id);
-
-        int? GetElo(int? userId, TimeControlCategory cat)
+        // Ratings as held by the game (rating at game start); unrated players count as 0
+        static double AvgElo(ServerGame g)
         {
-            if (!userId.HasValue || !users.TryGetValue(userId.Value, out var u)) return null;
-            return cat switch
-            {
-                TimeControlCategory.Bullet => u.EloBullet,
-                TimeControlCategory.Blitz  => u.EloBlitz,
-                TimeControlCategory.Rapid  => u.EloRapid,
-                _                          => u.EloSlow,
-            };
+            var known = new[] { g.WhiteElo, g.BlackElo }.Where(e => e.HasValue).Select(e => e!.Value).ToList();
+            return known.Count > 0 ? known.Average() : 0;
         }
 
-        var list = games.Select(g =>
-        {
-            var cat = EloService.GetCategory(new GameSettings
-            {
-                TimeControlEnabled   = g.TimeControlEnabled,
-                StartTimeMinutes     = g.StartTimeMinutes,
-                TimeIncrementSeconds = g.TimeIncrementSeconds,
-            });
-
-            return new
+        var shown = live
+            .OrderByDescending(AvgElo)
+            .ThenByDescending(g => g.LastMoveTimestamp ?? g.CreatedAt)
+            .Take(LiveGamesLimit)
+            .Select(g => new
             {
                 id                   = g.SessionId,
                 mapSeed              = g.GetMap().Seed,
@@ -229,12 +211,12 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
                 timeIncrementSeconds = g.TimeIncrementSeconds,
                 whiteName            = g.White.PlayedByStr,
                 blackName            = g.Black.PlayedByStr,
-                whiteElo             = GetElo(g.WhiteUserId, cat),
-                blackElo             = GetElo(g.BlackUserId, cat),
-            };
-        }).ToList();
+                whiteElo             = g.WhiteElo,
+                blackElo             = g.BlackElo,
+            })
+            .ToList();
 
-        return Ok(list);
+        return Ok(new { total = live.Count, games = shown });
     }
 
     // GET /api/game/my  — in-progress games for the current authenticated user
@@ -413,7 +395,10 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
                 // If the game is still live, return current in-memory state
                 var liveGame = sessions.GetById(gameId);
                 if (liveGame != null)
+                {
+                    using var _ = await liveGame.LockAsync();
                     return Ok(GameStateDtoBuilder.Build(liveGame));
+                }
 
                 // Game was in progress when the server restarted — in-memory state is lost
                 if (session.Result == GameResult.InProgress)
@@ -478,7 +463,8 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
                 // this). The DB move list is only kept current for slow games, so use memory.
                 var live = sessions.GetById(gameId);
                 if (live == null) return NotFound();
-                movesJson = JsonSerializer.Serialize(live.MoveList.ToList().Select(m => m.ToNotation()));
+                using (await live.LockAsync())
+                    movesJson = JsonSerializer.Serialize(live.MoveList.Select(m => m.ToNotation()));
             }
             result = session.Result.ToString();
             whiteName = session.WhiteUser?.EffectiveDisplayName ?? "Player 1";

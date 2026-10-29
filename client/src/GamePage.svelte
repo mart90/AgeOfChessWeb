@@ -10,11 +10,14 @@
   import { SHOP as SHOP_BASE } from './lib/constants.js';
   import { buildFromMainline, lastMainlineNode, addChild } from './lib/moveTree.js';
   import { getNodePath } from './lib/treeStorage.js';
-  import { packGameTree, GAME_TRANSFER_KEY, GAME_TRANSFER_FORMAT } from './lib/gameTransfer.js';
+  import { packGameTree, mainlineLength, GAME_TRANSFER_KEY, GAME_TRANSFER_FORMAT } from './lib/gameTransfer.js';
+  import { addLibraryGame, updateLibraryGame } from './lib/api.js';
+  import { authState } from './lib/auth.svelte.js';
   import { applyMoveToState, moveToNotation, applyPlacementToState, placementToNotation } from './lib/boardUtils.js';
   import { computeLegalMoves } from './lib/pathFinder.js';
   import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js';
   import { EngineClient } from './lib/engine/engine.js';
+  import { wheelNav } from './lib/wheelNav.js';
   import { pieceSrc } from './lib/boardTheme.js';
   import { computeComputerBid, BID_BUDGET_FACTOR } from './lib/engine/computerBid.js';
   import { createComputerGame } from './lib/api.js';
@@ -97,6 +100,21 @@
   let wasCreator       = false;        // captured at BiddingStarted, before ColorAssigned changes isWhite
   let pendingBidReveal = $state(null); // { opponentBid } shown to winner until acknowledged
   let resignPending    = $state(false);
+
+  // ── Draw offers ── (the server lets a player offer again only a full move after their last offer)
+  let drawOfferBy        = $state(null);   // standing offer: 'w' | 'b' | null
+  let drawOfferedAtPly   = $state(-2);     // ply of my last offer
+  // Draw messages in the status bar; they go away once the offer is answered or we move
+  const DRAW_MSG = {
+    offered:          'Your opponent offers a draw.',
+    declined:         'Your draw offer was declined.',
+    computerDeclined: 'The computer declines the draw.',
+  };
+  function clearDrawMsg(...msgs) {
+    if (msgs.includes(statusMsg)) statusMsg = '';
+  }
+  let computerDrawThinking = $state(false);
+  const DRAW_DECLINE_ADVANTAGE = 10;       // the computer declines when it's more than this much gold ahead
 
   // ── Rematch state ─────────────────────────────────────────────────────────
 
@@ -432,6 +450,8 @@
     'w+s': 'White wins (stalemate)',      'b+s': 'Black wins (stalemate)',
     'w+t': 'White wins on time',          'b+t': 'Black wins on time',
     'w+r': 'White wins — Black resigned', 'b+r': 'Black wins — White resigned',
+    'draw': 'Draw by agreement',
+    'abandoned': 'Game abandoned',
   };
   function formatResult(r) { return RESULT_LABELS[r] ?? 'Game over'; }
 
@@ -948,6 +968,7 @@
             if (snapshots?.length) {
               stateHistory = snapshots;
               gameState = state; biddingState = null; syncLocalTimes(state); statusMsg = ''; inviteUrl = '';
+              drawOfferBy = state.drawOfferBy ?? null;
               return;
             }
           }
@@ -958,6 +979,7 @@
 
       stateHistory = [state];
       gameState = state; biddingState = null; syncLocalTimes(state); statusMsg = ''; inviteUrl = '';
+      drawOfferBy = state.drawOfferBy ?? null;
     });
     hub.on('StateUpdated', (state) => {
       // One state per move (stateHistory[n] = after n moves); an update without a new move
@@ -976,7 +998,15 @@
         const isCapture = newPieceCount < oldPieceCount;
         playSound(isCapture ? 'capture' : 'move');
       }
+      const myMove = gameState.moves.length < state.moves.length && isMyTurn;
+      const lapsedOffer = drawOfferBy && !state.drawOfferBy;   // an offer lapses once its receiver moves
       gameState = state; syncLocalTimes(state); resignPending = false;
+      if (myMove) clearDrawMsg(DRAW_MSG.declined, DRAW_MSG.computerDeclined);
+      if (lapsedOffer && !isSpectator) {
+        if (drawOfferBy === myColor) statusMsg = DRAW_MSG.declined;
+        else clearDrawMsg(DRAW_MSG.offered);
+      }
+      drawOfferBy = state.drawOfferBy ?? null;
       // Return to live mode so the player can interact (their turn may have come up)
       if (replayIndex !== null) replayIndex = null;
       keepInteractionAfterUpdate();
@@ -994,7 +1024,7 @@
         if (snapshots) history = snapshots;
       }
       stateHistory = history;
-      gameState = state; syncLocalTimes(state);
+      gameState = state; syncLocalTimes(state); drawOfferBy = null; resignPending = false;
       statusMsg = formatResult(state.result); clearDrag();
       localStorage.removeItem(`inviteUrl_${gameId}`);
       replayIndex = stateHistory.length - 1;  // enable replayer
@@ -1033,6 +1063,14 @@
         sameSeedRematch = wantsSameSeed; // Pre-check the box if opponent wants same board
       }
     });
+    hub.on('DrawOfferChanged', (by, declined) => {
+      if (!isSpectator) {
+        if (declined && drawOfferBy === myColor) statusMsg = DRAW_MSG.declined;
+        else if (by && by !== myColor) statusMsg = DRAW_MSG.offered;
+        else clearDrawMsg(DRAW_MSG.offered);
+      }
+      drawOfferBy = by;
+    });
     hub.on('RematchReady', (newGameId, newToken, newIsWhite) => {
       localStorage.setItem(`token_${newGameId}`, newToken);
       localStorage.setItem(`color_${newGameId}`, newIsWhite ? 'white' : 'black');
@@ -1060,6 +1098,45 @@
     resignPending = false;
   }
 
+  const myColor      = $derived(isWhite ? 'w' : 'b');
+  const showGameControls = $derived(!!gameState && !gameState.gameEnded && !isSpectator && !biddingState);
+  const canOfferDraw = $derived(
+    !!gameState && !gameState.gameEnded && drawOfferBy == null && !computerDrawThinking
+    && gameState.moves.length >= drawOfferedAtPly + 2);
+
+  /** Offers a draw. Vs the computer, the engine decides right here: it accepts unless it's more
+   *  than DRAW_DECLINE_ADVANTAGE gold ahead. */
+  async function offerDraw() {
+    if (!hub || !canOfferDraw) return;
+    const s = gameState;
+    drawOfferedAtPly = s.moves.length;
+    if (!isComputerGame) {
+      hub.invoke('OfferDraw', playerToken);
+      return;
+    }
+    computerDrawThinking = true;
+    try {
+      computerEngine ??= new EngineClient();
+      const position = $state.snapshot({ squares: s.squares, whiteGold: s.white.gold, blackGold: s.black.gold, whiteIsActive: s.white.isActive });
+      const res = await computerEngine.call({ cmd: 'search', position, nodes: s.computerNodes });
+      if (!gameState || gameState.gameEnded) return;
+      const whiteAdvantage = res.mate != null ? Math.sign(res.mate) * 100 : res.score;   // gold, White's view
+      const computerAdvantage = s.computerIsWhite ? whiteAdvantage : -whiteAdvantage;
+      if (computerAdvantage > DRAW_DECLINE_ADVANTAGE) statusMsg = DRAW_MSG.computerDeclined;
+      else await hub.invoke('AgreeComputerDraw', playerToken);
+    } catch (e) {
+      if (e?.message !== 'cancelled') statusMsg = `Computer error: ${e?.message ?? e}`;
+    } finally {
+      computerDrawThinking = false;
+    }
+  }
+
+  function answerDraw(accept) {
+    if (!hub || drawOfferBy == null || drawOfferBy === myColor) return;
+    clearDrawMsg(DRAW_MSG.offered);
+    hub.invoke('AnswerDraw', playerToken, accept);
+  }
+
   function requestRematch() {
     if (!hub || rematchRequested) return;
     rematchRequested = true;
@@ -1082,6 +1159,33 @@
     return null;
   }
 
+  // ── My library: save the finished game with its variations (again = update the same entry) ──
+  let libraryId     = $state(null);
+  let librarySaving = $state(false);
+  async function saveToLibrary() {
+    if (!moveTree || librarySaving) return;
+    librarySaving = true;
+    const s = gameState;
+    const entry = {
+      title:    `${s.white.name} vs ${s.black.name}`,
+      gameId,
+      mapSize,
+      mapSeed:  s.mapSeed ?? null,
+      plyCount: mainlineLength(moveTree),
+      result:   s.result ?? null,
+      data:     packGameTree(moveTree),
+    };
+    try {
+      if (libraryId) await updateLibraryGame(libraryId, entry);
+      else libraryId = (await addLibraryGame(entry)).id;
+      statusMsg = 'Saved to your library.';
+    } catch (e) {
+      statusMsg = `Could not save to library: ${e.message}`;
+    } finally {
+      librarySaving = false;
+    }
+  }
+
   function openAnalyzePage() {
     if (!moveTree) return;
     const json = JSON.stringify({
@@ -1089,6 +1193,9 @@
       mapSize,
       mapSeed:     gameState?.mapSeed ?? '',
       currentPath: currentNode ? getNodePath(moveTree, currentNode) : [],
+      title:       gameState ? `${gameState.white.name} vs ${gameState.black.name}` : '',
+      result:      gameState?.result ?? null,
+      gameId,
       ...packGameTree(moveTree),
     });
     try {
@@ -1119,21 +1226,62 @@
   }
 
   function handleKeydown(e) {
-    if (currentNode !== null) {
-      // Tree mode navigation
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); if (currentNode.parent) goToNode(currentNode.parent); }
-      if (e.key === 'ArrowRight') { e.preventDefault(); if (currentNode.children[0]) goToNode(currentNode.children[0]); }
-      return;
-    }
-    if (replayIndex === null) return;
-    if (e.key === 'ArrowLeft')  { e.preventDefault(); navigate('prev'); }
-    if (e.key === 'ArrowRight') { e.preventDefault(); navigate('next'); }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;   // chat, bid
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); stepMove(-1); return; }
+    if (e.key === 'ArrowRight') { e.preventDefault(); stepMove(1); return; }
+    if (currentNode !== null || !stateHistory.length) return;
     if (e.key === 'Home')       { e.preventDefault(); navigate('start'); }
     if (e.key === 'End')        { e.preventDefault(); navigate('end'); }
+  }
+
+  /** One move back (-1) or forward (+1): arrow keys and the mouse wheel over the board. */
+  function stepMove(dir) {
+    if (currentNode !== null) {
+      // Tree mode (after the game)
+      const target = dir < 0 ? currentNode.parent : currentNode.children[0];
+      if (target) goToNode(target);
+      return;
+    }
+    // Live game: replayIndex null = the current position; stepping back enters the replay
+    if (stateHistory.length) navigate(dir < 0 ? 'prev' : 'next');
   }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
+
+<!-- ✓ / ✗ pair for confirming resign or answering a draw offer -->
+{#snippet confirmButtons(onYes, onNo, yesTitle, noTitle, danger = false)}
+  <button class="action-btn icon-only" class:danger onclick={onYes} title={yesTitle} aria-label={yesTitle}>
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+  </button>
+  <button class="action-btn icon-only" onclick={onNo} title={noTitle} aria-label={noTitle}>
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>
+  </button>
+{/snippet}
+
+<!-- Resign / draw controls: in the side panel on desktop, icon-only in the player bar on phones -->
+{#snippet gameControls(compact)}
+  {#if drawOfferBy && drawOfferBy !== myColor}
+    {#if !compact}<span class="confirm-label">Draw offered</span>{/if}
+    {@render confirmButtons(() => answerDraw(true), () => answerDraw(false), 'Accept the draw', 'Decline the draw')}
+  {:else if resignPending}
+    {@render confirmButtons(resign, () => resignPending = false, 'Confirm resignation', 'Cancel', true)}
+  {:else}
+    <button class="action-btn" class:icon-only={compact} onclick={() => resignPending = true} title="Resign" aria-label="Resign">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4m0 0h11l-2 4 2 4H5"/></svg>
+      {#if !compact}Resign{/if}
+    </button>
+    <button class="action-btn" class:icon-only={compact} onclick={offerDraw} disabled={!canOfferDraw} aria-label="Offer a draw"
+            title={drawOfferBy === myColor ? 'Draw offered — waiting for your opponent'
+                 : computerDrawThinking ? 'The computer is considering your offer…'
+                 : canOfferDraw ? 'Offer a draw' : 'You can offer a draw again after your next move'}>
+      <!-- Handshake: Lucide icon (ISC) -->
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/></svg>
+      {#if !compact}{drawOfferBy === myColor || computerDrawThinking ? 'Offered' : 'Draw'}{/if}
+    </button>
+  {/if}
+{/snippet}
 
 <!-- ── Drag ghost (fixed overlay, follows cursor) ──────────────────────── -->
 {#if dragging}
@@ -1179,7 +1327,7 @@
   <div class="game-body" bind:this={gameBodyEl}>
     <div class="board-col">
       <div class="board-main" bind:clientHeight={boardColHeight}>
-      <div class="board-wrap" bind:this={boardWrapEl}>
+      <div class="board-wrap" bind:this={boardWrapEl} use:wheelNav={stepMove}>
         <!-- Status / invite banner: floats over the top of the board so it doesn't change the layout -->
         {#if (statusMsg && statusMsg !== statusDismissed) || inviteUrl}
           <div class="status-bar">
@@ -1317,6 +1465,7 @@
             </button>
           {/if}
         </div>
+        <div class="panel-main">
         {#if activeTab === 'moves'}
           {#if moveTree}
             <MoveList
@@ -1362,17 +1511,22 @@
             </div>
           {/if}
         {/if}
-        {#if moveTree || (gameState?.gameEnded && !isSpectator)}
-          <!-- Play again / rematch (players, after the game) + Analyze button -->
-          <div class="movelist-footer">
-            {#if gameState?.gameEnded && !isSpectator && isComputerGame}
+        </div><!-- /.panel-main -->
+
+        <!-- Game actions: resign during the game, rematch after it; analyze / library at the bottom -->
+        <div class="panel-actions">
+          <div class="actions-top">
+            {#if showGameControls}
+              <!-- On phones these move into the player bar (see .bar-controls) -->
+              <div class="game-controls">{@render gameControls(false)}</div>
+            {:else if gameState?.gameEnded && !isSpectator && isComputerGame}
               <div class="rematch-bar">
                 <label class="rematch-option">
                   <input type="checkbox" bind:checked={playAgainSameBoard} />
                   <span>Same board</span>
                 </label>
-                <button class="rematch-btn" onclick={playAgainVsComputer} disabled={startingPlayAgain}>
-                  {startingPlayAgain ? 'Starting…' : 'Play again'}
+                <button class="action-btn rematch-btn" onclick={playAgainVsComputer} disabled={startingPlayAgain}>
+                  {startingPlayAgain ? 'Starting…' : 'Rematch'}
                 </button>
               </div>
             {:else if gameState?.gameEnded && !isSpectator}
@@ -1382,7 +1536,7 @@
                     <input type="checkbox" bind:checked={sameSeedRematch} />
                     <span>Same board</span>
                   </label>
-                  <button class="rematch-btn accept" onclick={requestRematch}>Accept Rematch</button>
+                  <button class="action-btn rematch-btn accept" onclick={requestRematch}>Accept Rematch</button>
                 {:else if rematchRequested}
                   <span class="rematch-waiting">Rematch requested — waiting for opponent…</span>
                 {:else}
@@ -1390,15 +1544,33 @@
                     <input type="checkbox" bind:checked={sameSeedRematch} />
                     <span>Same board</span>
                   </label>
-                  <button class="rematch-btn" onclick={requestRematch}>Request Rematch</button>
+                  <button class="action-btn rematch-btn" onclick={requestRematch}>Rematch</button>
                 {/if}
               </div>
             {/if}
-            {#if moveTree}
-              <button class="analyze-icon-btn" onclick={openAnalyzePage} title="Analyze game">🔍</button>
+          </div>
+          <!-- Available once the game is over (the analysis tree exists) -->
+          <div class="actions-bottom">
+            <button class="action-btn" onclick={openAnalyzePage} disabled={!moveTree}
+                    title={moveTree ? 'Open in the analysis board' : 'Available after the game'}>
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5.5 5.5"/></svg>
+              Analyze
+            </button>
+            {#if authState.token}
+              <button class="action-btn" onclick={saveToLibrary} disabled={!moveTree || librarySaving}
+                      title={!moveTree ? 'Available after the game'
+                           : libraryId ? 'Save variations to your library' : 'Add to your library'}>
+                {#if libraryId}
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+                  Saved
+                {:else}
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z"/></svg>
+                  Save
+                {/if}
+              </button>
             {/if}
           </div>
-        {/if}
+        </div>
       </div>
     {:else}
       <!-- Empty until the game starts, so the board placeholder gets the same size as the board -->
@@ -1413,16 +1585,11 @@
         {#if me.elo != null}<span class="elo-label">({me.elo})</span>{/if}
         {#if !biddingState}
           <span class="color-label">{isWhite ? 'White' : 'Black'}</span>
-          {#if gameState && !gameState.gameEnded && !isSpectator}
-            {#if resignPending}
-              <button class="resign-confirm" onclick={resign} title="Confirm resign">✓</button>
-              <button class="resign-cancel" onclick={() => resignPending = false} title="Cancel">✗</button>
-            {:else}
-              <button class="resign-flag" onclick={() => resignPending = true} title="Resign">⚑</button>
-            {/if}
-          {/if}
         {/if}
       </span>
+      {#if showGameControls}
+        <span class="bar-controls">{@render gameControls(true)}</span>
+      {/if}
       <span class="gold">{me.gold} gold</span>
       {#if biddingState}
         {@const myBidPlaced = isWhite ? biddingState.creatorBidPlaced : biddingState.joinerBidPlaced}
@@ -1603,12 +1770,6 @@
     white-space: nowrap;
   }
   .chat-send-btn:hover { background: var(--button-hover); }
-  @media (max-width: 700px) {
-    .game-body { flex-direction: column; flex-wrap: nowrap; }
-    .board-col    { order: 1; flex: none; }
-    .player-panel.me { order: 2; width: 100%; flex: none; }
-    .move-list-col { order: 3; flex: none; max-height: 260px; width: 100%; }
-  }
 
   /* ── Player panels ── */
   .player-panel {
@@ -1616,7 +1777,7 @@
     align-items: center;
     gap: 0.7rem;
     width: 100%;
-    height: 3rem;   /* fixed: the resign button / confirm buttons must not change the layout */
+    height: 3rem;
     padding: 0 1rem;
     background: var(--surface);
     border-radius: 6px;
@@ -1706,22 +1867,57 @@
   .cost { font-size: 0.85rem; font-weight: 700; color: #f5c518; font-variant-numeric: tabular-nums; }
   .cost.dim { color: var(--faint); }
 
-  .resign-flag {
-    background: #3a1a1a; border: 1px solid #6a2a2a; border-radius: 4px;
-    padding: 0.18rem 0.6rem; font-size: 0.95rem; color: #d08080;
-    cursor: pointer; line-height: 1.4; vertical-align: middle; margin-left: 0.5rem;
+  /* ── Side panel: move list / chat (~80%) above the game actions (~20%) ── */
+  .panel-main {
+    display: flex;
+    flex-direction: column;
+    flex: 4 1 0;
+    min-height: 0;
   }
-  .resign-flag:hover { background: #5a1f1f; border-color: #a03030; color: #e8a0a0; }
-
-  .resign-confirm, .resign-cancel {
-    border: none; border-radius: 3px; font-size: 0.79rem;
-    padding: 0.1rem 0.35rem; cursor: pointer; line-height: 1.3;
-    vertical-align: middle; margin-left: 0.15rem;
+  .panel-actions {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex: 1 1 0;
+    min-height: 7.5rem;
+    padding: 0.75rem 0.6rem;
+    border-top: 1px solid var(--line);
   }
-  .resign-confirm { background: #2d5a2d; color: #7cfc00; }
-  .resign-confirm:hover { background: #3a773a; }
-  .resign-cancel  { background: #3a3a3a; color: var(--muted); }
-  .resign-cancel:hover  { background: #505050; }
+  .actions-top, .actions-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.2rem;   /* fixed: confirm / rematch controls must not change the layout */
+  }
+  .game-controls { display: flex; align-items: center; gap: 0.5rem; }
+  .confirm-label { font-size: 0.9rem; line-height: 1; color: var(--fg-2); margin-right: 0.5rem; }
+  .action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.4rem 0.9rem;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    color: var(--fg-2);
+    font-size: 0.88rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+  }
+  .action-btn:not(:disabled):hover { background: var(--surface-3); border-color: var(--accent); color: var(--fg); }
+  .action-btn:disabled { opacity: 0.4; cursor: default; }
+  .action-btn.danger:not(:disabled):hover { border-color: #b04040; }
+  .action-btn.icon-only { padding: 0.4rem 1.1rem; }
+  .action-btn.icon-only .icon { width: 1.25em; height: 1.25em; }
+  .icon {
+    width: 1.1em; height: 1.1em; flex-shrink: 0;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
 
   /* ── Bidding help tooltip ── */
   .bid-help {
@@ -1806,47 +2002,35 @@
   }
   /* Compact switch: the footer is a fixed-width column and must stay on one row */
   .rematch-option input[type="checkbox"] { font-size: 0.8em; }
-  .rematch-btn {
-    margin-left: auto;
-    padding: 0.35rem 0.75rem;
-    white-space: nowrap;
-    background: var(--surface-2);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    color: var(--accent);
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .rematch-btn:hover { background: var(--surface-3); border-color: var(--accent); color: var(--accent-2); }
+  .rematch-btn { margin-left: auto; }   /* looks: .action-btn */
   .rematch-btn.accept {
     background: var(--button);
     border-color: var(--button);
     color: #fff;
   }
   .rematch-btn.accept:hover { background: var(--button-hover); border-color: var(--button-hover); color: #fff; }
-  .rematch-waiting { font-size: 0.85rem; color: var(--muted); font-style: italic; }
+  .rematch-waiting { font-size: 0.85rem; color: var(--muted); font-style: italic; text-align: center; }
 
-  /* ── Analyze icon button (bottom of move list) ── */
-  .movelist-footer {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.3rem;
-    padding: 0.15rem 0.25rem;
-    border-top: 1px solid var(--line);
-    flex-shrink: 0;
+  /* Resign / draw in the player bar: phones only */
+  .bar-controls { display: none; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+  .bar-controls .action-btn.icon-only { padding: 0.3rem 0.6rem; }
+
+  /* ── Phones ── (last, so these override the rules above) */
+  @media (max-width: 700px) {
+    .game-body { flex-direction: column; flex-wrap: nowrap; }
+    .board-col    { order: 1; flex: none; }
+    .player-panel.me { order: 2; width: 100%; flex: none; }
+    .move-list-col { order: 3; flex: none; max-height: 360px; width: 100%; }
+    .panel-main    { flex: 1 1 auto; }
+    .panel-actions { flex: none; min-height: 0; }
+    /* Resign / draw live in the player bar; the side panel keeps rematch + analyze / save */
+    .bar-controls { display: flex; }
+    .actions-top:has(.game-controls) { display: none; }
+    .player-panel { gap: 0.5rem; padding: 0 0.75rem; }
+    /* Shop straight on the page background, smaller pieces */
+    .controls { padding: 0; background: none; }
+    .shop { gap: 0.3rem; }
+    .shop-piece { flex: 1; padding: 0.15rem 0.2rem; }
+    .shop-piece img { width: 36px; height: 36px; }
   }
-  .analyze-icon-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 1.3rem;
-    line-height: 1;
-    padding: 0.25rem 0.35rem;
-    border-radius: 4px;
-    opacity: 0.45;
-    transition: opacity 0.15s;
-  }
-  .analyze-icon-btn:hover { opacity: 1; background: var(--line); }
 </style>

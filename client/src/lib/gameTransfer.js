@@ -25,8 +25,8 @@ export function parseSanNotation(san) {
   return null;
 }
 
-/** Pack a GamePage move tree (nodes hold GameStateDto-shaped boardStates). */
-export function packGameTree(root) {
+/** Pack a move tree; `gold(state)` returns [whiteGold, blackGold, whiteIsActive]. */
+function packTree(root, gold) {
   const terrain = root.boardState.squares.map(s => [s.x, s.y, s.type]);
   const index = new Map(terrain.map(([x, y], i) => [`${x},${y}`, i]));
   const pack = (node) => {
@@ -37,14 +37,32 @@ export function packGameTree(root) {
       if (s.piece) p.push([i, s.piece.type, s.piece.isWhite ? 1 : 0]);
       if (s.mineOwner) o.push([i, s.mineOwner === 'white' ? 1 : 0]);
     }
+    const [wg, bg, wa] = gold(st);
     return {
       san: node.san,
-      s: { p, o, wg: st.white.gold, bg: st.black.gold, wa: st.white.isActive ? 1 : 0 },
+      s: { p, o, wg, bg, wa: wa ? 1 : 0 },
       m: node.isGameMainline ? 1 : 0,
       c: node.children.filter(c => c.boardState).map(pack),   // a node without a state can't be shown
     };
   };
   return { terrain, tree: pack(root) };
+}
+
+/** Pack a GamePage move tree (nodes hold GameStateDto-shaped boardStates). */
+export function packGameTree(root) {
+  return packTree(root, st => [st.white.gold, st.black.gold, st.white.isActive]);
+}
+
+/** Pack an AnalyzePage move tree (nodes hold { squares, whiteGold, blackGold, whiteIsActive } snapshots). */
+export function packAnalyzeTree(root) {
+  return packTree(root, st => [st.whiteGold, st.blackGold, st.whiteIsActive]);
+}
+
+/** Number of plies on the mainline (first children) of a move tree. */
+export function mainlineLength(root) {
+  let n = 0;
+  for (let node = root; node.children.length; node = node.children[0]) n++;
+  return n;
 }
 
 /** Rebuild a MoveNode tree with AnalyzePage snapshots ({ squares, whiteGold, blackGold, whiteIsActive, lastMoveFrom, lastMoveTo }). */

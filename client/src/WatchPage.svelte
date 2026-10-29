@@ -4,6 +4,7 @@
   import Board from './Board.svelte';
 
   let games   = $state([]);
+  let total   = $state(0);   // all public live games; the server sends only the top ones
   let loading = $state(true);
   let error   = $state('');
 
@@ -12,7 +13,8 @@
       const res = await fetch('/api/game/live');
       if (!res.ok) throw new Error(await res.text());
       const raw = await res.json();
-      games = raw.map(g => ({ ...g, ...parseSeed(g.mapSeed) }));
+      total = raw.total;
+      games = raw.games.map(g => ({ ...g, ...parseSeed(g.mapSeed) }));
     } catch (e) {
       error = e.message;
     } finally {
@@ -90,6 +92,9 @@
   {:else if games.length === 0}
     <p class="muted">No games in progress right now.</p>
   {:else}
+    {#if total > games.length}
+      <p class="muted count">Showing {games.length} of {total} games in progress</p>
+    {/if}
     <div class="grid">
       {#each games as g}
         <button class="game-card" onclick={() => navigate(`/game/${g.id}`)}>
@@ -124,6 +129,7 @@
   }
 
   .muted { color: var(--faint); }
+  .count { margin: 0 0 1rem; font-size: 0.9rem; }
   .error { color: #e07070; }
 
   .grid {

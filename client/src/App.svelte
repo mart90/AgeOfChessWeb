@@ -11,6 +11,7 @@
   import AnalyzePage     from './AnalyzePage.svelte';
   import RulesPage       from './RulesPage.svelte';
   import AboutPage       from './AboutPage.svelte';
+  import LibraryPage     from './LibraryPage.svelte';
   import { authState, clearAuth } from './lib/auth.svelte.js';
   import { getMe }       from './lib/api.js';
 
@@ -22,6 +23,8 @@
   const gameId       = $derived(gameMatch ? parseInt(gameMatch[1]) : null);
   const profileMatch = $derived(path.match(/^\/profile\/([^/]+)/));
   const profileUser  = $derived(profileMatch ? decodeURIComponent(profileMatch[1]) : null);
+  // /analyze or /analyze/{shareId} (a library entry; AnalyzePage reads the id from the URL)
+  const isAnalyze    = $derived(/^\/analyze(\/[^/]+)?\/?$/.test(path));
 
   const NAME = 'Goldrush Gambit';
 
@@ -29,7 +32,8 @@
     if (gameId !== null) return; // GamePage sets its own title
     if (path === '/')          document.title = `${NAME} - Play`;
     else if (path === '/watch')    document.title = `${NAME} - Watch`;
-    else if (path === '/analyze')  document.title = `${NAME} - Analyze`;
+    else if (isAnalyze)            document.title = `${NAME} - Analyze`;
+    else if (path === '/library')  document.title = `${NAME} - My library`;
     else if (path === '/rules') document.title = `${NAME} - Rules`;
     else if (path === '/about') document.title = `${NAME} - About`;
     else                           document.title = NAME;
@@ -67,8 +71,10 @@
   <SettingsPage />
 {:else if path === '/watch'}
   <WatchPage />
-{:else if path === '/analyze'}
+{:else if isAnalyze}
   <AnalyzePage />
+{:else if path === '/library'}
+  <LibraryPage />
 {:else if path === '/rules'}
   <RulesPage />
 {:else if path === '/about'}
@@ -88,10 +94,10 @@
     --surface-3:   #3a332b;   /* hover / selected surfaces */
     --line:        #3a352e;   /* borders, dividers */
     --line-strong: #4a433a;   /* stronger borders, tracks */
-    --fg:          #ece5d8;   /* main text */
-    --fg-2:        #cfc6b6;   /* secondary text */
-    --muted:       #a59a8a;   /* labels, hints */
-    --faint:       #7a7064;   /* very quiet text */
+    --fg:          #f3ede2;   /* main text */
+    --fg-2:        #ddd5c6;   /* secondary text */
+    --muted:       #b6ab9b;   /* labels, hints */
+    --faint:       #8c8275;   /* very quiet text */
     --accent:      #d8a64a;   /* gold: links, selection, focus */
     --accent-2:    #e8c27a;   /* lighter gold: headings, hover */
     --button:      #9b6f24;   /* primary button background */

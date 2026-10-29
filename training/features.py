@@ -13,7 +13,8 @@ Sparse features are computed per perspective: the side to move ("us") and the op
     feature index = block * N*N + square
 
 Dense inputs (side to move first): gold / gold-victory threshold for us and them, owned mines / 10
-for us and them.
+for us and them (v1, 4 inputs); v2 adds the gold race: turns to the threshold at the current
+income t (as in eval.rs `turns_to_gold`), as 1 / (t + 1) and min(t, 40) / 40, for us and them.
 
 The rules don't depend on board orientation (pawns move and capture in all four directions), so
 all 8 rotations/reflections of a position are equally valid: `symmetry` picks one (0 = none).
@@ -21,7 +22,8 @@ all 8 rotations/reflections of a position are equally valid: `symmetry` picks on
 import numpy as np
 
 NUM_BLOCKS = 18
-NUM_DENSE = 4
+NUM_DENSE = 8        # v2; v1 networks use the first 4
+RACE_HORIZON = 40    # turns; t / RACE_HORIZON is capped at 1
 
 
 def num_features(board_size):
@@ -43,8 +45,16 @@ def symmetry_perms(board_size):
 _PERMS = {}
 
 
-def encode(records, symmetry=0):
+def turns_to_gold(gold, mines, threshold):
+    """Turns until reaching the threshold at income 1 + 3 * mines (eval.rs turns_to_gold)."""
+    need = threshold - gold.astype(np.int64)
+    inc = 1 + 3 * mines.astype(np.int64)
+    return np.where(need <= 0, 0, (need + inc - 1) // inc)
+
+
+def encode(records, symmetry=0, num_dense=NUM_DENSE):
     """records: structured array (see ggdata.record_dtype).
+    num_dense: 4 for v1 networks, 8 for v2 (race inputs).
     Returns (us_idx, us_offsets, them_idx, them_offsets, dense) as numpy arrays, ready for
     torch.nn.EmbeddingBag(mode="sum") with offsets."""
     squares = records["squares"]
@@ -97,5 +107,11 @@ def encode(records, symmetry=0):
     gold_them = gold[np.arange(b), 1 - stm]
     mines_us = (mine & (owner == us_color)).sum(axis=1)
     mines_them = (mine & (owner == them_color)).sum(axis=1)
-    dense = np.stack([gold_us / threshold, gold_them / threshold, mines_us / 10.0, mines_them / 10.0], axis=1)
+    cols = [gold_us / threshold, gold_them / threshold, mines_us / 10.0, mines_them / 10.0]
+    if num_dense > 4:
+        t_us = turns_to_gold(gold_us, mines_us, threshold)
+        t_them = turns_to_gold(gold_them, mines_them, threshold)
+        cols += [1.0 / (t_us + 1), 1.0 / (t_them + 1),
+                 np.minimum(t_us, RACE_HORIZON) / RACE_HORIZON, np.minimum(t_them, RACE_HORIZON) / RACE_HORIZON]
+    dense = np.stack(cols, axis=1)
     return us_idx, us_off, them_idx, them_off, dense.astype(np.float32)

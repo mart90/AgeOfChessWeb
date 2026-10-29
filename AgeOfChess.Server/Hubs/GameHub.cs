@@ -20,6 +20,8 @@ namespace AgeOfChess.Server.Hubs;
 ///   MakeMove(playerToken, fromX, fromY, toX, toY)
 ///   PlacePiece(playerToken, toX, toY, pieceCode)   "q"|"r"|"b"|"n"|"p"
 ///   Resign(playerToken)
+///   OfferDraw(playerToken), AnswerDraw(playerToken, accept)                   — human games
+///   AgreeComputerDraw(playerToken)                                             — vs-computer games
 ///   SubmitComputerMove(playerToken, type, fromX, fromY, toX, toY, pieceCode)  — vs-computer games
 ///   SubmitComputerBid(playerToken, amount)                                     — vs-computer games
 ///
@@ -29,7 +31,7 @@ namespace AgeOfChess.Server.Hubs;
 ///   GameEnded(GameStateDto)     — final state once the game is over
 ///   Error(string)               — sent only to the caller on invalid actions
 /// </summary>
-public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFactory) : Hub
+public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFactory, GameFlowService flow) : Hub
 {
     /// <summary>
     /// Join as a read-only spectator. Spectators receive the same state broadcasts
@@ -43,6 +45,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             await Clients.Caller.SendAsync("Error", "Game not found.");
             return;
         }
+        using var _ = await game.LockAsync();
 
         await Groups.AddToGroupAsync(Context.ConnectionId, game.GroupName);
 
@@ -61,6 +64,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             await Clients.Caller.SendAsync("Error", "Game not found.");
             return;
         }
+        using var _ = await game.LockAsync();
 
         // Track this token on the connection so OnDisconnectedAsync can find it
         Context.Items["playerToken"] = playerToken;
@@ -153,7 +157,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     public async Task MakeMove(string playerToken, int fromX, int fromY, int toX, int toY)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded) return;
+        if (game == null) return;
+        using var _ = await game.LockAsync();
+        if (game.GameEnded) return;
 
         if (!IsAuthorizedPlayer(game, playerToken))
         {
@@ -181,13 +187,15 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         // Execute premove if opponent has one set
         await TryExecutePremove(game);
 
-        await BroadcastState(game);
+        await flow.BroadcastState(game);
     }
 
     public async Task PlacePiece(string playerToken, int toX, int toY, string pieceCode)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded) return;
+        if (game == null) return;
+        using var _ = await game.LockAsync();
+        if (game.GameEnded) return;
 
         if (!IsAuthorizedPlayer(game, playerToken))
         {
@@ -222,7 +230,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         // Execute premove if opponent has one set
         await TryExecutePremove(game);
 
-        await BroadcastState(game);
+        await flow.BroadcastState(game);
     }
 
     /// <summary>
@@ -233,7 +241,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     public async Task SubmitComputerMove(string playerToken, string type, int fromX, int fromY, int toX, int toY, string? pieceCode)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded || !game.IsComputerGame) return;
+        if (game == null || !game.IsComputerGame) return;
+        using var _ = await game.LockAsync();
+        if (game.GameEnded) return;
         if (!IsAuthorizedPlayer(game, playerToken)) return;
         if (game.Bidding != null && !game.Bidding.BothBid) return;
 
@@ -264,7 +274,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         // The human may have premoved
         await TryExecutePremove(game);
 
-        await BroadcastState(game);
+        await flow.BroadcastState(game);
     }
 
     /// <summary>
@@ -274,7 +284,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     public async Task ClaimTimeout(string playerToken)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded || !game.LastMoveTimestamp.HasValue || !game.TimeControlEnabled) return;
+        if (game == null) return;
+        using var _ = await game.LockAsync();
+        if (game.GameEnded || !game.LastMoveTimestamp.HasValue || !game.TimeControlEnabled) return;
 
         if (!IsAuthorizedPlayer(game, playerToken)) return;
 
@@ -286,7 +298,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         active.TimeMiliseconds = 0;
         game.ForceEnd(active.IsWhite ? "b+t" : "w+t");
-        await BroadcastState(game);
+        await flow.BroadcastState(game);
     }
 
     /// <summary>
@@ -299,11 +311,13 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         var game = sessions.GetByPlayerToken(playerToken);
         if (game?.Bidding == null) return;
 
-        if (!IsAuthorizedPlayer(game, playerToken)) return;
-
-        if (!game.SubmitBid(playerToken, amount)) return;
-
-        await OnBidSubmitted(game);
+        using (await game.LockAsync())
+        {
+            if (!IsAuthorizedPlayer(game, playerToken)) return;
+            if (!game.SubmitBid(playerToken, amount)) return;
+            if (!await AnnounceBid(game)) return;
+        }
+        await StartAfterBidReveal(game);
     }
 
     /// <summary>
@@ -314,58 +328,137 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     {
         var game = sessions.GetByPlayerToken(playerToken);
         if (game?.Bidding == null || !game.IsComputerGame) return;
-        if (!IsAuthorizedPlayer(game, playerToken)) return;
-        if (game.IsComputerSide(game.IsWhitePlayer(playerToken))) return;   // caller must be the human
 
-        if (!game.SubmitBid(game.ComputerPlayerToken, amount)) return;
-
-        await OnBidSubmitted(game);
+        using (await game.LockAsync())
+        {
+            if (!IsAuthorizedPlayer(game, playerToken)) return;
+            if (game.IsComputerSide(game.IsWhitePlayer(playerToken))) return;   // caller must be the human
+            if (!game.SubmitBid(game.ComputerPlayerToken, amount)) return;
+            if (!await AnnounceBid(game)) return;
+        }
+        await StartAfterBidReveal(game);
     }
 
-    private async Task OnBidSubmitted(ServerGame game)
+    /// <summary>
+    /// Broadcasts a placed bid (amounts revealed only after both have bid). Returns true once both
+    /// players have bid. Caller holds the game lock.
+    /// </summary>
+    private async Task<bool> AnnounceBid(ServerGame game)
     {
         var bidding = game.Bidding!;
-
-        // Broadcast bid placed (amounts revealed only after both have bid)
         await Clients.Group(game.GroupName)
             .SendAsync("BidPlaced", BiddingStateDtoBuilder.Build(bidding));
+        if (!bidding.BothBid) return false;
 
-        if (bidding.BothBid)
-        {
-            // Persist post-bidding state for slow games (tokens may have been swapped by ResolveBidding)
-            if (game.IsSlowGame)
-                await PersistBiddingResultAsync(game);
+        // Persist post-bidding state for slow games (tokens may have been swapped by ResolveBidding)
+        if (game.IsSlowGame)
+            await flow.PersistBiddingResultAsync(game);
+        return true;
+    }
 
-            // Let clients display the revealed bids for 2 seconds
-            await Task.Delay(2000);
+    /// <summary>Lets clients show the revealed bids for 2 seconds, then starts the game.</summary>
+    private async Task StartAfterBidReveal(ServerGame game)
+    {
+        // Not under the lock, so the game stays usable (disconnects, chat) during the reveal
+        await Task.Delay(2000);
 
-            // After SwapColors (if joiner won), WhiteConnectionId points to the actual white player.
-            // The computer has no connection.
-            if (game.WhiteConnectionId != null)
-                await Clients.Client(game.WhiteConnectionId).SendAsync("ColorAssigned", true);
-            if (game.BlackConnectionId != null)
-                await Clients.Client(game.BlackConnectionId).SendAsync("ColorAssigned", false);
-            await Clients.Group(game.GroupName)
-                .SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
-        }
+        using var _ = await game.LockAsync();
+        // After SwapColors (if joiner won), WhiteConnectionId points to the actual white player.
+        // The computer has no connection.
+        if (game.WhiteConnectionId != null)
+            await Clients.Client(game.WhiteConnectionId).SendAsync("ColorAssigned", true);
+        if (game.BlackConnectionId != null)
+            await Clients.Client(game.BlackConnectionId).SendAsync("ColorAssigned", false);
+        await Clients.Group(game.GroupName)
+            .SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
     }
 
     public async Task Resign(string playerToken)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded) return;
+        if (game == null) return;
+        using var _ = await game.LockAsync();
+        if (game.GameEnded) return;
 
         if (!IsAuthorizedPlayer(game, playerToken)) return;
 
         game.ForceEnd(game.IsWhitePlayer(playerToken) ? "b+r" : "w+r");
 
-        await BroadcastState(game);
+        await flow.BroadcastState(game);
     }
+
+    /// <summary>
+    /// Offers a draw to the opponent (human games). If the opponent already offered one, this
+    /// accepts it. Broadcasts DrawOfferChanged("w"|"b"|null, declined) to the group.
+    /// </summary>
+    public async Task OfferDraw(string playerToken)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null || game.IsComputerGame) return;
+        using var _ = await game.LockAsync();
+        if (!CanActInPlay(game, playerToken)) return;
+
+        bool isWhite = game.IsWhitePlayer(playerToken);
+        if (game.DrawOfferByWhite == !isWhite)
+        {
+            game.ForceEnd("draw");
+            await flow.BroadcastState(game);
+            return;
+        }
+        if (!game.CanOfferDraw(isWhite)) return;
+
+        game.OfferDraw(isWhite);
+        await Clients.Group(game.GroupName).SendAsync("DrawOfferChanged", isWhite ? "w" : "b", false);
+    }
+
+    /// <summary>Accepts (accept = true) or declines the opponent's standing draw offer.</summary>
+    public async Task AnswerDraw(string playerToken, bool accept)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null) return;
+        using var _ = await game.LockAsync();
+        if (!CanActInPlay(game, playerToken)) return;
+        if (game.DrawOfferByWhite != !game.IsWhitePlayer(playerToken)) return;   // no offer from the opponent
+
+        if (accept)
+        {
+            game.ForceEnd("draw");
+            await flow.BroadcastState(game);
+        }
+        else
+        {
+            game.ClearDrawOffer();
+            await Clients.Group(game.GroupName).SendAsync("DrawOfferChanged", null, true);
+        }
+    }
+
+    /// <summary>
+    /// Ends a game vs the computer as a draw. The human offered one and the computer (the engine
+    /// in the human's browser, as for its moves) accepted it.
+    /// </summary>
+    public async Task AgreeComputerDraw(string playerToken)
+    {
+        var game = sessions.GetByPlayerToken(playerToken);
+        if (game == null || !game.IsComputerGame) return;
+        using var _ = await game.LockAsync();
+        if (!CanActInPlay(game, playerToken)) return;
+        if (game.IsComputerSide(game.IsWhitePlayer(playerToken))) return;   // caller must be the human
+
+        game.ForceEnd("draw");
+        await flow.BroadcastState(game);
+    }
+
+    /// <summary>The game is under way (started, bidding over, not ended) and the caller plays in it.</summary>
+    private bool CanActInPlay(ServerGame game, string playerToken) =>
+        !game.GameEnded && game.HasGameStarted
+        && (game.Bidding == null || game.Bidding.BothBid)
+        && IsAuthorizedPlayer(game, playerToken);
 
     public async Task SendChat(string playerToken, string message)
     {
         var game = sessions.GetByPlayerToken(playerToken);
         if (game == null) return;
+        using var _ = await game.LockAsync();
 
         if (!IsAuthorizedPlayer(game, playerToken)) return;
 
@@ -390,6 +483,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             var game = sessions.GetByPlayerToken(playerToken);
             if (game != null)
             {
+                using var _ = await game.LockAsync();
                 if (game.WhiteConnectionId == Context.ConnectionId)
                     game.WhiteConnectionId = null;
                 else if (game.BlackConnectionId == Context.ConnectionId)
@@ -404,10 +498,12 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     /// Returns legal destination squares for the piece at (fromX, fromY).
     /// Called immediately when the player grabs a piece so the client can show green hints.
     /// </summary>
-    public int[][] GetLegalMoves(string playerToken, int fromX, int fromY)
+    public async Task<int[][]> GetLegalMoves(string playerToken, int fromX, int fromY)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded) return [];
+        if (game == null) return [];
+        using var _ = await game.LockAsync();
+        if (game.GameEnded) return [];
         if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite) return [];
 
         var sq = game.GetMap().GetSquareByCoordinates(fromX, fromY);
@@ -422,10 +518,12 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     /// Returns legal placement squares for a given piece type.
     /// Called immediately when the player grabs a shop piece.
     /// </summary>
-    public int[][] GetLegalPlacements(string playerToken, string pieceCode)
+    public async Task<int[][]> GetLegalPlacements(string playerToken, string pieceCode)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded) return [];
+        if (game == null) return [];
+        using var _ = await game.LockAsync();
+        if (game.GameEnded) return [];
         if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite) return [];
 
         var type = PieceTypeFromCode(pieceCode);
@@ -442,7 +540,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     public async Task SetPremove(string playerToken, string type, int fromX, int fromY, int toX, int toY, string? pieceCode)
     {
         var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null || game.GameEnded) return;
+        if (game == null) return;
+        using var _ = await game.LockAsync();
+        if (game.GameEnded) return;
 
         if (!IsAuthorizedPlayer(game, playerToken)) return;
 
@@ -466,6 +566,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     {
         var game = sessions.GetByPlayerToken(playerToken);
         if (game == null) return;
+        using var _ = await game.LockAsync();
 
         if (!IsAuthorizedPlayer(game, playerToken)) return;
 
@@ -501,27 +602,6 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     {
         var claim = Context.User?.FindFirst(ClaimTypes.NameIdentifier);
         return claim != null && int.TryParse(claim.Value, out var id) ? id : null;
-    }
-
-    private async Task BroadcastState(ServerGame game)
-    {
-        var state = GameStateDtoBuilder.Build(game);
-        string eventName = game.GameEnded ? "GameEnded" : "StateUpdated";
-        await Clients.Group(game.GroupName).SendAsync(eventName, state);
-
-        if (game.GameEnded)
-        {
-            await PersistResult(game);
-            // Keep the game in sessions briefly so players can request a rematch.
-            // Fire-and-forget: remove after 10 minutes regardless of whether a rematch is created.
-            // RequestRematch also calls sessions.Remove when a rematch starts; the double-remove is harmless.
-            _ = Task.Delay(TimeSpan.FromMinutes(10))
-                    .ContinueWith(_ => sessions.Remove(game.SessionId));
-        }
-        else if (game.IsSlowGame)
-        {
-            await PersistSlowGameProgressAsync(game);
-        }
     }
 
     /// <summary>
@@ -592,7 +672,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         using var scope = scopeFactory.CreateScope();
         var creationService = scope.ServiceProvider.GetRequiredService<GameCreationService>();
-        var (_, newGame) = await creationService.CreateAsync(rematchSettings, whiteInfo, blackInfo);
+        var (_, newGame) = await creationService.CreateAsync(rematchSettings, whiteInfo, blackInfo, isPrivate: game.IsPrivate);
 
         // Without bidding: old White → new Black, old Black → new White
         // With bidding:    old White → new White, old Black → new Black (colors TBD by bid)
@@ -612,178 +692,6 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         // Remove the old game now that the rematch has been created
         sessions.Remove(game.SessionId);
-    }
-
-    private async Task PersistSlowGameProgressAsync(ServerGame game)
-    {
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var session = await db.GameSessions.FindAsync(game.SessionId);
-        if (session == null) return;
-
-        session.MovesJson = JsonSerializer.Serialize(game.MoveList.Select(m => m.ToNotation()));
-        session.MoveCount = game.MoveList.Count;
-        if (game.TimeControlEnabled)
-        {
-            session.WhiteTimeMsRemaining = game.White.TimeMiliseconds;
-            session.BlackTimeMsRemaining = game.Black.TimeMiliseconds;
-        }
-
-        await db.SaveChangesAsync();
-    }
-
-    private async Task PersistBiddingResultAsync(ServerGame game)
-    {
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var session = await db.GameSessions.FindAsync(game.SessionId);
-        if (session == null) return;
-
-        // Tokens and user IDs may have been swapped by ResolveBidding
-        session.WhitePlayerToken = game.WhitePlayerToken;
-        session.BlackPlayerToken = game.BlackPlayerToken;
-        session.WhiteUserId      = game.WhiteUserId;
-        session.BlackUserId      = game.BlackUserId;
-        session.BlackStartingGold = game.Black.Gold;
-        session.SettingsJson      = JsonSerializer.Serialize(game.Settings);   // ComputerIsWhite may have flipped
-        if (game.TimeControlEnabled)
-        {
-            session.WhiteTimeMsRemaining = game.White.TimeMiliseconds;
-            session.BlackTimeMsRemaining = game.Black.TimeMiliseconds;
-        }
-
-        await db.SaveChangesAsync();
-    }
-
-    private async Task PersistResult(ServerGame game)
-    {
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-        var session = await db.GameSessions.FindAsync(game.SessionId);
-        if (session == null) return;
-
-        // Extract bid information if bidding was enabled
-        int? whiteBid = null;
-        int? blackBid = null;
-        if (game.Bidding?.BothBid == true)
-        {
-            // Determine which bid belongs to which color
-            // If joiner bid higher, they became White after the swap
-            bool joinerWonBidding = game.Bidding.JoinerBid!.Value > game.Bidding.CreatorBid!.Value;
-            whiteBid = joinerWonBidding ? game.Bidding.JoinerBid.Value : game.Bidding.CreatorBid.Value;
-            blackBid = joinerWonBidding ? game.Bidding.CreatorBid.Value : game.Bidding.JoinerBid.Value;
-        }
-
-        // Update Elo for both players if they were both authenticated
-        // This sets WhiteEloAtGame, BlackEloAtGame, WhiteEloDelta, BlackEloDelta on session
-        await ApplyEloUpdates(db, game, session);
-
-        // Create HistoricGame entry with all game data (preserve the same Id)
-        var historicGame = new HistoricGame
-        {
-            Id = session.Id,
-            WhitePlayerId = game.WhiteUserId,
-            BlackPlayerId = game.BlackUserId,
-            WhiteEloAtGame = session.WhiteEloAtGame,
-            BlackEloAtGame = session.BlackEloAtGame,
-            WhiteEloDelta = session.WhiteEloDelta,
-            BlackEloDelta = session.BlackEloDelta,
-            WhiteBid = whiteBid,
-            BlackBid = blackBid,
-            MapSeed = session.MapSeed,
-            SettingsJson = session.SettingsJson,
-            BoardSize = session.BoardSize,
-            TimeControlEnabled = session.TimeControlEnabled,
-            StartTimeMinutes = session.StartTimeMinutes,
-            TimeIncrementSeconds = session.TimeIncrementSeconds,
-            MovesJson = JsonSerializer.Serialize(game.MoveList.Select(m => m.ToNotation())),
-            MoveCount = game.MoveList.Count,
-            Result = game.Result,
-            CreatedAt = session.StartedAt,
-            EndedAt = DateTime.UtcNow
-        };
-
-        // Save historic game and delete session
-        db.HistoricGames.Add(historicGame);
-        db.GameSessions.Remove(session);
-        await db.SaveChangesAsync();
-    }
-
-    private static async Task ApplyEloUpdates(AppDbContext db, ServerGame game, GameSession session)
-    {
-        // Unranked games (incl. all games vs the computer) are stored in history but don't change ratings
-        if (!game.Settings.IsRanked || game.IsComputerGame) return;
-        if (!game.WhiteUserId.HasValue || !game.BlackUserId.HasValue) return;
-
-        bool? whiteWon = game.Result switch
-        {
-            "w+c" or "w+g" or "w+s" or "w+t" or "w+r" => true,
-            "b+c" or "b+g" or "b+s" or "b+t" or "b+r" => false,
-            _ => null
-        };
-        if (!whiteWon.HasValue) return;
-
-        var whiteUser = await db.Users.FindAsync(game.WhiteUserId.Value);
-        var blackUser = await db.Users.FindAsync(game.BlackUserId.Value);
-        if (whiteUser == null || blackUser == null) return;
-
-        var category = EloService.GetCategory(new GameSettings
-        {
-            TimeControlEnabled = session.TimeControlEnabled,
-            StartTimeMinutes   = session.StartTimeMinutes,
-        });
-
-        var (wElo, bElo) = category switch
-        {
-            TimeControlCategory.Bullet => (whiteUser.EloBullet, blackUser.EloBullet),
-            TimeControlCategory.Blitz  => (whiteUser.EloBlitz,  blackUser.EloBlitz),
-            TimeControlCategory.Rapid  => (whiteUser.EloRapid,  blackUser.EloRapid),
-            _                          => (whiteUser.EloSlow,   blackUser.EloSlow),
-        };
-
-        var (wGames, bGames) = category switch
-        {
-            TimeControlCategory.Bullet => (whiteUser.BulletGamesPlayed, blackUser.BulletGamesPlayed),
-            TimeControlCategory.Blitz  => (whiteUser.BlitzGamesPlayed,  blackUser.BlitzGamesPlayed),
-            TimeControlCategory.Rapid  => (whiteUser.RapidGamesPlayed,  blackUser.RapidGamesPlayed),
-            _                          => (whiteUser.SlowGamesPlayed,   blackUser.SlowGamesPlayed),
-        };
-
-        var (newWhite, newBlack) = EloService.Calculate(wElo, bElo, wGames, bGames, whiteWon.Value);
-
-        // Snapshot pre-game ratings and deltas on the session record
-        session.WhiteEloAtGame = wElo;
-        session.BlackEloAtGame = bElo;
-        session.WhiteEloDelta  = newWhite - wElo;
-        session.BlackEloDelta  = newBlack - bElo;
-
-        switch (category)
-        {
-            case TimeControlCategory.Bullet:
-                whiteUser.EloBullet = newWhite; whiteUser.BulletGamesPlayed++;
-                blackUser.EloBullet = newBlack; blackUser.BulletGamesPlayed++;
-                break;
-            case TimeControlCategory.Blitz:
-                whiteUser.EloBlitz = newWhite; whiteUser.BlitzGamesPlayed++;
-                blackUser.EloBlitz = newBlack; blackUser.BlitzGamesPlayed++;
-                break;
-            case TimeControlCategory.Rapid:
-                whiteUser.EloRapid = newWhite; whiteUser.RapidGamesPlayed++;
-                blackUser.EloRapid = newBlack; blackUser.RapidGamesPlayed++;
-                break;
-            default:
-                whiteUser.EloSlow = newWhite; whiteUser.SlowGamesPlayed++;
-                blackUser.EloSlow = newBlack; blackUser.SlowGamesPlayed++;
-                break;
-        }
-
-        whiteUser.GamesPlayed++;
-        blackUser.GamesPlayed++;
-
-        // Persist the actual (post-swap) user IDs into the session record
-        session.WhiteUserId = game.WhiteUserId;
-        session.BlackUserId = game.BlackUserId;
     }
 
     private static GameResult ParseResult(string? result) => result switch
@@ -814,6 +722,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
     /// <summary>
     /// Attempts to execute the premove set by the now-active player (whose turn just started).
     /// Returns true if a premove was executed, false if no premove or premove was illegal.
+    /// Caller holds the game lock.
     /// </summary>
     private async Task<bool> TryExecutePremove(ServerGame game)
     {

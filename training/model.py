@@ -7,16 +7,20 @@ see train.py), so the Rust integration can keep its search margins in eval units
 import torch
 import torch.nn as nn
 
-from features import NUM_DENSE
-
-
 class EvalNet(nn.Module):
-    def __init__(self, num_features, hidden=256, l2=32, l3=32):
+    # num_dense: 4 = v1 (gold, mines), 8 = v2 (+ gold race); old checkpoints have no num_dense -> 4.
+    # race: fixed gold-race term added to the output, in logit units (hand-written eval's race weight
+    # / K): logit = network + race * (1/(t_us+1) - 1/(t_them+1)), t = dense inputs 4 and 5. The
+    # network then only learns the rest of the game. 0 = off. Needs num_dense = 8.
+    def __init__(self, num_features, hidden=256, l2=32, l3=32, num_dense=4, race=0.0):
         super().__init__()
-        self.config = dict(num_features=num_features, hidden=hidden, l2=l2, l3=l3)
+        assert race == 0.0 or num_dense >= 6, "the race term needs the v2 race inputs"
+        self.config = dict(num_features=num_features, hidden=hidden, l2=l2, l3=l3, num_dense=num_dense, race=race)
+        self.num_dense = num_dense
+        self.race = race
         self.ft = nn.EmbeddingBag(num_features, hidden, mode="sum")
         self.ft_bias = nn.Parameter(torch.zeros(hidden))
-        self.l1 = nn.Linear(2 * hidden + NUM_DENSE, l2)
+        self.l1 = nn.Linear(2 * hidden + num_dense, l2)
         self.l2 = nn.Linear(l2, l3)
         self.out = nn.Linear(l3, 1)
         # ~25-40 active features per perspective: keep the summed accumulator in the active range
@@ -29,7 +33,10 @@ class EvalNet(nn.Module):
         x = torch.cat([us, them, dense], dim=1)
         x = torch.clamp(self.l1(x), 0.0, 1.0)
         x = torch.clamp(self.l2(x), 0.0, 1.0)
-        return self.out(x).squeeze(1)
+        out = self.out(x).squeeze(1)
+        if self.race:
+            out = out + self.race * (dense[:, 4] - dense[:, 5])
+        return out
 
     def param_count(self):
         return sum(p.numel() for p in self.parameters())

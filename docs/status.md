@@ -1,8 +1,31 @@
 # Current Work & Status
 
-_Last updated: 2026-10-26_
+_Last updated: 2026-10-28_
 
 ## Current focus
+
+**My library (2026-10-28).** Logged-in users save games with their variations: "📚" next to 🔍
+after a game (GamePage; again = update the same entry), "Save to library" on the analysis board
+(updates the entry it was opened from). `/library` page (nav: between Analyze and Rules) lists
+entries; click opens them on the analysis board, ✕ removes. Server: `LibraryGame` table (migration
+`AddLibraryGames`, applied to the dev DB; **production still needs `dotnet ef database update`**),
+`LibraryController` (`/api/library`). Entries store positions, not just moves (client packed
+format, `gameTransfer.js` `packGameTree`/`packAnalyzeTree`), so they survive rule changes.
+`tools/LibraryImport` replays seed + moves (e.g. `gg match --out`) with the server rules and adds
+them to a user's library.
+Sharing (2026-10-29): each entry has a `ShareId` GUID and `IsPublic`; the analysis board's URL is
+`/analyze/{shareId}` for library entries. "Publish" switch + "Copy link" under Library. Published
+entries open for anyone (`GET /api/library/shared/{shareId}`, anonymous); non-owners can play on and
+"Save to my library", which adds a copy (new GUID, URL changes) — only the owner updates the original.
+Migrations `RemoveLibrarySource`, `AddLibrarySharing` are also dev-only so far.
+
+**Rejected 2026-10-27: mine upgrades.** Tried as a test rule (spend the turn + 40 gold to raise a
+mine's income from +3 to +5, once per mine, reset on capture) in engine, server and client, then
+removed completely. Mart, after playing it: not strategically relevant, just design bloat. Turtling
+and upgrading doesn't work, the opponent simply upgrades too and wins the gold race first. Engine
+data agreed it adds little: at 20–40 gold the engine (eval value 1.5x a mine) almost never upgrades
+and forcing it loses Elo; at 10 gold it becomes a must-buy that turns games into a pure gold race
+(gold wins 76% vs ~55%, games ~20% shorter).
 
 **Rule change: queen drops — adopted as the standard rules on 2026-10-26** (see game-rules.md).
 Mart found attacking rarely viable without a big advantage, and queens weak. Now R/B/N may
@@ -33,7 +56,54 @@ train positions). On 600 unseen games (`training/evaluate.py`, `holdout_20k.bin`
 par with the hand-written eval: winner 77.4% vs 76.1% (close positions 56.1% vs 53.9%), gap to
 search 6.8 vs 6.0 points. Rust inference done (`engine/src/nnue.rs`, exact vs PyTorch, 3.9x fewer
 nodes/s). **Equal-nodes match (12k nodes, 200 holdout boards x 2): network 294 - hand-written 106,
-73.5%, +177 ± 39 Elo.** Next: equal-time match, 3M-position learning-curve run (Mart).
+73.5%, +177 ± 39 Elo.** 3M positions (`m10_3m`, m10_1m + m10_2m, 28.5k games): holdout winner
+77.9% (close 56.8%), barely above 1M (the search itself only gets 79.3%, so this metric is near
+its ceiling; train/val split from epoch ~5 shows it memorising games). But in play, at 12k nodes
+on 400 holdout boards x 2: **3M vs 1M +137 ± 26 Elo, 3M vs hand-written +287 ± 33 Elo**
+(`engine/testdata/match_nnue3m_*.log`). Data volume matters a lot for strength.
+**Iteration 1 (network-driven self-play):** `gg gendata --nnue m10_3m` → `nn1_m10_1p5m.bin`
+(14k games, boards 28500–42499, 1.55M positions, 65 min); `m10_nn1` trained from scratch on all
+4.76M positions. Holdout metrics flat (77.8% / close 56.3%; holdout games are hand-eval games),
+but in play (12k nodes, 800 holdout boards x 2): **nn1 vs 3m +121 ± 18, nn1 vs hand-written
++359 ± 27** (`engine/testdata/match_nnue_nn1_*.log`). Self-play iterations work; judge by matches,
+not the holdout. Iteration 2 (`nn2_m10_1p5m.bin`, boards 42500-56499, driven by nn1; `m10_nn2` on
+all 6.3M): **nn2 vs nn1 +50 ± 17, vs hand-written +433 ± 32** (hand-written now almost never
+reaches a gold win). Gains shrinking. Sliding window (network data only, `m10_nn2w`) vs nn2: −29 ± 17, so keep all
+data for now. Iteration 3 (`nn3_m10_1p5m.bin`, boards 56500-70499, driven by nn2; only 9% gold
+wins in that self-play): **nn3 vs nn2 +60 ± 17, vs hand-written +435 ± 32** (same as nn2). Loop
+stopped here (Mart). Gold-race fix: fixed race term in the output (`--race-residual 500`, v3 file), level with nn3,
++461 vs hand-written, fewer gold losses; kept so gold wins stay in self-play data. Iteration 4
+(driven by nn3g500, 2026-10-29): **nn4 vs nn3g500 +16 ± 17, vs hand-written +466 ± 35**. Network-only
+data matches all data (nn4w −4 vs nn4), so iteration 5 used a sliding window (nn2–nn5 data):
+**nn5 vs nn4 +7 ± 17** — plateau; gold victories rising (34% of self-play). nn5 vs nn3 +33
+(all from gold wins). Race term removed in iteration 6 (data by nn3, all 10.8M, v1 inputs): **nn6
+vs nn3 +80, vs nn5 +31, vs hand-written +521**, gold losses as low as with the term. Equal time (50 ms,
+native): **nn6 vs hand-written +397 ± 30**. Best net:
+`training/runs/m10_nn6/net.ggnn` (see docs/training.md). Next: equal-time match; deeper
+labels; browser integration.
+Next: equal-time match.
+
+**Server scaling review (2026-10-27).** Server CPU load is light (the computer opponent runs in
+the browser); a 2 vCPU / 4 GB VPS should carry thousands of DAU. Done: per-game lock
+(`ServerGame.LockAsync()`), taken by every `GameHub` method and controller read that touches a
+live game, so concurrent calls from both players/spectators can't interleave (e.g. a move racing
+`ClaimTimeout`). Stale games fixed: `GameCleanupService` (every minute) ends timed games whose
+flag fell server-side (nobody claimed it), ends untimed games abandoned 7 days as `"abandoned"`
+(no Elo), and every 30 min deletes orphaned in-progress `GameSessions` rows. End-of-game
+broadcast/persist moved from `GameHub` to `GameFlowService` so the cleanup can use it. Watch
+page: only started, public, unfinished games, top 30 by rating, plus a total count.
+Open, in rough priority: drain mode for deploys (live games are in-memory
+only; a restart ends all non-slow games); compute legal moves client-side instead of per-click
+hub calls; cache `/replay` for finished games; DB indexes for profile/leaderboard queries;
+Cloudflare in front (TLS, compression, caching); rate limiting on auth/game creation; backups.
+
+**Draw offers + game panel (2026-10-28).** Positions where endlessly buying/exchanging is best for
+both sides came up vs the engine, so: draw by agreement (result `"draw"`, ½ for Elo; see
+game-rules.md). Hub: `OfferDraw` / `AnswerDraw` (human games, `DrawOfferChanged` event, offer
+also in the state DTO), `AgreeComputerDraw` (computer accepts unless > 10 gold ahead, decided in
+the browser). Game page side panel redesigned: move list ~80%, then a fixed action section
+(Resign / Draw at the top, rematch there after the game; Analyze / Save at the bottom), with
+monochrome SVG icons. Untested in a live game so far.
 
 **Earlier focus: computer opponent.**
 **Computer opponent.** Question being investigated: is it realistic to generate the first NN

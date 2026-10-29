@@ -43,10 +43,8 @@
 </script>
 
 <main>
-  <h1>Account Settings</h1>
-
   {#if !authState.token}
-    <p class="muted">Please log in to access settings.</p>
+    <p class="muted">Please sign in to access settings.</p>
   {:else}
 
     <section class="card">
@@ -66,8 +64,8 @@
             />
           </label>
           <label class="checkbox-label">
-            <input type="checkbox" bind:checked={sameAsUsername} />
             Same as username
+            <input type="checkbox" bind:checked={sameAsUsername} />
           </label>
         </div>
 
@@ -92,7 +90,6 @@
     padding: 2rem 1rem;
     flex: 1;
   }
-  h1 { margin: 0; font-size: 2rem; }
 
   .card {
     width: 100%;
@@ -100,10 +97,10 @@
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 1.2rem 1.4rem;
+    padding: 1.5rem 1.6rem;
     display: flex;
     flex-direction: column;
-    gap: 0.85rem;
+    gap: 1.2rem;
   }
   h2 { margin: 0 0 0.25rem; font-size: 1.1rem; color: var(--fg-2); }
 
@@ -113,12 +110,12 @@
   form {
     display: flex;
     flex-direction: column;
-    gap: 0.7rem;
+    gap: 1.2rem;
   }
   label {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.45rem;
     font-size: 0.9rem;
     color: var(--fg-2);
   }
@@ -136,11 +133,12 @@
   .display-name-block {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.9rem;
   }
   .checkbox-label {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 0.5rem;
     font-size: 0.85rem;
     color: var(--muted);

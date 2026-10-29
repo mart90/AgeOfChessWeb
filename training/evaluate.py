@@ -43,7 +43,7 @@ def main():
     preds = []
     with torch.no_grad():
         for s in range(0, len(rec), args.batch_size):
-            feats = encode(rec[s:s + args.batch_size])
+            feats = encode(rec[s:s + args.batch_size], 0, model.num_dense)
             preds.append(model(*[torch.from_numpy(f) for f in feats]).numpy())
     net = np.concatenate(preds)                       # logits
     search = rec["score"].astype(np.float32) / k      # logits

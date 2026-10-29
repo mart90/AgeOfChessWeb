@@ -17,7 +17,7 @@ from ggdata import GGData
 from model import EvalNet
 
 NET_MAGIC = b"GGNN"
-NET_VERSION = 1
+NET_VERSION = {4: 1, 8: 2}   # by number of dense inputs (v2 = gold-race inputs); 3 = v2 + race term
 CHECK_MAGIC = b"GGNC"
 
 
@@ -43,8 +43,11 @@ def main():
     path = os.path.join(run_dir, "net.ggnn")
     with open(path, "wb") as f:
         f.write(NET_MAGIC)
-        f.write(struct.pack("<6I", NET_VERSION, size, c["num_features"], c["hidden"], c["l2"], c["l3"]))
+        version = 3 if model.race else NET_VERSION[model.num_dense]
+        f.write(struct.pack("<6I", version, size, c["num_features"], c["hidden"], c["l2"], c["l3"]))
         f.write(struct.pack("<f", ckpt["k"]))
+        if version == 3:
+            f.write(struct.pack("<f", model.race))   # race term, logit units
         f.write(f32(model.ft.weight))      # [feature][hidden]
         f.write(f32(model.ft_bias))
         f.write(f32(model.l1.weight))      # [out][in]
@@ -63,7 +66,7 @@ def main():
         idx = np.sort(rng.choice(len(d), min(args.check_count, len(d)), replace=False))
         rec = np.array(d.records[idx])
         with torch.no_grad():
-            logits = model(*[torch.from_numpy(x) for x in encode(rec)]).numpy().astype("<f4")
+            logits = model(*[torch.from_numpy(x) for x in encode(rec, 0, model.num_dense)]).numpy().astype("<f4")
         cpath = os.path.join(run_dir, "check.bin")
         with open(cpath, "wb") as f:
             f.write(CHECK_MAGIC)

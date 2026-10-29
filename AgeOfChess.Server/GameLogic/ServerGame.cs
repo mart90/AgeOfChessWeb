@@ -13,6 +13,8 @@ public class ServerGame : Game
     public bool BiddingEnabled { get; }
     public bool IsSlowGame { get; }
     public bool CreatedViaMatchmaking { get; set; }
+    /// <summary>Private games are hidden from the Watch page (mirrors GameSession.IsPrivate).</summary>
+    public bool IsPrivate { get; set; }
     public string WhitePlayerToken { get; private set; }
     public string BlackPlayerToken { get; private set; }
 
@@ -28,6 +30,26 @@ public class ServerGame : Game
     // Elo ratings at the time the game started — null for anonymous / unrated players.
     public int? WhiteElo { get; set; }
     public int? BlackElo { get; set; }
+
+    // ── Concurrency ───────────────────────────────────────────────────────
+    // Hub calls from different connections (both players, spectators) run in parallel. Everything
+    // that reads or changes this game's state takes this lock, so each check-then-act (is it your
+    // turn → apply move → broadcast) runs as one unit and broadcasts go out in order.
+    // Not reentrant: helpers called under the lock must not take it again.
+
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>Usage: <c>using var _ = await game.LockAsync();</c></summary>
+    public async Task<Releaser> LockAsync()
+    {
+        await _gate.WaitAsync();
+        return new Releaser(_gate);
+    }
+
+    public readonly struct Releaser(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
 
     public bool WhiteConnected => WhiteConnectionId != null;
     public bool BlackConnected => BlackConnectionId != null;
@@ -75,6 +97,32 @@ public class ServerGame : Game
     );
 
     public enum PremoveType { Move, Place }
+
+    // ── Draw offers ───────────────────────────────────────────────────────
+    // An offer stands until the opponent accepts or declines it, or makes a move instead.
+    // A player can offer again only after a full move (2 plies) since their last offer.
+
+    private bool? _drawOfferByWhite;
+    private int   _drawOfferExpiresAt;          // MoveList.Count at which the offer lapses
+    private int   _lastWhiteOfferAt = -2, _lastBlackOfferAt = -2;
+
+    /// <summary>The side with a standing draw offer (true = White), or null.</summary>
+    public bool? DrawOfferByWhite =>
+        _drawOfferByWhite.HasValue && !GameEnded && MoveList.Count < _drawOfferExpiresAt ? _drawOfferByWhite : null;
+
+    public bool CanOfferDraw(bool isWhite) =>
+        DrawOfferByWhite == null && MoveList.Count >= (isWhite ? _lastWhiteOfferAt : _lastBlackOfferAt) + 2;
+
+    public void OfferDraw(bool isWhite)
+    {
+        _drawOfferByWhite = isWhite;
+        // Offered on your own turn: lapses after the opponent's next move, i.e. 2 plies from now
+        _drawOfferExpiresAt = MoveList.Count + (ActiveColor.IsWhite == isWhite ? 2 : 1);
+        if (isWhite) _lastWhiteOfferAt = MoveList.Count;
+        else         _lastBlackOfferAt = MoveList.Count;
+    }
+
+    public void ClearDrawOffer() => _drawOfferByWhite = null;
 
     // ── Rematch tracking ──────────────────────────────────────────────────
 

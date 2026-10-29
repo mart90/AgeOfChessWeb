@@ -57,6 +57,7 @@ public class GameCreationService(AppDbContext db, GameSessionManager sessions)
         game.WhiteElo    = white.Elo;
         game.BlackElo    = black.Elo;
         game.CreatedViaMatchmaking = createdViaMatchmaking;
+        game.IsPrivate   = isPrivate;
 
         await db.SaveChangesAsync();
         sessions.Add(game);

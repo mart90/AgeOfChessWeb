@@ -72,7 +72,7 @@
 </script>
 
 <main>
-  <h1>Log in</h1>
+  <h1>Sign in</h1>
 
   <form onsubmit={handleLogin}>
     <label>
@@ -87,7 +87,7 @@
     {#if error}<p class="error">{error}</p>{/if}
 
     <button type="submit" disabled={loading}>
-      {loading ? 'Logging in…' : 'Log in'}
+      {loading ? 'Signing in…' : 'Sign in'}
     </button>
   </form>
 

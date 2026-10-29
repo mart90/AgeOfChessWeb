@@ -2,12 +2,12 @@
   <div class="content">
 
     <p class="lead">
-      Goldrush Gambit is a variant of chess with an economy and randomly generated terrain on the board which restricts piece movement. You start with a lonely king
-      and will need to buy new pieces for gold, which you earn by collecting treasures and owning mines. 
+      Goldrush Gambit is a variant of chess with a simple economy and randomly generated terrain on the board which restricts piece movement. You start with a lonely king
+      and will need to buy new pieces for gold, which you earn by collecting treasures and owning gold mines. 
       <br><br>
-      The game revolves mostly around gaining an advantage in gold income by securing more mines than your opponent, then converting that to a material advantage and 
-      ultimately checkmating the enemy king or storing lots of gold to win the game. The early game, though it may seem simple with just a king on the board, is crucial, 
-      since a small tempo advantage can lead to a won position many moves later.
+      Since the board is randomly generated - mirrored by default - every game is different. The strength of the various pieces as well as the viability of defensive strategies depends on
+      where the obstacles and mines spawn. We often win by efficiently securing mines, buying the right pieces, and gaining an advantage in gold income
+      by pressuring the opponent's mines while securing our own.
     </p>
 
     <hr />
@@ -15,21 +15,17 @@
     <h3>Board generation</h3>
     <p class="lead">
       The board can range from 6 by 6 squares to 16 by 16. It can either be fully randomly generated, or half generated and mirrored so that the players start with
-      the same starting position. Fully random boards allow for more strategic diversity, but are less balanced and not recommended for beginners. It's recommended 
-      to have bidding enabled for fully random boards, because the value of having White will vary much more than with mirrored boards. Bidding ensures neither side starts with an advantage.
+      the same starting position. Fully random boards allow for more strategic diversity, but are less balanced and not recommended for beginners.
     </p>
 
     <hr />
 
     <h3>Bidding</h3>
     <p class="lead">
-      Because the value of having White is different per board spawn, there is an option to bid for White. This allows the players to look at the starting position before
-      it's decided who plays which color. The players each decide how much gold they would pay the other player in return for getting to play White. 
+      The value of the first move is about 6 gold on most mirrored boards, but it does vary slightly, and it varies a lot more on fully random boards. To ensure a balanced game, there is an option to bid for White. 
+      This allows the players to look at the starting position before it's decided who plays which color. The players each decide how much gold they would pay the other player in return for getting to play White.
       <br><br>
       On fully random boards, bids can be negative when Black is better. This can happen when the Black king spawns favorably, near treasures or mines.
-      <br><br>
-      After both players submitted their bid, the highest bidder gets White. The winning bid then becomes Black's starting gold. If Black was better and the "winning" bid
-      was negative, Black will start in debt (negative gold).
     </p>
 
     <hr />
@@ -39,11 +35,21 @@
       Join the <a href="https://discord.gg/UhcU64NCs2">discord server</a> to discuss the game, give feedback, or find people to play with.
     </p>
 
+    <h3>Roadmap</h3>
+    <ul class="roadmap">
+      <li>Stronger engine for 10x10 boards (supported by a neural network)</li>
+      <li>Social features (more extensive profiles, friends list, etc)</li>
+      <li>Correspondence time controls</li>
+      <li>Game review tools</li>
+      <li>Tactics puzzles</li>
+    </ul>
+
     <h3>Credits</h3>
     <ul class="credits">
-      <li>Chess pieces: "cburnett" by Colin M.L. Burnett, via <a href="https://github.com/lichess-org/lila">Lichess</a></li>
+      <li>Chess pieces (and the knight in the logo): "cburnett" by Colin M.L. Burnett, via <a href="https://github.com/lichess-org/lila">Lichess</a></li>
       <li>Mountain and tree artwork: <a href="https://github.com/jdecked/twemoji">Twemoji</a>; the mine is drawn in the same style</li>
       <li>Chest icon by Lorc, from <a href="https://game-icons.net">game-icons.net</a></li>
+      <li>Handshake icon: <a href="https://lucide.dev">Lucide</a></li>
       <li>Wood textures: <a href="https://ambientcg.com">ambientCG</a></li>
     </ul>
 

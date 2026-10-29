@@ -8,6 +8,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<User> Users => Set<User>();
     public DbSet<GameSession> GameSessions => Set<GameSession>();
     public DbSet<HistoricGame> HistoricGames => Set<HistoricGame>();
+    public DbSet<LibraryGame> LibraryGames => Set<LibraryGame>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -28,5 +29,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<GameSession>()
             .HasIndex(g => g.BlackPlayerToken)
             .IsUnique();
+
+        modelBuilder.Entity<LibraryGame>(e =>
+        {
+            e.HasIndex(g => g.UserId);
+            e.HasIndex(g => g.ShareId).IsUnique();
+            e.Property(g => g.Title).HasMaxLength(200);
+            e.Property(g => g.MapSeed).HasMaxLength(200);
+            e.Property(g => g.Result).HasMaxLength(10);
+            e.Property(g => g.DataJson).HasColumnType("longtext");
+            e.HasOne(g => g.User).WithMany().HasForeignKey(g => g.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64">
+<defs>
+  <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#f3d58e"/><stop offset=".5" stop-color="#c7952f"/><stop offset="1" stop-color="#7d5617"/>
+  </linearGradient>
+  <linearGradient id="gold" x1="0" y1="0" x2=".7" y2="1">
+    <stop offset="0" stop-color="#ffe9a8"/><stop offset=".45" stop-color="#f0bf4c"/><stop offset="1" stop-color="#b9821f"/>
+  </linearGradient>
+  <radialGradient id="vig" cx=".5" cy=".42" r=".6">
+    <stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".38"/>
+  </radialGradient>
+  <clipPath id="disc"><circle cx="32" cy="32" r="27.5"/></clipPath>
+  <filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1.2" stdDeviation="1.1" flood-color="#000" flood-opacity=".55"/></filter>
+</defs>
+<circle cx="32" cy="32" r="31.5" fill="url(#rim)"/>
+<circle cx="32" cy="32" r="28.6" fill="#24160a"/>
+<g clip-path="url(#disc)"><rect width="64" height="64" fill="#ac896b"/><rect width="32" height="32" fill="#583313"/><rect x="32" y="32" width="32" height="32" fill="#583313"/><rect width="64" height="64" fill="url(#vig)"/></g>
+<g transform="translate(6.85 4.84) scale(1.17)" filter="url(#sh)" stroke="#2a1606" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <path fill="url(#gold)" d="M22 10c10.5 1 16.5 8 16 29H15c0-9 10-6.5 8-21"/><path fill="url(#gold)" d="M24 18c.38 2.91-5.55 7.37-8 9-3 2-2.82 4.34-5 4-1.042-.94 1.41-3.04 0-3-1 0 .19 1.23-1 2-1 0-4.003 1-4-4 0-2 6-12 6-12s1.89-1.9 2-3.5c-.73-.994-.5-2-.5-3 1-1 3 2.5 3 2.5h2s.78-1.992 2.5-3c1 0 1 3 1 3"/><path fill="#2a1606" d="M9.5 25.5a.5.5 0 1 1-1 0 .5.5 0 1 1 1 0m5.433-9.75a.5 1.5 30 1 1-.866-.5.5 1.5 30 1 1 .866.5"/></g>
+</svg>

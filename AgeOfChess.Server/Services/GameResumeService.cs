@@ -118,6 +118,7 @@ public class GameResumeService(AppDbContext db, GameSessionManager sessions)
         }
 
         game.HasGameStarted = true;
+        game.IsPrivate      = session.IsPrivate;
 
         sessions.Add(game);
         Console.WriteLine($"[GameResumeService] Resumed game {session.Id} ({moveNotations.Count} moves, {whiteName} vs {blackName})");

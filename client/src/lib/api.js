@@ -138,3 +138,58 @@ export async function updateSettings(displayName, displayNameSameAsUsername) {
   if (!res.ok) throw new Error(await res.text());
   return res.json(); // updated user
 }
+
+// ── Game library ("My library") ──────────────────────────────────────────────
+// entry: { title, gameId, mapSize, mapSeed, plyCount, result,
+//          data: packed tree (gameTransfer.js) }
+
+async function libraryError(res) {
+  const text = await res.text();
+  try { const p = JSON.parse(text); if (p?.title) return new Error(p.title); } catch { /* plain text */ }
+  return new Error(text.replace(/^"|"$/g, '') || `Request failed (${res.status})`);
+}
+
+export async function getLibrary() {
+  const res = await authFetch('/api/library');
+  if (!res.ok) throw await libraryError(res);
+  return res.json();
+}
+
+export async function getLibraryGame(id) {
+  const res = await authFetch(`/api/library/${id}`);
+  if (!res.ok) throw await libraryError(res);
+  return res.json();
+}
+
+/** An entry opened through its share link (/analyze/{shareId}); works logged out for published entries. */
+export async function getSharedLibraryGame(shareId) {
+  const res = await authFetch(`/api/library/shared/${encodeURIComponent(shareId)}`);
+  if (!res.ok) throw await libraryError(res);
+  return res.json(); // { id (owner only), shareId, isPublic, owned, owner, ownerUsername, title, result, mapSize, mapSeed, data }
+}
+
+export async function setLibraryGamePublic(id, isPublic) {
+  const res = await authFetch(`/api/library/${id}/public`, { method: 'PUT', body: JSON.stringify({ isPublic }) });
+  if (!res.ok) throw await libraryError(res);
+  return res.json();
+}
+
+// The tree is sent as a string: it nests one level per move, deeper than ASP.NET binds objects
+const libraryBody = (entry) => JSON.stringify({ ...entry, data: JSON.stringify(entry.data) });
+
+export async function addLibraryGame(entry) {
+  const res = await authFetch('/api/library', { method: 'POST', body: libraryBody(entry) });
+  if (!res.ok) throw await libraryError(res);
+  return res.json(); // { id, shareId }
+}
+
+export async function updateLibraryGame(id, entry) {
+  const res = await authFetch(`/api/library/${id}`, { method: 'PUT', body: libraryBody(entry) });
+  if (!res.ok) throw await libraryError(res);
+  return res.json();
+}
+
+export async function deleteLibraryGame(id) {
+  const res = await authFetch(`/api/library/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw await libraryError(res);
+}

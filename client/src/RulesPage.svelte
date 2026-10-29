@@ -15,8 +15,8 @@
       <li>Black starts with 6 gold by default.</li>
       <li>Players get 1 gold at the start of each turn.</li>
       <li>Capturing a treasure earns 20 gold.</li>
-      <li>Mines owned by a player earn {MINE_INCOME} gold each at the start of their turn.</li>
-      <li>When a piece moves onto a mine, the mine becomes owned by that player.</li>
+      <li>Gold mines owned by a player earn {MINE_INCOME} gold each at the start of their turn.</li>
+      <li>When a piece moves onto a gold mine, the mine becomes owned by that player.</li>
       <li>New pieces cost gold, ranging from {minCost} gold for a {cheapest} to {maxCost} gold for a {mostExpensive}.</li>
     </ul>
 
@@ -24,17 +24,17 @@
     <ul>
       <li>Pieces other than pawns move as in chess.</li>
       <li>Pawns can move any direction in a straight line, and capture any direction diagonally.</li>
-      <li><strong>Mountains</strong> block movement along files and diagonals and nothing can stand
+      <li>Mountains block movement along files and diagonals and nothing can stand
           on them.</li>
-      <li><strong>Forests</strong> block movement along files and diagonals, but can be occupied.</li>
-      <li><strong>Gold mines</strong> affect movement the same way forests do.</li>
+      <li>Forests block movement along files and diagonals, but can be occupied.</li>
+      <li>Gold mines affect movement the same way forests do.</li>
     </ul>
 
     <h3>Piece placement</h3>
     <ul>
-      <li>We can spend our turn and some gold to place a new piece on the board.</li>
+      <li>We can spend our turn and gold to place a new piece on the board.</li>
       <li>All pieces can be placed around the king.</li>
-      <li>Rooks, bishops and knights can also be placed around any of your queens.</li>
+      <li>Rooks, bishops and knights can also be placed around queens.</li>
       <li>Pawns can be placed around any piece except other pawns.</li>
       <li>Pieces can't be placed on top of enemy pieces or treasures.</li>
     </ul>
@@ -42,9 +42,9 @@
     <h3>Additional win conditions</h3>
     <p>Two additional win conditions compared to regular Chess:</p>
     <ul>
-      <li>If a player reaches a high amount of gold, they win the game. This is 150 gold for 6x6 boards, and increases by 25 
+      <li>If a player stores a high amount of gold, they win the game. This is 150 gold for 6x6 boards, and increases by 25 
           per board size up to 275 for 16x16. You win at the start of your turn if you have enough gold and your king is not in check.</li>
-      <li>Stalemate wins the game instead of drawing it: if you have no legal moves (including piece placements), you lose.</li>
+      <li>If a player has no legal moves (stalemate), they lose the game.</li>
     </ul>
 
     <h3>Bidding</h3>
@@ -117,9 +117,10 @@
     font-size: 0.8rem;
   }
 
+  /* Same size as the About page's text (its .lead paragraphs) */
   p, li {
-    font-size: 0.97rem;
-    line-height: 1.7;
+    font-size: 1.05rem;
+    line-height: 1.75;
     color: var(--fg-2);
   }
 
@@ -175,6 +176,5 @@
 
   @media (max-width: 640px) {
     h1 { font-size: 1.5rem; }
-    p, li { font-size: 0.92rem; }
   }
 </style>

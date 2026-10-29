@@ -49,3 +49,4 @@ training/__pycache__/
 !engine/src/bin/
 
 policyNetworkOld
+todo.txt

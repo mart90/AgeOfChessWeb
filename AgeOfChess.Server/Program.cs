@@ -49,6 +49,7 @@ builder.Services.AddSignalR();
 // In-memory active game store (singleton — lives for the process lifetime)
 builder.Services.AddSingleton<GameSessionManager>();
 builder.Services.AddSingleton<MatchmakingService>();
+builder.Services.AddSingleton<GameFlowService>();
 builder.Services.AddScoped<GameCreationService>();
 builder.Services.AddScoped<GameResumeService>();
 builder.Services.AddHostedService<GameCleanupService>();
@@ -63,7 +64,22 @@ using (var scope = app.Services.CreateScope())
 
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// index.html must be revalidated on every load: it names the hashed bundles of the current build,
+// and a stale copy points at files the next deploy deletes. Vite's hashed bundles
+// (/assets/name-HASH.ext) never change, so they can be cached for good.
+var staticFileOptions = new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        var path = ctx.Context.Request.Path.Value ?? "";
+        var headers = ctx.Context.Response.Headers;
+        if (path.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || path == "/")
+            headers.CacheControl = "no-cache";
+        else if (System.Text.RegularExpressions.Regex.IsMatch(path, @"^/assets/[^/]+-[A-Za-z0-9_-]{8}\.\w+$"))
+            headers.CacheControl = "public, max-age=31536000, immutable";
+    }
+};
+app.UseStaticFiles(staticFileOptions);
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -73,6 +89,6 @@ app.MapHub<GameHub>("/hub/game");
 app.MapHub<MatchmakingHub>("/hub/matchmaking");
 
 // Fallback to index.html for Svelte client-side routing
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html", staticFileOptions);
 
 app.Run();

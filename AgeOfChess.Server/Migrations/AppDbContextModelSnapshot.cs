@@ -195,6 +195,65 @@ namespace AgeOfChess.Server.Migrations
                     b.ToTable("HistoricGames");
                 });
 
+            modelBuilder.Entity("AgeOfChess.Server.Data.Models.LibraryGame", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DataJson")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int?>("GameId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsPublic")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("MapSeed")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<int>("MapSize")
+                        .HasColumnType("int");
+
+                    b.Property<int>("PlyCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Result")
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)");
+
+                    b.Property<Guid>("ShareId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ShareId")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("LibraryGames");
+                });
+
             modelBuilder.Entity("AgeOfChess.Server.Data.Models.User", b =>
                 {
                     b.Property<int>("Id")
@@ -273,6 +332,17 @@ namespace AgeOfChess.Server.Migrations
                     b.Navigation("BlackUser");
 
                     b.Navigation("WhiteUser");
+                });
+
+            modelBuilder.Entity("AgeOfChess.Server.Data.Models.LibraryGame", b =>
+                {
+                    b.HasOne("AgeOfChess.Server.Data.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 #pragma warning restore 612, 618
         }

@@ -28,17 +28,18 @@ public static class EloService
                                       TimeControlCategory.Bullet;
 
     /// <summary>
-    /// Returns updated (whiteElo, blackElo) after a decisive result.
+    /// Returns updated (whiteElo, blackElo) after a game. <paramref name="whiteScore"/> is 1 for a
+    /// White win, 0.5 for a draw, 0 for a Black win.
     /// Uses the standard Elo formula with per-player K-factors.
     /// </summary>
     public static (int newWhiteElo, int newBlackElo) Calculate(
         int whiteElo, int blackElo,
         int whiteGamesInCategory, int blackGamesInCategory,
-        bool whiteWon)
+        double whiteScore)
     {
         // Expected score for white (probability of winning from white's perspective)
         var expected = 1.0 / (1.0 + Math.Pow(10.0, (blackElo - whiteElo) / 400.0));
-        var actual   = whiteWon ? 1.0 : 0.0;
+        var actual   = whiteScore;
 
         var kWhite = GetKFactor(whiteGamesInCategory);
         var kBlack = GetKFactor(blackGamesInCategory);

@@ -7,6 +7,7 @@
   import { computeLegalMoves, isRealPiece, basePieceType, isRocks } from './lib/pathFinder.js';
   import MoveList from './MoveList.svelte';
   import { MoveNode, addChild } from './lib/moveTree.js';
+  import { wheelNav } from './lib/wheelNav.js';
   import { serializeTree, deserializeTree, getNodePath, nodeAtPath } from './lib/treeStorage.js';
   import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js'
   import { engineSearch, cancelSearch } from './lib/engine/engine.js';
@@ -14,7 +15,11 @@
   import { EngineAnalysis as AnalysisWorker } from './lib/engine/engineAnalysis.js';
   import { settings, persistSettings } from './lib/settings.svelte.js';
   import { pieceSrc } from './lib/boardTheme.js';
-  import { unpackGameTree, GAME_TRANSFER_KEY, GAME_TRANSFER_FORMAT } from './lib/gameTransfer.js';
+  import { unpackGameTree, packAnalyzeTree, mainlineLength, GAME_TRANSFER_KEY, GAME_TRANSFER_FORMAT } from './lib/gameTransfer.js';
+  import { addLibraryGame, updateLibraryGame, getSharedLibraryGame, setLibraryGamePublic } from './lib/api.js';
+  import { navigate } from './lib/navigate.js';
+  import { pendingLibraryOpen } from './lib/library.js';
+  import { authState } from './lib/auth.svelte.js';
 
   const pieceImgSrc = pieceSrc;
 
@@ -26,6 +31,19 @@
   let blackGold     = $state(6);
   let whiteIsActive = $state(true);
   let viewAsWhite   = $state(true);
+
+  // ── My library: the entry this analysis was opened from / saved to (null = not saved yet) ──
+  // An entry someone else shared has a shareId but no id: saving it makes a copy in our own library.
+  let libraryId      = $state(null);
+  let libraryShareId = $state(null);
+  let libraryPublic  = $state(false);
+  let libraryOwner   = $state(null);    // { name, username } when the entry is someone else's
+  let libraryTitle   = $state('');
+  let libraryResult  = null;
+  let libraryMsg     = $state('');
+  let librarySaving  = $state(false);
+  let linkCopied     = $state(false);
+  const libraryOwned = $derived(libraryId != null);
 
   // ── Selection / drag ────────────────────────────────────────────────────────
   let boardCanvas   = null;
@@ -64,10 +82,20 @@
       mapSize,
       mapSeed,
       viewAsWhite,
+      library:     { id: libraryId, shareId: libraryShareId, isPublic: libraryPublic, owner: libraryOwner,
+                     title: libraryTitle, result: libraryResult },
       treeData:    serializeTree(moveTree),
       currentPath: currentNode ? getNodePath(moveTree, currentNode) : [],
     };
     try { localStorage.setItem('analyze_board_state', JSON.stringify(data)); } catch {}
+  });
+
+  // The URL carries the library entry's share id, so the address bar is the share link
+  $effect(() => {
+    if (!_persistenceReady) return;
+    const want = libraryShareId ? `/analyze/${libraryShareId}` : '/analyze';
+    const here = window.location.pathname;
+    if (here.startsWith('/analyze') && here !== want) history.replaceState(history.state, '', want);
   });
 
   // ── Map generation controls ─────────────────────────────────────────────────
@@ -202,7 +230,7 @@
 
   function formatEval(info) {
     if (info.mate != null) return info.mate > 0 ? `#${info.mate}` : `#-${-info.mate}`;
-    return `${info.score > 0 ? '+' : ''}${info.score.toFixed(1)}g`;
+    return `${info.score > 0 ? '+' : ''}${info.score.toFixed(1)} g`;   // non-breaking: never split from the number
   }
 
   onDestroy(() => cancelSearch());
@@ -389,8 +417,74 @@
     applyLoadedTree(rawTree, data.currentPath, data.mapSize, data.mapSeed, true);
   }
 
+  /** entry: { id, shareId, isPublic, owner, ownerUsername, title, result } (server), or the saved session's. */
+  function setLibrary(entry = {}) {
+    libraryId      = entry.id ?? null;
+    libraryShareId = entry.shareId ?? null;
+    libraryPublic  = !!entry.isPublic;
+    libraryOwner   = libraryId == null && entry.owner
+      ? (typeof entry.owner === 'string' ? { name: entry.owner, username: entry.ownerUsername } : entry.owner)
+      : null;
+    libraryTitle   = entry.title ?? '';
+    libraryResult  = entry.result ?? null;
+    libraryMsg     = '';
+  }
+
+  async function saveToLibrary() {
+    if (!moveTree || librarySaving) return;
+    librarySaving = true;
+    libraryMsg = '';
+    const title = libraryTitle.trim() || `Analysis ${mapSize}×${mapSize}, ${new Date().toLocaleDateString()}`;
+    const entry = {
+      title, gameId: null, mapSize, mapSeed: mapSeed || null,
+      plyCount: mainlineLength(moveTree), result: libraryResult, data: packAnalyzeTree(moveTree),
+    };
+    try {
+      if (libraryId) await updateLibraryGame(libraryId, entry);
+      else {
+        // A new entry, or a copy of someone else's (theirs stays as it is)
+        const res = await addLibraryGame(entry);
+        libraryId      = res.id;
+        libraryShareId = res.shareId;
+        libraryPublic  = false;
+        libraryOwner   = null;
+      }
+      libraryTitle = title;
+      libraryMsg = 'Saved ✓';
+    } catch (e) {
+      libraryMsg = e.message;
+    } finally {
+      librarySaving = false;
+    }
+  }
+
+  async function togglePublic(e) {
+    const box = e.currentTarget, want = box.checked;
+    libraryMsg = '';
+    try {
+      await setLibraryGamePublic(libraryId, want);
+      libraryPublic = want;
+    } catch (err) {
+      box.checked = libraryPublic;
+      libraryMsg = err.message;
+    }
+  }
+
+  let copiedTimer = null;
+  async function copyShareLink() {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/analyze/${libraryShareId}`);
+      linkCopied = true;
+      clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => linkCopied = false, 2000);
+    } catch {
+      libraryMsg = 'Could not copy the link.';
+    }
+  }
+
   function loadSavedAnalyzeState(data) {
     const rawTree = deserializeTree(data.treeData);
+    setLibrary(data.library ?? {});
     applyLoadedTree(rawTree, data.currentPath, data.mapSize, data.mapSeed, data.viewAsWhite);
   }
 
@@ -406,6 +500,38 @@
       analysisResults = [];
       analysisWorker.postMessage({ type: 'update', payload: getCurrentPosition() });
     }
+  }
+
+  /** Removes the current move and everything after it from the tree, then goes to the previous
+   *  move. Asks first when later moves would be lost too. */
+  function deleteCurrentNode() {
+    const node = currentNode;
+    if (!node?.parent) return;
+    if (node.children.length && !confirm('Delete this move and all moves after it?')) return;
+    const parent = node.parent;
+    parent.children = parent.children.filter(c => c !== node);
+    navigateToNode(parent);
+    treeRevision++;
+  }
+
+  /** Mouse wheel over the board: one move back (-1) or forward (+1). */
+  function stepMove(dir) {
+    const target = dir < 0 ? currentNode?.parent : currentNode?.children[0];
+    if (target) navigateToNode(target);
+  }
+
+  function handleKeydown(e) {
+    if (!currentNode || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    let target = null;
+    if (e.key === 'ArrowLeft')  target = currentNode.parent;
+    else if (e.key === 'ArrowRight') target = currentNode.children[0];
+    else if (e.key === 'Home')  target = moveTree;
+    else if (e.key === 'End')   { target = currentNode; while (target.children[0]) target = target.children[0]; }
+    else if (e.key === 'Delete') { e.preventDefault(); deleteCurrentNode(); return; }
+    else return;
+    e.preventDefault();
+    if (target && target !== currentNode) navigateToNode(target);
   }
 
   function undoOnce() {
@@ -467,6 +593,7 @@
       clearSelection();
       moveTree    = new MoveNode(null, snapshot(), null);
       currentNode = moveTree;
+      setLibrary();
 
       abortEngine();
 
@@ -777,16 +904,48 @@
     clearSelection();
   }
 
+  function openLibraryEntry(entry) {
+    try {
+      applyLoadedTree(unpackGameTree(entry.data), [], entry.mapSize, entry.mapSeed, true);
+      setLibrary(entry);
+    } catch (e) {
+      console.error('Failed to open library game', e);
+      genError = 'Could not open this library game.';
+    }
+  }
+
+  function restoreSession(saved) {
+    if (!saved) return;
+    try { loadSavedAnalyzeState(saved); }
+    catch (e) { console.error('Failed to restore analyze state', e); }
+  }
+
+  function cleanup() {
+    window.removeEventListener('pointermove', globalPointerMove);
+    window.removeEventListener('pointerup',   globalPointerUp);
+    clearTimeout(copiedTimer);
+  }
+
   onMount(() => {
     window.addEventListener('pointermove', globalPointerMove);
     window.addEventListener('pointerup',   globalPointerUp);
 
-    // Load a game imported from GamePage, or restore a previously saved session
+    // Load a game opened from the library, imported from GamePage or followed through a share link
+    // (/analyze/{shareId}), or restore the saved session
     const pendingRaw = localStorage.getItem(GAME_TRANSFER_KEY);
-    if (pendingRaw) {
+    const libraryEntry = pendingLibraryOpen.entry;
+    pendingLibraryOpen.entry = null;
+    const urlShareId = window.location.pathname.match(/^\/analyze\/([^/]+)/)?.[1] ?? null;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('analyze_board_state')); } catch { /* none */ }
+
+    if (libraryEntry) {
+      openLibraryEntry(libraryEntry);
+    } else if (pendingRaw) {
       localStorage.removeItem(GAME_TRANSFER_KEY);
       try {
         const data = JSON.parse(pendingRaw);
+        setLibrary({ title: data.title, result: data.result });
         if (data.format === GAME_TRANSFER_FORMAT) {
           applyLoadedTree(unpackGameTree(data), data.currentPath, data.mapSize, data.mapSeed, true);
         } else if (data.format === 'gamepage') {
@@ -796,21 +955,23 @@
         console.error('Failed to load game import', e);
         genError = 'Could not load the game into the analysis board.';
       }
+    } else if (urlShareId && saved?.library?.shareId !== urlShareId) {
+      // A share link (someone else's entry, or our own): fetch it. When the saved session is
+      // already this entry, it's restored instead, with any unsaved moves.
+      getSharedLibraryGame(urlShareId)
+        .then(openLibraryEntry)
+        .catch(e => { restoreSession(saved); genError = e.message; })
+        .finally(() => _persistenceReady = true);
+      return cleanup;
     } else {
-      const savedRaw = localStorage.getItem('analyze_board_state');
-      if (savedRaw) {
-        try { loadSavedAnalyzeState(JSON.parse(savedRaw)); }
-        catch (e) { console.error('Failed to restore analyze state', e); }
-      }
+      restoreSession(saved);
     }
     _persistenceReady = true;
-
-    return () => {
-      window.removeEventListener('pointermove', globalPointerMove);
-      window.removeEventListener('pointerup',   globalPointerUp);
-    };
+    return cleanup;
   });
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <!-- Drag ghost -->
 {#if dragging}
@@ -845,7 +1006,7 @@
     {#if squares.length > 0}
       <!-- board-and-list keeps board and move list flush together as one unit -->
       <div class="board-and-list">
-        <div class="board-wrap">
+        <div class="board-wrap" use:wheelNav={stepMove}>
           <Board
             squares={squares}
             mapSize={mapSize}
@@ -974,6 +1135,43 @@
       </div>
       <p class="shop-hint">Drag a piece onto the board to place it.</p>
     </div>
+
+    <!-- My library -->
+    {#if moveTree && (authState.token || libraryShareId)}
+      <div class="section">
+        <div class="section-label">Library</div>
+        {#if libraryOwner}
+          <p class="library-owner">
+            Shared by <a href="/profile/{encodeURIComponent(libraryOwner.username)}"
+              onclick={(e) => { e.preventDefault(); navigate(`/profile/${encodeURIComponent(libraryOwner.username)}`); }}
+            >{libraryOwner.name}</a>
+          </p>
+        {/if}
+        <input class="title-input" type="text" bind:value={libraryTitle} maxlength="200"
+               placeholder="Title (optional)" spellcheck="false" />
+        {#if authState.token}
+          <button class="action-btn" onclick={saveToLibrary} disabled={librarySaving}>
+            {librarySaving ? 'Saving…'
+              : libraryOwned ? 'Save changes to library'
+              : libraryShareId ? 'Save to my library' : 'Save to library'}
+          </button>
+        {:else}
+          <button class="action-btn" onclick={() => navigate('/login')}>Log in to save to your library</button>
+        {/if}
+        <div class="share-row">
+          <label class="switch" class:disabled={!libraryOwned}
+                 title={libraryOwned ? 'Anyone with the link can open this game' : 'Save to your library first'}>
+            <input type="checkbox" role="switch" checked={libraryPublic} disabled={!libraryOwned} onchange={togglePublic} />
+            <span class="track"><span class="thumb"></span></span>
+            Publish
+          </label>
+          <button class="ctrl-btn copy-btn" onclick={copyShareLink} disabled={!libraryShareId}>
+            {linkCopied ? 'Copied' : 'Copy link'}
+          </button>
+        </div>
+        {#if libraryMsg}<p class:error={libraryMsg !== 'Saved ✓'} class="library-msg">{libraryMsg}</p>{/if}
+      </div>
+    {/if}
 
     <!-- Map generation -->
     <div class="section map-section">
@@ -1141,6 +1339,34 @@
   .player-bar.active { border-color: var(--accent); background: var(--surface-3); }
   .player-name { font-size: 0.9rem; font-weight: 600; color: var(--fg-2); }
   .gold-wrap { display: flex; align-items: center; gap: 0.25rem; }
+  .title-input {
+    width: 100%; box-sizing: border-box; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.85rem;
+    background: var(--surface-2, var(--surface)); color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+  }
+  .library-msg { margin: 0; font-size: 0.82rem; color: var(--muted); }
+  .library-owner { margin: 0; font-size: 0.85rem; color: var(--muted); }
+  .library-owner a { color: var(--accent); }
+  .share-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+  .copy-btn { flex: 0 0 auto; }
+  /* Toggle switch (a checkbox underneath) */
+  .switch {
+    display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
+    font-size: 0.88rem; color: var(--fg-2); user-select: none;
+  }
+  .switch.disabled { opacity: 0.45; cursor: default; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .track {
+    position: relative; width: 2.1rem; height: 1.2rem; border-radius: 0.6rem; flex: none;
+    background: var(--surface-2); border: 1px solid var(--line-strong);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .thumb {
+    position: absolute; top: 50%; left: 0.15rem; width: 0.8rem; height: 0.8rem; border-radius: 50%;
+    background: var(--muted); transform: translateY(-50%); transition: left 0.15s, background 0.15s;
+  }
+  .switch input:checked + .track { background: var(--button); border-color: var(--button); }
+  .switch input:checked + .track .thumb { left: calc(100% - 0.95rem); background: #fff; }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
   .gold-input {
     width: 62px;
     background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 4px;

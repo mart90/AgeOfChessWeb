@@ -132,7 +132,7 @@
 
   <p class="switch">
     Already have an account?
-    <button class="link-btn" onclick={() => navigate('/login')}>Log in</button>
+    <button class="link-btn" onclick={() => navigate('/login')}>Sign in</button>
   </p>
 </main>
 

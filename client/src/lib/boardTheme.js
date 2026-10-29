@@ -12,11 +12,11 @@ import { MINE_INCOME } from './constants.js';
 
 /**
  * Square themes. `tex` = [light, dark] textures, blended at `alpha` over their own average
- * colour (lower = calmer); `flat` = [light, dark] colours.
+ * colour (lower = calmer), then scaled by `brightness` = [light, dark]; `flat` = [light, dark] colours.
  */
 export const BOARD_THEMES = [
-  { id: 'soft-maple-walnut', name: 'Maple & walnut', tex: ['wood_light', 'wood_dark'],   alpha: 0.35 },
-  { id: 'soft-ash-teak',     name: 'Ash & teak',     tex: ['wood_light2', 'wood_dark2'], alpha: 0.35 },
+  { id: 'soft-maple-walnut', name: 'Maple & walnut', tex: ['wood_light', 'wood_dark'],   alpha: 0.35, brightness: [1.12, 1.25] },
+  { id: 'soft-ash-teak',     name: 'Ash & teak',     tex: ['wood_light2', 'wood_dark2'], alpha: 0.35, brightness: [1.12, 1.15] },
   { id: 'classic-brown',     name: 'Classic brown',       flat: ['#f0d9b5', '#b58863'] },
   { id: 'parchment',         name: 'Parchment',           flat: ['#ecdcb9', '#a98758'] },
   { id: 'green',             name: 'Green',               flat: ['#eeeed2', '#769656'] },
@@ -84,11 +84,13 @@ export function drawSquare(ctx, theme, img, isDark, x, y, px, py, cw, ch) {
   }
   const tex = img(textureSrc(theme.tex[isDark ? 1 : 0]));
   if (!tex) { ctx.fillStyle = isDark ? '#7a5a3a' : '#d8c09a'; ctx.fillRect(px, py, cw, ch); return; }
+  ctx.save();
+  const b = theme.brightness?.[isDark ? 1 : 0];
+  if (b) ctx.filter = `brightness(${b})`;
   ctx.fillStyle = averageColor(tex);
   ctx.fillRect(px, py, cw, ch);
   const h = hash(x, y), s = tex.width * 0.42;
   const sx = (h % 1000) / 1000 * (tex.width - s), sy = ((h >> 10) % 1000) / 1000 * (tex.height - s);
-  ctx.save();
   ctx.globalAlpha = theme.alpha;
   ctx.beginPath(); ctx.rect(px, py, cw, ch); ctx.clip();
   ctx.translate(px + cw / 2, py + ch / 2);
@@ -153,13 +155,13 @@ export function drawMineBadge(ctx, owner, px, py, cell) {
   ctx.lineWidth = cell * 0.025;
   ctx.strokeStyle = '#c79a2c';
   ctx.stroke();
-  // Centre on the measured glyph box (textBaseline "middle" sits low for digits), then lift by 5%
-  // of the radius: mathematically centred "+3" still looks low (its weight is in the bottom half).
+  // Centre on the measured glyph box (textBaseline "middle" sits low for digits), then lift by 2.5%
+  // of the radius: exact centring looks slightly low, 5% looked slightly high.
   ctx.fillStyle = owner === 'white' ? '#1e1b18' : '#f5f1e8';
   ctx.font = `700 ${Math.round(cell * 0.15)}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const label = `+${MINE_INCOME}`;
   const m = ctx.measureText(label);
-  ctx.fillText(label, cx, cy + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2 - r * 0.05);
+  ctx.fillText(label, cx, cy + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2 - r * 0.025);
 }

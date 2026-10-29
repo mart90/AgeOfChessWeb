@@ -8,15 +8,24 @@
 //!
 //! File format (written by `training/export.py`, little-endian): `b"GGNN"`, u32 version,
 //! u32 board size N, u32 number of features, u32 hidden, u32 l2, u32 l3, f32 K, then f32
-//! arrays: ft weights [feature][hidden], ft bias [hidden], l1 weights [l2][2*hidden + 4],
+//! arrays: ft weights [feature][hidden], ft bias [hidden], l1 weights [l2][2*hidden + D],
 //! l1 bias [l2], l2 weights [l3][l2], l2 bias [l3], out weights [l3], out bias.
+//! Version 1: D = 4 dense inputs (gold / threshold, mines / 10, side to move first); version 2:
+//! D = 8, adding the gold race: 1 / (t + 1) and min(t, 40) / 40 with t = `eval::turns_to_gold`.
+//! Version 3: as 2, plus f32 `race` right after K: a fixed gold-race term added to the output,
+//! logit += race * (1/(t_us+1) - 1/(t_them+1)) (the hand-written eval's race term / K); the
+//! network was trained as the residual on top of it.
 
+use crate::eval::turns_to_gold;
 use crate::position::*;
 
 pub const MAGIC: &[u8; 4] = b"GGNN";
-pub const VERSION: u32 = 1;
+/// Supported file versions and their number of dense inputs.
+const VERSIONS: [(u32, usize); 3] = [(1, 4), (2, 8), (3, 8)];
 pub const NUM_BLOCKS: usize = 18;
-pub const NUM_DENSE: usize = 4;
+const MAX_DENSE: usize = 8;
+/// Turns at which the race input min(t, H) / H saturates (training/features.py RACE_HORIZON).
+const RACE_HORIZON: i32 = 40;
 const MAX_HIDDEN: usize = 1024;
 const MAX_L: usize = 256;
 /// Integer scales: first-layer sums and activations (0..1 -> 0..QA), first dense layer weights.
@@ -30,6 +39,10 @@ pub struct Network {
     pub l3: usize,
     /// Eval units per logit unit: eval = logit * k.
     pub k: f32,
+    /// Dense inputs after the two accumulators: 4 (version 1) or 8 (version 2/3, gold race).
+    pub num_dense: usize,
+    /// Version 3: fixed gold-race term in logit units (0 otherwise).
+    pub race: f32,
     ft_w: Vec<f32>,
     ft_b: Vec<f32>,
     l1_w: Vec<f32>,
@@ -70,15 +83,17 @@ impl Network {
         }
         let mut r = Reader { b, at: 4 };
         let version = r.u32()?;
-        if version != VERSION {
-            return Err(format!("network version {version}, engine supports {VERSION}"));
-        }
+        let num_dense = match VERSIONS.iter().find(|v| v.0 == version) {
+            Some(&(_, d)) => d,
+            None => return Err(format!("network version {version}, engine supports {:?}", VERSIONS.map(|v| v.0))),
+        };
         let board_size = r.u32()? as usize;
         let features = r.u32()? as usize;
         let hidden = r.u32()? as usize;
         let l2 = r.u32()? as usize;
         let l3 = r.u32()? as usize;
         let k = f32::from_bits(r.u32()?);
+        let race = if version == 3 { f32::from_bits(r.u32()?) } else { 0.0 };
         if features != NUM_BLOCKS * board_size * board_size {
             return Err(format!("{features} features, expected {} for {board_size}x{board_size}", NUM_BLOCKS * board_size * board_size));
         }
@@ -91,9 +106,11 @@ impl Network {
             l2,
             l3,
             k,
+            num_dense,
+            race,
             ft_w: r.f32s(features * hidden)?,
             ft_b: r.f32s(hidden)?,
-            l1_w: r.f32s(l2 * (2 * hidden + NUM_DENSE))?,
+            l1_w: r.f32s(l2 * (2 * hidden + num_dense))?,
             l1_b: r.f32s(l2)?,
             l2_w: r.f32s(l3 * l2)?,
             l2_b: r.f32s(l3)?,
@@ -154,12 +171,22 @@ impl Network {
         }
     }
 
+    /// Version 3: the fixed gold-race term (logit, side to move), as in training/model.py.
+    #[inline]
+    fn race_term(&self, pos: &Position) -> f32 {
+        if self.race == 0.0 {
+            return 0.0;
+        }
+        let (t0, t1) = (turns_to_gold(pos, pos.side), turns_to_gold(pos, pos.side ^ 1));
+        self.race * (1.0 / (t0 + 1) as f32 - 1.0 / (t1 + 1) as f32)
+    }
+
     /// Win-probability logit for the side to move.
     pub fn logit(&self, pos: &Position) -> f32 {
         let h = self.hidden;
         let stm = pos.side;
         let mut feats = Vec::with_capacity(64);
-        let mut x = [0f32; 2 * MAX_HIDDEN + NUM_DENSE];
+        let mut x = [0f32; 2 * MAX_HIDDEN + MAX_DENSE];
         for (half, persp) in [stm, stm ^ 1].into_iter().enumerate() {
             let acc = &mut x[half * h..half * h + h];
             acc.copy_from_slice(&self.ft_b);
@@ -180,7 +207,14 @@ impl Network {
         x[2 * h + 1] = pos.gold[stm ^ 1] as f32 / threshold;
         x[2 * h + 2] = pos.mines[stm] as f32 / 10.0;
         x[2 * h + 3] = pos.mines[stm ^ 1] as f32 / 10.0;
-        let inputs = &x[..2 * h + NUM_DENSE];
+        if self.num_dense > 4 {
+            let (t0, t1) = (turns_to_gold(pos, stm), turns_to_gold(pos, stm ^ 1));
+            x[2 * h + 4] = 1.0 / (t0 + 1) as f32;
+            x[2 * h + 5] = 1.0 / (t1 + 1) as f32;
+            x[2 * h + 6] = t0.min(RACE_HORIZON) as f32 / RACE_HORIZON as f32;
+            x[2 * h + 7] = t1.min(RACE_HORIZON) as f32 / RACE_HORIZON as f32;
+        }
+        let inputs = &x[..2 * h + self.num_dense];
 
         let mut y1 = [0f32; MAX_L];
         for j in 0..self.l2 {
@@ -195,7 +229,7 @@ impl Network {
             y2[j] = (s + self.l2_b[j]).clamp(0.0, 1.0);
         }
         let s: f32 = self.out_w.iter().zip(&y2[..self.l3]).map(|(a, b)| a * b).sum();
-        s + self.out_b
+        s + self.out_b + self.race_term(pos)
     }
 
     /// Evaluation in engine units (1 gold = 10) for the side to move.
@@ -293,8 +327,8 @@ impl Network {
     fn output(&self, pos: &Position, acc: &[i16]) -> f32 {
         let h = self.hidden;
         let stm = pos.side;
-        let ins = 2 * h + NUM_DENSE;
-        let mut x = [0i16; 2 * MAX_HIDDEN + NUM_DENSE];
+        let ins = 2 * h + self.num_dense;
+        let mut x = [0i16; 2 * MAX_HIDDEN + MAX_DENSE];
         for (half, persp) in [stm, stm ^ 1].into_iter().enumerate() {
             for (o, a) in x[half * h..half * h + h].iter_mut().zip(&acc[persp * h..persp * h + h]) {
                 *o = (*a).clamp(0, QA as i16);
@@ -307,6 +341,13 @@ impl Network {
         x[2 * h + 1] = q(pos.gold[stm ^ 1], threshold);
         x[2 * h + 2] = q(pos.mines[stm], 10);
         x[2 * h + 3] = q(pos.mines[stm ^ 1], 10);
+        if self.num_dense > 4 {
+            let (t0, t1) = (turns_to_gold(pos, stm), turns_to_gold(pos, stm ^ 1));
+            x[2 * h + 4] = q(1, t0 + 1);
+            x[2 * h + 5] = q(1, t1 + 1);
+            x[2 * h + 6] = q(t0.min(RACE_HORIZON), RACE_HORIZON);
+            x[2 * h + 7] = q(t1.min(RACE_HORIZON), RACE_HORIZON);
+        }
         let inputs = &x[..ins];
 
         // First dense layer: integer dot products (exact, so the compiler may vectorise freely)
@@ -324,7 +365,7 @@ impl Network {
             y2[j] = (s + self.l2_b[j]).clamp(0.0, 1.0);
         }
         let s: f32 = self.out_w.iter().zip(&y2[..self.l3]).map(|(a, b)| a * b).sum();
-        s + self.out_b
+        s + self.out_b + self.race_term(pos)
     }
 
     /// The search's (quantised) evaluation computed from scratch; equals `evaluate_incremental`.

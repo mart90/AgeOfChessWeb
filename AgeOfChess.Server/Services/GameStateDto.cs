@@ -33,7 +33,9 @@ public record GameStateDto(
     double ComputerMistakeRate,
     double ComputerMistakeMaxLoss,
     bool BiddingEnabled,
-    bool BiddingInProgress
+    bool BiddingInProgress,
+    /// <summary>Standing draw offer: "w", "b" or null.</summary>
+    string? DrawOfferBy
 );
 
 public record SquareDto(
@@ -89,6 +91,7 @@ public static class GameStateDtoBuilder
             ComputerLevels.Get(game.Settings.ComputerLevel)?.MistakeRate ?? 0,
             ComputerLevels.Get(game.Settings.ComputerLevel)?.MistakeMaxLoss ?? 0,
             game.BiddingEnabled,
-            game.Bidding != null && !game.Bidding.BothBid
+            game.Bidding != null && !game.Bidding.BothBid,
+            game.DrawOfferByWhite switch { true => "w", false => "b", null => null }
         );
 }

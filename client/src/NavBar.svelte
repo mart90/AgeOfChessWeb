@@ -83,6 +83,7 @@
         <button class="mobile-menu-item" onclick={() => navTo('/')}>Play</button>
         <button class="mobile-menu-item" onclick={() => navTo('/watch')}>Watch</button>
         <button class="mobile-menu-item" onclick={() => navTo('/analyze')}>Analyze</button>
+        <button class="mobile-menu-item sub-item" onclick={() => navTo('/library')}>My library</button>
         <button class="mobile-menu-item" onclick={() => navTo('/rules')}>Rules</button>
         <button class="mobile-menu-item" onclick={() => navTo('/about')}>About</button>
       </div>
@@ -90,7 +91,7 @@
   </div>
 
   <button class="logo-btn" onclick={() => navigate('/')}>
-    <img src="/assets/other/logo.png" alt="" class="logo-img" />
+    <img src="/assets/other/logo.svg" alt="" class="logo-img" />
     <span class="logo-text"><span class="logo-gold">Goldrush</span> Gambit</span>
   </button>
 
@@ -98,7 +99,17 @@
   <div class="nav-center">
     <button class="nav-link" onclick={() => navigate('/')}>Play</button>
     <button class="nav-link" onclick={() => navigate('/watch')}>Watch</button>
-    <button class="nav-link" onclick={() => navigate('/analyze')}>Analyze</button>
+    <!-- Analyze opens the analysis board; hovering it shows its submenu -->
+    <div class="nav-group">
+      <button class="nav-link" onclick={() => navigate('/analyze')}>Analyze</button>
+      <div class="submenu">
+        <div class="submenu-box">
+          <button class="dropdown-btn dropdown-item" onclick={() => navigate('/library')}>
+            My library
+          </button>
+        </div>
+      </div>
+    </div>
     <button class="nav-link" onclick={() => navigate('/rules')}>Rules</button>
     <button class="nav-link" onclick={() => navigate('/about')}>About</button>
   </div>
@@ -109,10 +120,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M9.97 3.85 L10.36 1.12 L13.64 1.12 L14.03 3.85 L16.33 4.80 L18.54 3.15 L20.85 5.46 L19.20 7.67 L20.15 9.97 L22.88 10.36 L22.88 13.64 L20.15 14.03 L19.20 16.33 L20.85 18.54 L18.54 20.85 L16.33 19.20 L14.03 20.15 L13.64 22.88 L10.36 22.88 L9.97 20.15 L7.67 19.20 L5.46 20.85 L3.15 18.54 L4.80 16.33 L3.85 14.03 L1.12 13.64 L1.12 10.36 L3.85 9.97 L4.80 7.67 L3.15 5.46 L5.46 3.15 L7.67 4.80 Z M12 8.6 A3.4 3.4 0 1 0 12 15.4 A3.4 3.4 0 1 0 12 8.6 Z"/></svg>
       </button>
       {#if settingsOpen}
-        <div class="dropdown">
-          <label class="dropdown-item">
-            <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
+        <div class="dropdown settings-dropdown">
+          <label class="dropdown-item toggle-item">
             Show coordinates
+            <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
           </label>
           <div class="dropdown-item theme-item">
             <label for="board-theme" class="volume-label">Board</label>
@@ -174,7 +185,7 @@
       </div>
     {:else}
       <button class="nav-btn" onclick={() => navigate('/register')}>Register</button>
-      <button class="nav-btn" onclick={() => navigate('/login')}>Log in</button>
+      <button class="nav-btn" onclick={() => navigate('/login')}>Sign in</button>
     {/if}
   </div>
 </nav>
@@ -241,6 +252,7 @@
     padding: 0.55rem 1rem;
   }
   .mobile-menu-item:hover { background: var(--line); }
+  .mobile-menu-item.sub-item { padding-left: 2rem; font-size: 1rem; color: var(--fg-2); }
 
   /* ── Desktop nav links ── */
   .nav-center {
@@ -258,6 +270,30 @@
     border-radius: 4px;
   }
   .nav-link:hover { background: var(--line); color: var(--fg); }
+
+  /* Nav item with a hover submenu. The submenu's top padding bridges the gap below the link,
+     so the pointer can move down into it without the menu closing. */
+  .nav-group { position: relative; }
+  .submenu {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: 100%;
+    padding-top: 6px;
+    z-index: 300;
+  }
+  .nav-group:hover .submenu,
+  .nav-group:has(:focus-visible) .submenu { display: block; }   /* keyboard; not after a mouse click */
+  .nav-group:hover > .nav-link { background: var(--line); color: var(--fg); }
+  .submenu-box {
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    padding: 0.4rem 0;
+    min-width: 160px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+  .submenu .dropdown-item { padding: 0.55rem 1rem; font-size: 1rem; white-space: nowrap; }
 
   .logo-btn {
     display: flex;
@@ -277,6 +313,8 @@
     font-family: var(--font-display);
     font-size: 1.3rem;
     letter-spacing: 0.02em;
+    /* Flex centring uses the line box, which reserves descender space small caps don't use */
+    transform: translateY(-0.05em);
   }
   .logo-gold {
     color: #d4a017;
@@ -325,6 +363,11 @@
     user-select: none;
   }
   .dropdown-item:hover { background: var(--line); }
+
+  /* Settings menu: roomier than the user menu */
+  .settings-dropdown { padding: 0.6rem 0; min-width: 240px; }
+  .settings-dropdown .dropdown-item { padding: 0.7rem 1.1rem; gap: 0.9rem; }
+  .toggle-item { justify-content: space-between; }
 
   .theme-item { cursor: default; justify-content: space-between; }
   .theme-item:hover { background: none; }
