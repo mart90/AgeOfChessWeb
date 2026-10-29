@@ -124,13 +124,17 @@ def apply_db_migrations(repo):
     settings = json.loads((DEPLOY_PATH / 'appsettings.Production.json').read_text(encoding='utf-8-sig'))
     conn = dict(part.split('=', 1) for part in settings['ConnectionStrings']['Default'].split(';') if '=' in part)
     conn = {k.strip().lower(): v for k, v in conn.items()}
-    # Credentials go in a private option file, not on the command line
+    # The idempotent scripts create stored procedures, which the app's user may not be allowed to;
+    # use MySQL's root (socket login, as this script runs as root) when it works.
+    as_root = subprocess.run('mysql -e "SELECT 1"', shell=True, capture_output=True).returncode == 0
+    # Otherwise the app's credentials go in a private option file, not on the command line
     with tempfile.NamedTemporaryFile('w', suffix='.cnf', delete=False) as cnf:
         cnf.write(f'[client]\nhost={conn["server"]}\nuser={conn["user"]}\npassword="{conn["password"]}"\n')
     try:
         os.chmod(cnf.name, 0o600)
+        mysql = 'mysql' if as_root else f'mysql --defaults-extra-file={cnf.name}'
         for script in scripts:
-            run(f'mysql --defaults-extra-file={cnf.name} {conn["database"]} < {script}')
+            run(f'{mysql} {conn["database"]} < {script}')
     finally:
         os.unlink(cnf.name)
 
