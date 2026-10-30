@@ -309,7 +309,7 @@ impl Position {
             terrain: [Terrain::Open; MAX_SQ],
             occ: [EMPTY; MAX_SQ],
             mine_owner: [0; MAX_SQ],
-            gold: [0, 6],
+            gold: [0, 5],
             frac: [0, 0],
             mines: [0, 0],
             king: [usize::MAX; 2],

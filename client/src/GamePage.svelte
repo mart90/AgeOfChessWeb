@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { startHub } from './lib/hub.js';
+  import { getGameHub, onConnected, onConnectionStatus } from './lib/hub.js';
   import { navigate as navigateTo } from './lib/navigate.js';
   import Board from './Board.svelte';
   import MoveList from './MoveList.svelte';
@@ -308,7 +308,8 @@
         mapMode: seed.startsWith('r') ? 'r' : 'm',
         mapSeed: playAgainSameBoard ? seed : null,
         level: gameState.computerLevel,
-        color: isWhite ? 'white' : 'black',
+        // Without bidding colors swap, as in a PvP rematch; with bidding the bid decides
+        color: (gameState.biddingEnabled ? isWhite : !isWhite) ? 'white' : 'black',
         biddingEnabled: gameState.biddingEnabled,
       });
       localStorage.setItem(`token_${newId}`, token);
@@ -844,6 +845,11 @@
 
   // ── SignalR ───────────────────────────────────────────────────────────────
 
+  // onMount below is async, so Svelte ignores its return value: clean up here instead
+  let destroyed = false;
+  const cleanups = [];
+  onDestroy(() => { destroyed = true; cleanups.forEach(fn => fn()); });
+
   onMount(async () => {
     preloadClockSound();
     // Global event listeners and clock — needed for both replay and live paths.
@@ -856,6 +862,7 @@
       window.removeEventListener('pointerup',   globalPointerUp);
       clearInterval(clockInterval);
     }
+    cleanups.push(teardown);
 
     // ── Probe: is this game live or finished? ─────────────────────────────────
     let probe;
@@ -867,6 +874,7 @@
       statusMsg = 'Could not connect to server.';
       return teardown;
     }
+    if (destroyed) return;
 
     // ── Server-restarted game ─────────────────────────────────────────────────
     if (probe.serverRestarted) {
@@ -907,51 +915,19 @@
       isWhite     = resolved.white;
     }
 
-    hub = await startHub();
+    // Handlers live on the page-wide connection: remove them when leaving this game
+    hub = getGameHub();
+    const on = (event, fn) => { hub.on(event, fn); cleanups.push(() => hub.off(event, fn)); };
 
-    hub.onreconnecting(() => {
-      statusMsg = 'Connection lost — reconnecting…';
-    });
-    hub.onreconnected(async () => {
-      // Re-probe to check if the game is still live (server may have restarted)
-      try {
-        const res = await fetch(`/api/game/${gameId}`);
-        if (res.ok) {
-          const reprobe = await res.json();
-          if (reprobe.serverRestarted) {
-            statusMsg = 'This game was interrupted when the server restarted.';
-            return;
-          }
-          if (!('squares' in reprobe)) {
-            // Game finished while we were disconnected — show result
-            statusMsg = formatResult(reprobe.result) || 'Game ended.';
-            return;
-          }
-          // Game is still live — clear any stale bidding UI from before the disconnect.
-          // The hub will re-send BiddingStarted when both players reconnect if bidding
-          // is still genuinely in progress.
-          biddingState = null;
-        }
-      } catch { /* ignore probe failure, try to rejoin anyway */ }
+    cleanups.push(onConnectionStatus((status) => {
+      if (status === 'disconnected') statusMsg = 'Connection lost — reconnecting…';
+    }));
 
-      try {
-        if (isSpectator) {
-          await hub.invoke('WatchGame', gameId);
-        } else if (playerToken) {
-          await hub.invoke('JoinGame', playerToken);
-          if (!gameState) statusMsg = 'Reconnected — waiting for opponent…';
-        }
-      } catch {
-        statusMsg = 'Reconnected, but failed to rejoin game — please refresh.';
-      }
-    });
-    hub.onclose(() => {
-      statusMsg = 'Connection lost — please refresh the page.';
-    });
-
-    hub.on('GameStarted', async (state) => {
+    on('GameStarted', async (state) => {
+      // Rejoining a finished game (to stay reachable for a rematch): keep the analysis as it is
+      if (gameState?.gameEnded) return;
       computerSearchPly = -1;
-      if (biddingState == null) {
+      if (biddingState == null && !gameState) {
         playSound('game_started')
       }
       // If bidding just resolved and we're the winner, capture the opponent's bid for acknowledgement
@@ -962,7 +938,14 @@
         pendingBidReveal = { opponentBid };
       }
 
-      // If rejoining a game with moves, fetch full history for replay
+      // Rejoined without missing a move: the history we have is complete
+      if (state.moves?.length > 0 && stateHistory.length === state.moves.length + 1) {
+        stateHistory = [...stateHistory.slice(0, -1), state];
+        gameState = state; biddingState = null; syncLocalTimes(state); statusMsg = ''; inviteUrl = '';
+        drawOfferBy = state.drawOfferBy ?? null;
+        return;
+      }
+      // If joining a game with moves, fetch full history for replay
       if (state.moves?.length > 0) {
         try {
           const r = await fetch(`/api/game/${gameId}/replay`);
@@ -984,7 +967,7 @@
       gameState = state; biddingState = null; syncLocalTimes(state); statusMsg = ''; inviteUrl = '';
       drawOfferBy = state.drawOfferBy ?? null;
     });
-    hub.on('StateUpdated', (state) => {
+    on('StateUpdated', (state) => {
       // One state per move (stateHistory[n] = after n moves); an update without a new move
       // (e.g. a clock sync) replaces the last one.
       stateHistory = state.moves.length > (gameState?.moves.length ?? -1)
@@ -1014,7 +997,7 @@
       if (replayIndex !== null) replayIndex = null;
       keepInteractionAfterUpdate();
     });
-    hub.on('GameEnded', async (state) => {
+    on('GameEnded', async (state) => {
       // Same bookkeeping as StateUpdated (a resign/timeout adds no move: replace the last state)
       let history = state.moves.length > (gameState?.moves.length ?? -1)
         ? [...stateHistory, state]
@@ -1035,29 +1018,29 @@
       moveTree = buildFromMainline(state.moves, stateHistory);
       currentNode = lastMainlineNode(moveTree);
     });
-    hub.on('Error', (msg) => {
+    on('Error', (msg) => {
       console.warn('[GameHub]', msg);
     });
-    hub.on('ChatMessage', (msg) => {
+    on('ChatMessage', (msg) => {
       chatMessages = [...chatMessages, msg];
       if (activeTab !== 'chat') unreadChat++;
     });
-    hub.on('ChatHistory', (msgs) => {
+    on('ChatHistory', (msgs) => {
       chatMessages = msgs;
     });
-    hub.on('BiddingStarted', (b) => { 
+    on('BiddingStarted', (b) => { 
       biddingState = b; 
       bidSubmitted = isWhite ? b.creatorBidPlaced : b.joinerBidPlaced; 
       wasCreator = isWhite; 
       statusMsg = ''; inviteUrl = '';
       playSound('game_started') 
     });
-    hub.on('BidPlaced',      (b) => { biddingState = b; });
-    hub.on('ColorAssigned',  (white) => {
+    on('BidPlaced',      (b) => { biddingState = b; });
+    on('ColorAssigned',  (white) => {
       isWhite = white;
       localStorage.setItem(`color_${gameId}`, white ? 'white' : 'black');
     });
-    hub.on('RematchRequested', (requestedByWhite, wantsSameSeed) => {
+    on('RematchRequested', (requestedByWhite, wantsSameSeed) => {
       if (requestedByWhite === isWhite) {
         rematchRequested = true;
       } else {
@@ -1066,7 +1049,7 @@
         sameSeedRematch = wantsSameSeed; // Pre-check the box if opponent wants same board
       }
     });
-    hub.on('DrawOfferChanged', (by, declined) => {
+    on('DrawOfferChanged', (by, declined) => {
       if (!isSpectator) {
         if (declined && drawOfferBy === myColor) statusMsg = DRAW_MSG.declined;
         else if (by && by !== myColor) statusMsg = DRAW_MSG.offered;
@@ -1074,23 +1057,58 @@
       }
       drawOfferBy = by;
     });
-    hub.on('RematchReady', (newGameId, newToken, newIsWhite) => {
+    on('RematchReady', (newGameId, newToken, newIsWhite) => {
       localStorage.setItem(`token_${newGameId}`, newToken);
       localStorage.setItem(`color_${newGameId}`, newIsWhite ? 'white' : 'black');
       navigateTo(`/game/${newGameId}`);
     });
 
-    if (isSpectator) {
-      await hub.invoke('WatchGame', gameId);
-    } else {
-      await hub.invoke('JoinGame', playerToken);
-      if (!gameState) {
-        inviteUrl = localStorage.getItem(`inviteUrl_${gameId}`) ?? '';
-        statusMsg = isWhite
-          ? 'Share the invite link, then wait for your opponent…'
-          : 'Waiting for the game to start…';
+    // (Re)join the game on every connect. The server sends the current state on joining.
+    let joinedBefore = false;
+    async function join() {
+      const rejoin = joinedBefore;
+      joinedBefore = true;
+      if (rejoin) {
+        // Re-probe to check if the game is still live (server may have restarted)
+        try {
+          const res = await fetch(`/api/game/${gameId}`);
+          if (res.ok) {
+            const reprobe = await res.json();
+            if (reprobe.serverRestarted) {
+              statusMsg = 'This game was interrupted when the server restarted.';
+              return;
+            }
+            if (!('squares' in reprobe)) {
+              // Game finished and archived while we were disconnected — show result
+              statusMsg = formatResult(reprobe.result) || 'Game ended.';
+              return;
+            }
+            // Game is still live — clear any stale bidding UI from before the disconnect.
+            // The hub re-sends BiddingStarted if bidding is genuinely still in progress.
+            if (!gameState?.gameEnded) biddingState = null;
+          }
+        } catch { /* ignore probe failure, try to rejoin anyway */ }
+        if (destroyed) return;
+      }
+
+      try {
+        if (isSpectator) {
+          await hub.invoke('WatchGame', gameId);
+        } else {
+          await hub.invoke('JoinGame', playerToken);
+          if (!gameState) {
+            inviteUrl = rejoin ? inviteUrl : localStorage.getItem(`inviteUrl_${gameId}`) ?? '';
+            statusMsg = rejoin ? 'Reconnected — waiting for opponent…'
+              : isWhite ? 'Share the invite link, then wait for your opponent…'
+              : 'Waiting for the game to start…';
+          }
+        }
+        if (gameState?.gameEnded) statusMsg = formatResult(gameState.result);
+      } catch {
+        // Connection dropped again: this runs again once it's back
       }
     }
+    cleanups.push(onConnected(join));
 
     return teardown;
   });

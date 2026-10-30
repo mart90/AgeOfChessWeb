@@ -206,7 +206,7 @@ public class ServerGame : Game
             else                          BlackElo = level.Elo;
         }
 
-        // With bidding the gold start is determined by the bid outcome, not the fixed 10g default
+        // With bidding the gold start is determined by the bid outcome, not the fixed 5g default
         if (settings.BiddingEnabled)
             Black.Gold = 0;
 

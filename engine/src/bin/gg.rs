@@ -15,13 +15,12 @@
 //!               [--opening-nodes N --opening-plies P]  (both sides play the first P plies with N nodes)
 //!               [--bid-params P.json]  (eval params for the bidder's analysis only)
 //!               (A bids with goldrush_engine::bid, B always bids the fixed amount; both play with N nodes)
-//!   gg gendata  --seeds F --out FILE [--seed-offset N] [--games N] [--threads T] [--nodes N] [--random-plies K]
-//!               [--random-multipv M] [--random-margin GOLD] [--random-nodes N] [--first-game-id I]
+//!   gg gendata  --seeds F --out FILE [--seed-offset N] [--games N] [--threads T] [--nodes N] [--first-game-id I]
 //!               [--rng-seed S] [--overwrite] [--nnue NET]  (training data for the eval network, see docs/training.md)
 //!   gg nncheck  --net NET.ggnn --check CHECK.bin  (engine network vs PyTorch outputs, eval speed)
 //!   Networks: --nnue NET.ggnn (bench/selfplay/play), --a-nnue/--b-nnue (match): use the evaluation
 //!             network instead of the hand-written eval (training/export.py writes NET.ggnn)
-//!   Common: --black-gold G  (Black's starting gold, default 6)
+//!   Common: --black-gold G  (Black's starting gold, default 5)
 //!           --classic  (rules before 2026-10-26: no placements next to queens, queen 72)
 //!           --queen-drops LETTERS [--queen-cost C]  (custom: pieces that may be placed next to a
 //!           queen, e.g. "rbn" or ""; see position::Rules)
@@ -37,8 +36,8 @@ use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// Black's starting gold (`--black-gold`, default 6 like the server).
-static BLACK_GOLD: AtomicI32 = AtomicI32::new(6);
+/// Black's starting gold (`--black-gold`, default 5 like the server; 6 before 2026-10-30).
+static BLACK_GOLD: AtomicI32 = AtomicI32::new(5);
 /// Rule variant for every game (`--queen-drops`, `--queen-cost`).
 static RULES: std::sync::OnceLock<Rules> = std::sync::OnceLock::new();
 
@@ -505,6 +504,11 @@ fn run_match(a: &Args) {
         start.elapsed().as_secs_f64()
     );
     println!("results: {:?}", res);
+    // Colour balance (each board is played with both colours, so engine strength cancels out)
+    let count = |c: char| t.3.iter().filter(|(k, _)| k.starts_with(c)).map(|(_, v)| *v).sum::<u32>();
+    let white = (count('w') as f64 + 0.5 * t.2 as f64) / n.max(1) as f64;
+    println!("White {:.1}% ± {:.1} (Black starting gold {})", 100.0 * white,
+             196.0 * (white * (1.0 - white) / n.max(1) as f64).sqrt(), BLACK_GOLD.load(Ordering::Relaxed));
 }
 
 /// Bidding engine (A) vs a fixed bidder (B). Each seed is played twice, alternating which side
@@ -656,8 +660,21 @@ fn elo_margin(w: u32, l: u32, d: u32) -> f64 {
 fn load_nnue(a: &Args, prefix: &str) -> Option<Arc<goldrush_engine::nnue::Network>> {
     let specific = if prefix.is_empty() { None } else { a.get(&format!("{prefix}-nnue")) };
     let path = specific.or(a.get("nnue"))?;
-    let net = goldrush_engine::nnue::Network::load(path).unwrap_or_else(|e| panic!("{e}"));
-    eprintln!("{}: network {path} ({}x{}, hidden {}, K {:.0})",
+    let mut net = goldrush_engine::nnue::Network::load(path).unwrap_or_else(|e| panic!("{e}"));
+    // Moves-left head settings: --a-ml-weight / --ml-weight (eval units per ply), --a-ml-cap / --ml-cap
+    let opt = |k: &str| {
+        let specific = if prefix.is_empty() { None } else { a.get(&format!("{prefix}-{k}")) };
+        specific.or(a.get(k)).map(|v| v.parse::<f32>().unwrap_or_else(|_| panic!("--{k} NUMBER")))
+    };
+    if let Some(w) = opt("ml-weight") {
+        assert!(net.has_ml, "--ml-weight: {path} has no moves-left head");
+        net.ml_weight = w;
+    }
+    if let Some(c) = opt("ml-cap") {
+        net.ml_cap = c;
+    }
+    let ml = if net.has_ml { format!(", moves-left weight {} cap {}", net.ml_weight, net.ml_cap) } else { String::new() };
+    eprintln!("{}: network {path} ({}x{}, hidden {}, K {:.0}{ml})",
               if prefix.is_empty() { "engine" } else { prefix }, net.board_size, net.board_size, net.hidden, net.k);
     Some(Arc::new(net))
 }
@@ -668,16 +685,27 @@ fn run_nncheck(a: &Args) {
     use goldrush_engine::eval::evaluate;
     use goldrush_engine::nnue::Network;
     use goldrush_engine::traindata::position_from_record;
-    let net = Network::load(a.get("net").expect("--net FILE")).unwrap_or_else(|e| panic!("{e}"));
+    let mut net = Network::load(a.get("net").expect("--net FILE")).unwrap_or_else(|e| panic!("{e}"));
     let b = std::fs::read(a.get("check").expect("--check FILE")).expect("read check file");
     assert_eq!(&b[0..4], b"GGNC", "not a check file");
     let u = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize;
     let (count, rec_size, size) = (u(4), u(8), u(12));
+    // Per record: the record, f32 logit, and with a moves-left head f32 moves-left output
+    let stride = rec_size + if net.has_ml { 8 } else { 4 };
+    // Value comparisons first, without the moves-left adjustment
+    let ml_weight = net.ml_weight;
+    net.ml_weight = 0.0;
     let mut positions = Vec::with_capacity(count);
     let (mut max_diff, mut sum_diff, mut max_eval_diff) = (0f32, 0f64, 0i32);
+    let (mut ml_max, mut ml_qmax) = (0f32, 0f32);
     for i in 0..count {
-        let at = 16 + i * (rec_size + 4);
+        let at = 16 + i * stride;
         let pos = position_from_record(&b[at..at + rec_size], size);
+        if net.has_ml {
+            let expected = f32::from_le_bytes(b[at + rec_size + 4..at + rec_size + 8].try_into().unwrap());
+            ml_max = ml_max.max((net.moves_left_raw(&pos) - expected).abs());
+            ml_qmax = ml_qmax.max((net.moves_left_quantized(&pos) - expected).abs());
+        }
         let expected = f32::from_le_bytes(b[at + rec_size..at + rec_size + 4].try_into().unwrap());
         let got = net.logit(&pos);
         let d = (got - expected).abs();
@@ -688,11 +716,16 @@ fn run_nncheck(a: &Args) {
     }
     println!("{count} positions: max |logit diff| {max_diff:.2e}, mean {:.2e}, max eval diff {max_eval_diff} (1 gold = 10)",
              sum_diff / count.max(1) as f64);
-    println!("{}", if max_diff < 1e-3 { "MATCH: engine and PyTorch agree" } else { "MISMATCH" });
+    let ml_ok = !net.has_ml || ml_max < 1e-3;
+    println!("{}", if max_diff < 1e-3 && ml_ok { "MATCH: engine and PyTorch agree" } else { "MISMATCH" });
+    if net.has_ml {
+        println!("moves-left head: max diff {:.2e} plies (f32), {:.2} plies (quantised search path)",
+                 ml_max * goldrush_engine::nnue::ML_SCALE, ml_qmax * goldrush_engine::nnue::ML_SCALE);
+    }
     // The search uses 16-bit integer arithmetic: small rounding differences are expected
     let (mut qmax, mut qsum) = (0i32, 0f64);
     for (i, pos) in positions.iter().enumerate() {
-        let at = 16 + i * (rec_size + 4);
+        let at = 16 + i * stride;
         let expected = f32::from_le_bytes(b[at + rec_size..at + rec_size + 4].try_into().unwrap());
         let d = (net.evaluate_quantized(pos) - (expected * net.k).round() as i32).abs();
         qmax = qmax.max(d);
@@ -721,6 +754,8 @@ fn run_nncheck(a: &Args) {
     println!("speed: network {net_us:.2} µs/eval, hand-written {hand_us:.2} µs/eval ({:.1}x)  [{acc}]", net_us / hand_us);
 
     // Searches: incremental evaluation must equal from-scratch evaluation everywhere in the tree
+    // (with the moves-left adjustment: --ml-weight, else the file's default)
+    net.ml_weight = a.get("ml-weight").map(|v| v.parse().expect("--ml-weight")).unwrap_or(ml_weight);
     let net = Arc::new(net);
     let searches = positions.len().min(a.num("searches", 60));
     let limits = Limits { max_nodes: Some(a.num("nodes", 20_000)), ..Default::default() };
@@ -790,22 +825,20 @@ fn run_gendata(a: &Args) {
     let threads = a.num("threads", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
     let nodes: u64 = a.num("nodes", 20_000);
     let limits = Limits { max_nodes: Some(nodes), ..Default::default() };
-    // Opening diversity: each game plays its first k ∈ [0, random-plies] plies by picking a random
-    // line among the top `random-multipv` that is at most `random-margin` gold worse than the best.
-    let random_plies: usize = a.num("random-plies", 8);
-    let random_multipv: usize = a.num("random-multipv", 4);
-    let random_margin: f64 = a.num("random-margin", 3.0);
-    let random_limits = Limits { max_nodes: Some(a.num("random-nodes", (nodes / 4).max(1000))), ..Default::default() };
+    // No random opening moves (removed 2026-10-30, Mart: pointless here; every board is a new
+    // random map, which gives the diversity). The record flag stays for older files.
+    for old in ["random-plies", "random-multipv", "random-margin", "random-nodes", "rng-seed"] {
+        assert!(a.get(old).is_none(), "--{old}: random opening moves were removed from gendata");
+    }
     let max_plies = a.num("max-plies", 400usize);
     let first_game_id: u32 = a.num("first-game-id", 0);
-    let rng_seed: u64 = a.num("rng-seed", 1);
     let out_path = a.get("out").expect("--out FILE").to_string();
     if std::path::Path::new(&out_path).exists() && a.get("overwrite").is_none() {
         eprintln!("{out_path} exists; pass --overwrite to replace it");
         std::process::exit(1);
     }
     if games > seeds.len() {
-        eprintln!("warning: {games} games but only {} seeds; boards will repeat (with different openings)", seeds.len());
+        eprintln!("warning: {games} games but only {} seeds; boards (and games) will repeat", seeds.len());
     }
 
     let first = start_position(&seeds[0]);
@@ -817,8 +850,6 @@ fn run_gendata(a: &Args) {
 
     println!("gendata: {games} games, {threads} threads, {nodes} nodes/move, board {size}x{size}, black gold {}",
              BLACK_GOLD.load(Ordering::Relaxed));
-    println!("  openings: 0-{random_plies} random plies (top {random_multipv} within {random_margin} gold, {:?} nodes/line)",
-             random_limits.max_nodes.unwrap());
     println!("  output: {out_path} ({} bytes/position)", traindata::record_size(size));
 
     #[derive(Default)]
@@ -827,7 +858,6 @@ fn run_gendata(a: &Args) {
         positions: u64,
         in_check: u64,
         tactical: u64,
-        random: u64,
         results: HashMap<String, u32>,
         plies: u64,
         depth_sum: u64,
@@ -862,32 +892,17 @@ fn run_gendata(a: &Args) {
                     pos.gold[BLACK] = BLACK_GOLD.load(Ordering::Relaxed);
                     s.clear();
                     let game_id = first_game_id + i as u32;
-                    let mut rng = (rng_seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1;
-                    rng_next(&mut rng);
-                    let k = (rng_next(&mut rng) * (random_plies + 1) as f64) as usize;
                     let mut records: Vec<Record> = Vec::with_capacity(160);
                     let mut moves = Vec::new();
                     let mut outcome = Outcome::Ongoing;
-                    let (mut depth_sum, mut bought, mut random) = (0u64, [0u64; 5], 0u64);
-                    for ply in 0..max_plies {
-                        let (m, score, depth, is_random) = if ply < k {
-                            let lines = s.search_multi(&mut pos, random_limits, random_multipv);
-                            if lines.is_empty() {
-                                break;
-                            }
-                            let best = lines[0].score;
-                            let ok: Vec<&_> = lines.iter().filter(|l| l.best.is_some() && (best - l.score) as f64 <= random_margin * 10.0).collect();
-                            let pick = ok[(rng_next(&mut rng) * ok.len() as f64) as usize % ok.len()];
-                            (pick.best, best, lines[0].depth, pick.best != lines[0].best)
-                        } else {
-                            let r = s.search(&mut pos, limits);
-                            (r.best, r.score, r.depth, false)
-                        };
-                        let Some(m) = m else { break };
+                    let (mut depth_sum, mut bought) = (0u64, [0u64; 5]);
+                    for _ply in 0..max_plies {
+                        let r = s.search(&mut pos, limits);
+                        let (score, depth) = (r.score, r.depth);
+                        let Some(m) = r.best else { break };
                         let static_eval = goldrush_engine::eval::evaluate(&pos, &s.params);
-                        records.push(Record::new(&pos, score, static_eval, Some(m), depth, game_id, is_random));
+                        records.push(Record::new(&pos, score, static_eval, Some(m), depth, game_id, false));
                         depth_sum += depth as u64;
-                        random += is_random as u64;
                         if m.is_placement() {
                             if let Some(j) = SHOP.iter().position(|&(kd, _)| kd == m.place) {
                                 bought[j] += 1;
@@ -923,7 +938,6 @@ fn run_gendata(a: &Args) {
                     t.positions += records.len() as u64;
                     t.in_check += records.iter().filter(|r| r.bytes[size * size + 1] & traindata::FLAG_IN_CHECK != 0).count() as u64;
                     t.tactical += records.iter().filter(|r| r.bytes[size * size + 1] & traindata::FLAG_BEST_TACTICAL != 0).count() as u64;
-                    t.random += random;
                     *t.results.entry(result_str(outcome)).or_default() += 1;
                     t.plies += records.len() as u64;
                     t.depth_sum += depth_sum;
@@ -970,7 +984,6 @@ fn run_gendata(a: &Args) {
     println!("  Avg depth:             {:.2}", t.depth_sum as f64 / t.positions.max(1) as f64);
     println!("  In check:              {:.1}%", pct(t.in_check));
     println!("  Best move tactical:    {:.1}%", pct(t.tactical));
-    println!("  Random opening moves:  {:.1}%", pct(t.random));
     println!("  Placements % (Q R B N P): {:.2} / {:.2} / {:.2} / {:.2} / {:.2}",
              pct(t.bought[0]), pct(t.bought[1]), pct(t.bought[2]), pct(t.bought[3]), pct(t.bought[4]));
     println!("{line}");
@@ -980,7 +993,7 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let cmd = argv.get(1).map(|s| s.as_str()).unwrap_or("help");
     let a = Args::parse(&argv[1..]);
-    BLACK_GOLD.store(a.num("black-gold", 6), Ordering::Relaxed);
+    BLACK_GOLD.store(a.num("black-gold", 5), Ordering::Relaxed);
     if a.get("classic").is_some() {
         RULES.set(Rules::classic()).unwrap();
     } else if let Some(d) = a.get("queen-drops") {

@@ -74,7 +74,7 @@
 </script>
 
 <main>
-  <h1>Register</h1>
+  <h1>Sign up</h1>
 
   <form onsubmit={handleRegister}>
     <label>
@@ -121,7 +121,7 @@
     {#if error}<p class="error">{error}</p>{/if}
 
     <button type="submit" disabled={loading}>
-      {loading ? 'Creating account…' : 'Register'}
+      {loading ? 'Creating account…' : 'Sign up'}
     </button>
   </form>
 

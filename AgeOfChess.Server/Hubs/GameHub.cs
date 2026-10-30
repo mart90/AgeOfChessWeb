@@ -476,6 +476,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         await Clients.Group(game.GroupName).SendAsync("ChatMessage", msg);
     }
 
+    /// <summary>Lets a client check its connection is alive (e.g. when a phone brings the page back).</summary>
+    public Task Ping() => Task.CompletedTask;
+
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         if (Context.Items.TryGetValue("playerToken", out var tokenObj) && tokenObj is string playerToken)

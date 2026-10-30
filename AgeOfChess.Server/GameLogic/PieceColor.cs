@@ -13,6 +13,6 @@ public class PieceColor
         IsWhite = isWhite;
         PlayedByStr = playedByStr;
         IsActive = isWhite;
-        Gold = isWhite ? 0 : 6;
+        Gold = isWhite ? 0 : 5;   // Black's starting gold (5 since 2026-10-30, was 6)
     }
 }

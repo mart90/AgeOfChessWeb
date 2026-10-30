@@ -168,7 +168,11 @@ cd engine && ./target/release/gg match --a-nnue ../training/runs/m10_nn1/net.ggn
 | m10_nn4 | + 1.51M by nn3g500 (9.3M), race residual 500 | +16 ± 17 vs nn3g500 | +466 ± 35 |
 | m10_nn4w | only the 6.1M network-played positions (nn1–nn4 files), race 500 | −4 ± 17 vs nn4 | +420 ± 31 |
 | m10_nn5 | window: nn2–nn5 files (6.1M), + 1.52M by nn4, race 500 | +7 ± 17 vs nn4 | +456 ± 34 |
-| **m10_nn6** (current) | all 10.8M, + 1.52M by nn3, no race term, v1 inputs | +80 ± 17 vs nn3, +31 ± 17 vs nn5 | +521 ± 41 |
+| m10_nn6 | all 10.8M, + 1.52M by nn3, no race term, v1 inputs | +80 ± 17 vs nn3, +31 ± 17 vs nn5 | +521 ± 41 |
+| m10_nn7 | all 12.3M, + 1.58M by nn6, no race term | +24 ± 17 vs nn6 | +486 ± 36 |
+| m10_nn8 | all 13.8M, + 1.54M by nn7 | +35 ± 17 vs nn7, +128 ± 18 vs nn3 | — |
+| m10_nn9 | all 15.4M, + 1.60M by nn8 | −2 ± 17 vs nn8, +113 ± 18 vs nn3 | — (not promoted) |
+| **m10_nn10** (current) | all 17.0M, + 1.60M by nn8 | +26 ± 17 vs nn8, +158 ± 19 vs nn3 | — |
 
 nn2's self-play ended in a gold victory only 9% of the time (3m: 42%, nn1: 35%). nn3 gains on
 nn2 but not on the hand-written eval (92% score, where Elo estimates compress) — use a stronger
@@ -261,6 +265,102 @@ threads = physical cores), 800 holdout boards × 2: **1451–146–3 (90.8%), +3
 +521). Avg depth 6.0 (network) vs 6.5 (hand-written). `engine/testdata/games_nn6_vs_hand_50ms.jsonl`.
 On the ladder (hand-written 50 ms ≈ Level 6, ~1800; 500 ms was +521 over it) the network at 50 ms
 is roughly Level 7 strength — before WASM SIMD, so the browser gap will be smaller until then.
+
+Iteration 7 (2026-10-29): `nn7_m10_1p5m.bin`, boards 112500–126499, driven by nn6 (18.5% gold
+wins in self-play, up from 13.2%); `m10_nn7` on all 12.3M (best epoch 32). **vs nn6 +24 ± 17,
+vs hand-written +486 ± 36** (47 gold losses, 8 confident; 20 draws at the 400-ply cap). Racing
+again without any race term: nn7 wins 366 on gold vs nn6 (nn6: 101) while nn6 mates nn7 642
+times (nn7 mates nn6 447) — same pattern as nn5 vs nn3. So the race drift is not only the race
+term: racing is how a new network beats the previous one (nn6 was weak against races; nn5 beat
+it 383 times on gold). Possible cycle between racers and maters.
+Checked: **no cycle.** nn7 vs nn5 +75 ± 17, vs nn3 +92 ± 18 (chained: +55, +104), so progress is
+transitive. But ~45% of nn7's wins vs older networks are gold wins (444 of 1007 vs nn3), and nn3
+still mates nn7 517 times: the networks increasingly win by racing.
+
+**Gating from iteration 8 on (Mart, 2026-10-29):** no more matches vs the hand-written eval (saturated
+at ~93%, says little); gate against earlier networks instead.
+
+Overnight iterations 8–10 (2026-10-29/30; promote only at ≥ 50% vs the previous best; nn3 as fixed
+reference). Style swings between rounds: nn8 beats nn7 by mating (821 mates; nn7 332 gold wins) and
+nn8's own self-play has only 6.8% gold wins; nn10 beats nn8 by racing (579 gold wins; nn8 695 mates).
+Strength vs nn3 still climbs: nn7 +92, nn8 +128, nn9 +113, nn10 +158. nn3 mates each of them
+~360–520 times; 64% of nn10's wins vs nn3 are gold wins. Training time grows with the data
+(nn10: 2 h 24 min on 17M); consider a window again if that becomes the bottleneck.
+
+Why the swing: not the newest batch (only ~10% of the data) — nn9 and nn10 had almost the same
+data and opposite styles vs nn8 (139 vs 579 gold wins), so likely training noise on a knife-edge
+gold-vs-material trade-off. Replayed nn10 vs nn8 (mines / gold / material per side): identical
+through ply 40; from ply ~60 nn10 banks gold (ply 80: 58 vs 41 gold, 3.1 vs 2.7 mines, more
+material too). Its gold lead starts at ply 95 (median; p10 62) of its gold wins, so no racing from
+the opening. But some losses show hoarding: mated with 160–230 gold unspent (#147: 193 gold, no
+pieces left). Six games in Mart's library for review ("nn10 vs nn8 #…").
+
+Quick check nn10 vs hand-written (2026-10-30, 150 boards × 2): 12k nodes 235–8–57 (+343 ± 46),
+50 ms 220–19–61 (+282 ± 43). Fewer losses than nn6 (2.7% vs 4.7% at 12k; 6.3% vs 9.1% at 50 ms) but
+~20% draws, all at the 400-ply cap with nn10 far ahead (its score ≈ +1500, i.e. ~99.7% win
+probability) and not finishing — matching Mart's "strange moves when already winning". Value
+saturation: once every move keeps the win probability near 1, the net can't tell them apart.
+Draws vs hand-written grew with the iterations: nn6 3, nn7 20 (of 1600), nn10 ~19%.
+
+## Moves-left head (2026-10-30)
+
+Fix for the saturation above, after Leela Chess Zero's moves-left head. A second output predicts
+the plies until the game ends; in clearly decided positions the search prefers a shorter game
+when winning and a longer one when losing.
+
+- Labels: plies left = last ply of the game − ply + 1, from the records' `ply` and `game`
+  (`train.py plies_left`); games without a result (ply cap) are masked out. No new data needed.
+- Model (`--moves-left`): branch on the first dense layer's outputs, Linear(l2→l3) → clamp →
+  Linear(l3→1), output in units of 100 plies (`ML_SCALE`); MSE loss × `--ml-loss-weight` (0.05).
+  `--init RUN` starts from a trained run (keeps its K); `--freeze-trunk` trains only the head, so
+  the value output stays bit-identical to the init network.
+- File format v4 (`export.py`, `nnue.rs`): v1 + f32 `ml_weight`, `ml_cap` after K, head weights at
+  the end. `export.py --ml-weight W --ml-cap C` sets the defaults stored in the file (0 = off).
+- Search (`Network::combine`): eval = logit·K − sign · min(conf · W · plies, cap, |eval|/2), with
+  conf fading in from 90% to 99% win probability (|2p−1| 0.8 → 0.98), plies clamped to 0..300.
+  W = eval units per ply (1 gold = 10). Never changes who is ahead. Override per engine with
+  `gg ... --ml-weight W --ml-cap C` (`--a-ml-weight` / `--b-ml-weight` in matches).
+- `gg nncheck` also checks the head (f32 path exact, quantised path within ~0.2 plies).
+
+First test (`m10_nn10ml`: head fine-tuned on frozen nn10, all 17M positions, 2 epochs ≈ 25 min):
+moves-left error 23.5 plies (always-the-median baseline 34.9). vs hand-written, 12k nodes, 150
+boards × 2 (cap 150):
+
+| weight (eval/ply) | W–L–D | Elo | median plies of its wins |
+|---|---|---|---|
+| 0 (= nn10) | 235–8–57 | +343 ± 46 | 150 |
+| 1 | 250–15–35 | +366 ± 54 | 126 |
+| **3** | **273–10–17** | +473 ± 75 | 116 |
+| 10 | 233–16–51 | +318 ± 46 | 151 |
+
+Weight 10 does nothing because the cap (150) is reached from 15 predicted plies on, so every move
+gets the same adjustment; weight × typical plies must stay below the cap. vs nn10 (800 boards × 2):
+weight 1 −1 ± 17, weight 3 −9 ± 17 — no measurable cost (it only acts in decided positions).
+**Adopted (Mart, 2026-10-30): weight 3, cap 150** — `export.py` now stores weight 3 by default;
+`m10_nn10ml/net.ggnn` (nn10 + head) is the current network. Future runs: train with `--moves-left`.
+
+## Colour balance (recorded from 2026-10-30)
+
+`gg match` now prints White's win rate (each board is played with both colours, so engine
+strength cancels out). Random opening moves were removed from `gendata` on 2026-10-30 (Mart:
+pointless in this game; only 0.7% of positions were random deviations, but the first 0–8 plies
+were also searched with only a quarter of the nodes). Record White % for every new self-play
+file and gating match here, to see whether the self-play figure moves now.
+
+| Source (Black gold 6) | White % |
+|---|---|
+| self-play nn1–nn10 data (random openings, training boards) | 44.3–45.4% (every file) |
+| gating matches nn3…nn10 (22 × 1600 games, same 800 holdout boards) | 43.9–49.1%, mostly 46–48% |
+| nn10ml vs itself, 1200 holdout boards (1 game each) | 48.0% ± 2.8 (5 gold: 49.2%, 4 gold: 54.8%) |
+
+**Black starts with 5 gold from 2026-10-30** (and no random openings): record new figures as
+"Black gold 5". `gg match` prints the starting gold with the White %.
+
+Fixed 2026-10-30: the train/val split hashed the file's index in the sorted file list, so adding
+`nn10_m10_*` (sorts before `nn1_`) reshuffled other files' games between train and val. Harmless
+for from-scratch runs, but a run continued from an older network validated partly on games that
+network trained on (e.g. `m10_nn10c` from nn9: val loss 0.0165 vs nn10's 0.0177 — leaked, judge
+it by the match). The split now hashes the file name.
 
 ## Next steps
 

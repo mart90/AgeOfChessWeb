@@ -22,7 +22,7 @@
 
     <h3>Bidding</h3>
     <p class="lead">
-      The value of the first move is about 6 gold on most mirrored boards, but it does vary slightly, and it varies a lot more on fully random boards. To ensure a balanced game, there is an option to bid for White. 
+      The value of the first move is about 5 gold on most mirrored boards, but it does vary slightly, and it varies a lot more on fully random boards. To ensure a balanced game, there is an option to bid for White. 
       This allows the players to look at the starting position before it's decided who plays which color. The players each decide how much gold they would pay the other player in return for getting to play White.
       <br><br>
       On fully random boards, bids can be negative when Black is better. This can happen when the Black king spawns favorably, near treasures or mines.

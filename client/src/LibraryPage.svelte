@@ -83,7 +83,7 @@
 <main>
   {#if !isLoggedIn}
     <p class="muted">
-      <button class="link" onclick={() => navigate('/login')}>Log in</button> to save games to your library.
+      <button class="link" onclick={() => navigate('/login')}>Sign in</button> to save games to your library.
     </p>
   {:else if entries === null}
     <p class="muted">Loading…</p>

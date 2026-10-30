@@ -44,7 +44,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
-builder.Services.AddSignalR();
+// Frequent pings let clients notice a dead connection quickly (client/src/lib/hub.js)
+builder.Services.AddSignalR(o => o.KeepAliveInterval = TimeSpan.FromSeconds(5));
 
 // In-memory active game store (singleton — lives for the process lifetime)
 builder.Services.AddSingleton<GameSessionManager>();

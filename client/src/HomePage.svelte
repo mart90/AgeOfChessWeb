@@ -484,8 +484,6 @@
       {#if !authState.token}
         <p class="login-prompt">
           <button class="link-btn" onclick={() => navigate('/login')}>Sign in</button>
-          or
-          <button class="link-btn" onclick={() => navigate('/register')}>register</button>
           to use matchmaking.
         </p>
       {:else if !queueing}

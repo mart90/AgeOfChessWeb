@@ -184,7 +184,7 @@
         {/if}
       </div>
     {:else}
-      <button class="nav-btn" onclick={() => navigate('/register')}>Register</button>
+      <button class="nav-btn" onclick={() => navigate('/register')}>Sign up</button>
       <button class="nav-btn" onclick={() => navigate('/login')}>Sign in</button>
     {/if}
   </div>
@@ -494,6 +494,7 @@
     color: var(--fg-2);
     border-radius: 5px;
     font-size: 0.85rem;
+    white-space: nowrap;
   }
   .nav-btn:hover { background: var(--surface-3); color: var(--fg); }
 

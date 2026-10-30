@@ -297,7 +297,7 @@ mod tests {
                 json!({ "x": sq % size, "y": sq / size, "type": ty, "piece": piece, "mineOwner": null })
             })
             .collect();
-        json!({ "squares": squares, "whiteGold": 0, "blackGold": 6, "whiteIsActive": true }).to_string()
+        json!({ "squares": squares, "whiteGold": 0, "blackGold": 5, "whiteIsActive": true }).to_string()
     }
 
     #[test]

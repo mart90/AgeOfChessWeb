@@ -69,12 +69,22 @@ fn matches_csharp_rules() {
         }
     }
     let mut positions = 0;
+    let mut default_start = 0;
     let mut failures = Vec::new();
     for (gi, line) in data.lines().enumerate() {
         let game: Game = serde_json::from_str(line).unwrap();
         let mut pos = position_from_seed(&game.seed).unwrap();
         if !game.queen_drops {
             pos.rules = Rules::classic();
+        }
+        // Starting gold as recorded: Black started with 6 before 2026-10-30, 5 since (older files
+        // keep 6). The default itself is compared on freshly recorded data: see the count below.
+        let default_gold = pos.gold;
+        if let Some(first) = game.plies.first() {
+            pos.gold = first.gold;
+            if first.gold == default_gold {
+                default_start += 1;
+            }
         }
         let mut moves = Vec::new();
         let mut outcome = Outcome::Ongoing;
@@ -113,6 +123,13 @@ fn matches_csharp_rules() {
             }
         }
     }
-    println!("checked {positions} positions");
+    println!("checked {positions} positions; {default_start} games start with the engine's default gold");
+    // oracle.jsonl (committed) is regenerated after rule changes, so it must use today's default
+    let fresh = std::fs::read_to_string(format!("{dir}/oracle.jsonl")).unwrap();
+    for line in fresh.lines() {
+        let game: Game = serde_json::from_str(line).unwrap();
+        let start = position_from_seed(&game.seed).unwrap().gold;
+        assert_eq!(game.plies[0].gold, start, "oracle.jsonl: C# starting gold differs from the engine default");
+    }
     assert!(failures.is_empty(), "{} mismatches:\n{}", failures.len(), failures.join("\n"));
 }

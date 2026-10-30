@@ -14,13 +14,14 @@ import os
 import queue
 import threading
 import time
+import zlib
 
 import numpy as np
 import torch
 
 from features import encode, num_features
 from ggdata import FLAG_BEST_TACTICAL, FLAG_IN_CHECK, GGData
-from model import EvalNet
+from model import ML_SCALE, EvalNet
 
 
 # ── Logging helpers (conventions: docs/training.md) ──────────────────────────────────────────
@@ -55,6 +56,19 @@ class Ticker:
 
 # ── Data ─────────────────────────────────────────────────────────────────────────────────────
 
+def plies_left(records):
+    """Plies from each position to the end of its game (1 = the game ends with this move);
+    -1 for games that didn't finish (ply cap). All records of a game must be in `records`."""
+    games = records["game"]
+    ply = records["ply"].astype(np.int32)
+    _, inv = np.unique(games, return_inverse=True)
+    last = np.zeros(inv.max() + 1 if len(inv) else 0, dtype=np.int32)
+    np.maximum.at(last, inv, ply)
+    left = last[inv] - ply + 1
+    left[records["reason"] == 0] = -1
+    return left.astype(np.int16)
+
+
 def load(paths, args):
     """Select usable positions; split train/val by game (never the same game in both)."""
     files, train, val = [], [], []
@@ -63,6 +77,7 @@ def load(paths, args):
         d = GGData(path)
         files.append(d)
         r = d.records
+        d.left = plies_left(r)
         stats["positions"] += len(r)
         flags = r["flags"]
         keep = np.ones(len(r), dtype=bool)
@@ -74,8 +89,12 @@ def load(paths, args):
             keep &= (flags & FLAG_BEST_TACTICAL) == 0
         games = r["game"].astype(np.uint64)
         stats["games"] += len(np.unique(games))
-        # Stable hash of (file, game) -> validation bucket
-        h = ((games + np.uint64(fi) * np.uint64(1 << 32)) * np.uint64(2654435761)) % np.uint64(1000)
+        # Stable hash of (file name, game) -> validation bucket. Keyed by the name, not the file's
+        # position in the sorted list: adding a file (nn10_ sorts before nn1_) must not move
+        # games of other files between train and val, or a run continued from an earlier
+        # network (--init) validates on games that network trained on. (Fixed 2026-10-30.)
+        key = np.uint64(zlib.crc32(os.path.basename(path).encode()))
+        h = ((games + key * np.uint64(1 << 32)) * np.uint64(2654435761)) % np.uint64(1000)
         is_val = h < np.uint64(int(1000 * args.val_fraction))
         idx = np.nonzero(keep)[0]
         train.append(np.stack([np.full(len(idx), fi), idx], axis=1)[~is_val[idx]])
@@ -87,11 +106,12 @@ def load(paths, args):
     return files, train, val, stats
 
 
-def gather(files, rows):
-    """Records for (file, index) rows, in row order."""
+def gather(files, rows, field="records"):
+    """Records (or another per-record array of the files, e.g. "left") for (file, index) rows,
+    grouped by file and sorted by index within a file (the same order for every field)."""
     if len(files) == 1:
-        return files[0].records[np.sort(rows[:, 1])]
-    parts = [files[fi].records[np.sort(rows[rows[:, 0] == fi, 1])] for fi in np.unique(rows[:, 0])]
+        return getattr(files[0], field)[np.sort(rows[:, 1])]
+    parts = [getattr(files[fi], field)[np.sort(rows[rows[:, 0] == fi, 1])] for fi in np.unique(rows[:, 0])]
     return np.concatenate(parts)
 
 
@@ -111,7 +131,8 @@ def batches(files, rows, batch_size, k, lam, augment, rng, num_dense):
             rec = gather(files, rows[s:s + batch_size])
             sym = int(rng.integers(8)) if augment else 0
             feats = encode(rec, sym, num_dense)
-            q.put((feats, targets(rec, k, lam), rec["result"].astype(np.int8)))
+            left = gather(files, rows[s:s + batch_size], "left")
+            q.put((feats, targets(rec, k, lam), rec["result"].astype(np.int8), left))
         q.put(None)
 
     threading.Thread(target=work, daemon=True).start()
@@ -159,17 +180,35 @@ def search_gap(logit, search_logit, mask=None):
 
 # ── Training ─────────────────────────────────────────────────────────────────────────────────
 
+def ml_loss(ml, left):
+    """Moves-left loss over finished games: (MSE in units of ML_SCALE plies, sum of abs errors in plies, count)."""
+    left = torch.from_numpy(left.astype(np.float32))
+    mask = left >= 0
+    if not mask.any():
+        return torch.zeros(()), 0.0, 0
+    d = ml[mask] - left[mask] / ML_SCALE
+    return torch.mean(d ** 2), float(d.detach().abs().sum()) * ML_SCALE, int(mask.sum())
+
+
 def evaluate(model, files, rows, args, k):
+    """(value loss, moves-left loss, moves-left mean abs error in plies, logits, results)."""
     model.eval()
     total, n, preds, results = 0.0, 0, [], []
+    ml_total, ml_abs, ml_n = 0.0, 0.0, 0
     with torch.no_grad():
-        for feats, tgt, res in batches(files, rows, args.batch_size, k, args.lam, False, None, args.dense):
-            out = model(*to_torch(feats))
+        for feats, tgt, res, left in batches(files, rows, args.batch_size, k, args.lam, False, None, args.dense):
+            out, ml = model(*to_torch(feats), with_ml=True)
             total += torch.mean((torch.sigmoid(out) - torch.from_numpy(tgt)) ** 2).item() * len(tgt)
             n += len(tgt)
+            if ml is not None:
+                l, a, c = ml_loss(ml, left)
+                ml_total += l.item() * c
+                ml_abs += a
+                ml_n += c
             preds.append(out.numpy())
             results.append(res)
-    return total / max(n, 1), np.concatenate(preds), np.concatenate(results)
+    return (total / max(n, 1), ml_total / max(ml_n, 1), ml_abs / max(ml_n, 1),
+            np.concatenate(preds), np.concatenate(results))
 
 
 def main():
@@ -189,6 +228,11 @@ def main():
     p.add_argument("--race-residual", type=float, default=0.0,
                    help="add the hand-written eval's gold-race term with this weight (eval units, its "
                         "default is 2000) to the output; the network learns the rest. 0 = off")
+    p.add_argument("--moves-left", action="store_true", help="add the moves-left head (plies until the game ends)")
+    p.add_argument("--ml-loss-weight", type=float, default=0.05, help="weight of the moves-left loss")
+    p.add_argument("--init", help="start from this run's best.pt (same layers; keeps its K)")
+    p.add_argument("--freeze-trunk", action="store_true",
+                   help="with --init: train only the moves-left head; the value output stays exactly the same")
     p.add_argument("--patience", type=int, default=4, help="early stopping: epochs without val improvement")
     p.add_argument("--val-fraction", type=float, default=0.05)
     p.add_argument("--max-positions", type=int, default=0, help="subsample training positions (0 = all)")
@@ -220,7 +264,12 @@ def main():
     print(f"  skipped: {st['in_check']:,} in check, {st['tactical']:,} with a tactical best move (overlap counted twice)")
     print(f"  train {len(train):,} / val {len(val):,} positions (split by game, {100 * args.val_fraction:.0f}% val)")
 
-    k = fit_k(files, train, rng)
+    init = None
+    if args.init:
+        init = torch.load(os.path.join("training", "runs", args.init, "best.pt"), weights_only=False)
+        k = init["k"]
+    else:
+        k = fit_k(files, train, rng)
     val_rec = gather(files, val)
     val_result = val_rec["result"]
     search = val_rec["score"].astype(np.float32)
@@ -244,12 +293,35 @@ def main():
     race = args.race_residual / k if args.race_residual else 0.0
     if race and args.dense < 8:
         raise SystemExit("--race-residual needs --dense 8")
-    model = EvalNet(num_features(size), hidden=args.hidden, num_dense=args.dense, race=race)
+    if init:
+        cfg = dict(init["config"])
+        cfg["moves_left"] = cfg.get("moves_left", False) or args.moves_left
+        if cfg.get("num_dense", 4) != args.dense:
+            raise SystemExit(f"--dense {args.dense}, but {args.init} has {cfg.get('num_dense', 4)} dense inputs")
+        model = EvalNet(**cfg)
+        missing, _ = model.load_state_dict(init["state"], strict=False)
+        print(f"Initialised from {args.init} (K {k:.0f}); new: {', '.join(missing) or 'nothing'}")
+    else:
+        model = EvalNet(num_features(size), hidden=args.hidden, num_dense=args.dense, race=race,
+                        moves_left=args.moves_left)
+    if args.freeze_trunk:
+        if not (init and model.moves_left):
+            raise SystemExit("--freeze-trunk needs --init and --moves-left")
+        for p_ in model.trunk_parameters():
+            p_.requires_grad_(False)
+        print("Trunk frozen: training the moves-left head only")
+    if model.moves_left:
+        vl = gather(files, val, "left")
+        vl = vl[vl >= 0].astype(np.float64)
+        base["ml_median_mae"] = float(np.abs(vl - np.median(vl)).mean())
+        print(f"Moves-left head: loss weight {args.ml_loss_weight} (MSE in units of {ML_SCALE:.0f} plies); "
+              f"baseline (always the median, {np.median(vl):.0f}): {base['ml_median_mae']:.1f} plies mean abs error")
     if race:
         print(f"Race residual: fixed gold-race term {args.race_residual:g} eval units "
               f"({race:.2f} logit) x (1/(t_us+1) - 1/(t_them+1)) added to the network")
     print(f"Model parameters: {model.param_count():,}")
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    trainable = [p_ for p_ in model.parameters() if p_.requires_grad]
+    opt = torch.optim.Adam(trainable, lr=args.lr)
     # Lower the learning rate when validation loss stalls (instead of a fixed per-epoch decay)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=args.lr_factor, patience=args.lr_patience,
                                                        min_lr=args.min_lr)
@@ -264,24 +336,27 @@ def main():
         total, n, preds, results = 0.0, 0, [], []
         nan_batches = clipped = 0
         with Ticker():
-            for feats, tgt, res in batches(files, order, args.batch_size, k, args.lam, args.augment, rng, args.dense):
-                out = model(*to_torch(feats))
-                loss = torch.mean((torch.sigmoid(out) - torch.from_numpy(tgt)) ** 2)
+            for feats, tgt, res, left in batches(files, order, args.batch_size, k, args.lam, args.augment, rng, args.dense):
+                out, ml = model(*to_torch(feats), with_ml=True)
+                vloss = torch.mean((torch.sigmoid(out) - torch.from_numpy(tgt)) ** 2)
+                loss = vloss + args.ml_loss_weight * ml_loss(ml, left)[0] if ml is not None else vloss
                 if not torch.isfinite(loss):
                     nan_batches += 1
                     continue
                 opt.zero_grad()
                 loss.backward()
-                if torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0) > 10.0:
+                if torch.nn.utils.clip_grad_norm_(trainable, max_norm=10.0) > 10.0:
                     clipped += 1
                 opt.step()
-                total += loss.item() * len(tgt)
+                total += vloss.item() * len(tgt)
                 n += len(tgt)
                 preds.append(out.detach().numpy())
                 results.append(res)
         train_loss = total / max(n, 1)
         train_acc = winner_accuracy(np.concatenate(preds), np.concatenate(results))
-        val_loss, val_pred, val_res = evaluate(model, files, val, args, k)
+        val_vloss, val_mlloss, val_ml_mae, val_pred, val_res = evaluate(model, files, val, args, k)
+        # Selection / early stopping on the total loss (value + weighted moves-left)
+        val_loss = val_vloss + (args.ml_loss_weight * val_mlloss if model.moves_left else 0.0)
         val_acc = winner_accuracy(val_pred, val_res)
         val_close = winner_accuracy(val_pred, val_res, close)
         val_gap = search_gap(val_pred, search / k)
@@ -291,10 +366,12 @@ def main():
             print(f"    Clipped large gradients in {clipped} batches")
         if nan_batches:
             print(f"    Skipped {nan_batches} batches due to NaN/inf loss")
-        print(f"Epoch {epoch:3d}/{args.epochs} | loss={train_loss:.5f}/{val_loss:.5f}  "
-              f"acc={100 * train_acc:.1f}%/{100 * val_acc:.1f}%  close={100 * val_close:.1f}%  gap={100 * val_gap:.1f}/{100 * val_gap_close:.1f}  |  {elapsed:.1f}s")
+        ml_txt = f"  moves-left err={val_ml_mae:.1f} plies" if model.moves_left else ""
+        print(f"Epoch {epoch:3d}/{args.epochs} | loss={train_loss:.5f}/{val_vloss:.5f}  "
+              f"acc={100 * train_acc:.1f}%/{100 * val_acc:.1f}%  close={100 * val_close:.1f}%  "
+              f"gap={100 * val_gap:.1f}/{100 * val_gap_close:.1f}{ml_txt}  |  {elapsed:.1f}s")
         lr = opt.param_groups[0]["lr"]
-        history.append(dict(epoch=epoch, train_loss=train_loss, val_loss=val_loss,
+        history.append(dict(epoch=epoch, train_loss=train_loss, val_loss=val_vloss, val_ml_mae=val_ml_mae,
                             train_acc=train_acc, val_acc=val_acc, val_close_acc=val_close,
                             val_gap=val_gap, val_gap_close=val_gap_close, lr=lr, time_s=elapsed))
         sched.step(val_loss)
@@ -302,8 +379,10 @@ def main():
             print(f"  Learning rate {lr:.2e} -> {opt.param_groups[0]['lr']:.2e}")
 
         if val_loss < best["val_loss"]:
-            best = dict(val_loss=val_loss, val_acc=val_acc, val_close_acc=val_close,
+            best = dict(val_loss=val_loss, val_value_loss=val_vloss, val_acc=val_acc, val_close_acc=val_close,
                         val_gap=val_gap, val_gap_close=val_gap_close, epoch=epoch)
+            if model.moves_left:
+                best["val_ml_mae_plies"] = val_ml_mae
             bad_epochs = 0
             torch.save(dict(state=model.state_dict(), config=model.config, k=k, board_size=size,
                             args=vars(args)), os.path.join(run_dir, "best.pt"))
@@ -317,7 +396,9 @@ def main():
     total_min = (time.time() - t_start) / 60
     line = "=" * 44
     print(f"\n{line}\n  Run {args.run} - spreadsheet summary\n{line}")
-    print(f"  Val loss:              {best['val_loss']:.5f}")
+    print(f"  Val loss:              {best['val_value_loss']:.5f}")
+    if model.moves_left:
+        print(f"  Moves-left error:      {best['val_ml_mae_plies']:.1f} plies (mean abs)")
     print(f"  Val accuracy:          {100 * best.get('val_acc', 0):.1f}%")
     print(f"  Val accuracy (close):  {100 * best.get('val_close_acc', 0):.1f}%")
     print(f"  Search score accuracy: {100 * base['search'][0]:.1f}% / {100 * base['search'][1]:.1f}% close")

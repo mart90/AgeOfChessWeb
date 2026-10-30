@@ -41,7 +41,7 @@ Source of truth for the rules is the server: `AgeOfChess.Server/GameLogic/` (mai
 | Base income | +1 gold at the start of each of your turns |
 | Mine income | +3 gold per owned mine, at the start of the owner's turn (`MINE_INCOME = 3`) |
 | Treasure capture | +20 gold |
-| Black starting gold | 6 (White starts with 0); overridden by bidding |
+| Black starting gold | 5 (White starts with 0; 6 before 2026-10-30); overridden by bidding |
 
 - A mine becomes yours when you move or place a piece onto it, and stays yours until the
   opponent occupies it.

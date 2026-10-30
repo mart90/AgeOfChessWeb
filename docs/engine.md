@@ -164,6 +164,13 @@ override: `position.rules = { queenDrops: "", queenCost: 72 }`.
   5 gold → White **48.3% ± 3.1%**; 6 gold → White **46.7% ± 3.1%**. Difference (1.6 pp) is
   within noise; both lean slightly to Black. Resolving ±1 gold would need ~10k games each.
   Only 53% of boards had the same winner in both runs, i.e. outcomes are very sensitive.
+- **Black starting gold with the network (2026-10-30):** nn10 + moves-left vs itself, 12k nodes,
+  1200 holdout boards (one game per board; identical engines): White **48.0%** at 6 gold, **49.2%**
+  at 5, **54.8%** at 4 (± 2.8). 4 overshoots; 5 is closest, 6 is within noise of 50%. (Network
+  self-play data shows ~55% Black, but gendata adds random opening moves.) ~36% of these games end
+  in a gold victory. `engine/testdata/games_nn10ml_self_bg{4,5,6}_12k.jsonl`.
+  **Black starts with 5 gold since 2026-10-30** (all `gg` commands default to 5; `--black-gold 6`
+  reproduces older results).
 - **Thinking-time ladder (2026-10-24).** Browser ≈ 1.2M nodes/s, so matches use node
   equivalents: 10 ms ≈ 12k, 50 ms ≈ 60k, 500 ms ≈ 600k nodes/move (`--a-nodes/--b-nodes`).
   Anchor: Mart estimates the 50 ms engine at **~1800** (beat it once).

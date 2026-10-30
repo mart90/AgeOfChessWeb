@@ -29,7 +29,7 @@
   let mapSize       = $state(0);
   let mapSeed       = $state('');
   let whiteGold     = $state(0);
-  let blackGold     = $state(6);
+  let blackGold     = $state(5);
   let whiteIsActive = $state(true);
   let viewAsWhite   = $state(true);
 
@@ -597,7 +597,7 @@
       mapSize       = data.mapSize;
       mapSeed       = data.mapSeed;
       whiteGold     = 0;
-      blackGold     = 6;
+      blackGold     = 5;
       whiteIsActive = true;
       lastMoveFrom  = null;
       lastMoveTo    = null;
@@ -1145,7 +1145,7 @@
               : libraryShareId ? 'Save to my library' : 'Save to library'}
           </button>
         {:else}
-          <button class="action-btn" onclick={() => navigate('/login')}>Log in to save to your library</button>
+          <button class="action-btn" onclick={() => navigate('/login')}>Sign in to save to your library</button>
         {/if}
         <div class="share-row">
           <label class="publish" class:disabled={!libraryOwned}

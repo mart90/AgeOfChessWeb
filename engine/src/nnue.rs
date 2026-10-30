@@ -15,13 +15,17 @@
 //! Version 3: as 2, plus f32 `race` right after K: a fixed gold-race term added to the output,
 //! logit += race * (1/(t_us+1) - 1/(t_them+1)) (the hand-written eval's race term / K); the
 //! network was trained as the residual on top of it.
+//! Version 4: as 1, plus f32 `ml_weight` and `ml_cap` right after K, and a moves-left head after
+//! the out bias: ml1 weights [l3][l2], ml1 bias [l3], ml2 weights [l3], ml2 bias. Its input is the
+//! first dense layer's output; it predicts the plies until the game ends / ML_SCALE. See
+//! `Network::combine` for how the search uses it (prefer faster wins, slower losses).
 
 use crate::eval::turns_to_gold;
 use crate::position::*;
 
 pub const MAGIC: &[u8; 4] = b"GGNN";
 /// Supported file versions and their number of dense inputs.
-const VERSIONS: [(u32, usize); 3] = [(1, 4), (2, 8), (3, 8)];
+const VERSIONS: [(u32, usize); 4] = [(1, 4), (2, 8), (3, 8), (4, 4)];
 pub const NUM_BLOCKS: usize = 18;
 const MAX_DENSE: usize = 8;
 /// Turns at which the race input min(t, H) / H saturates (training/features.py RACE_HORIZON).
@@ -31,6 +35,14 @@ const MAX_L: usize = 256;
 /// Integer scales: first-layer sums and activations (0..1 -> 0..QA), first dense layer weights.
 const QA: i32 = 512;
 const QB: i32 = 4096;
+/// Moves-left head output unit, in plies (training/model.py ML_SCALE).
+pub const ML_SCALE: f32 = 100.0;
+/// The moves-left adjustment fades in between these confidences |2p - 1| (p = win probability
+/// 0.9 .. 0.99): only clearly decided positions are affected.
+const ML_CONF_LO: f32 = 0.8;
+const ML_CONF_HI: f32 = 0.98;
+/// Predictions are clamped to this many plies.
+const ML_MAX_PLIES: f32 = 300.0;
 
 pub struct Network {
     pub board_size: usize,
@@ -43,6 +55,12 @@ pub struct Network {
     pub num_dense: usize,
     /// Version 3: fixed gold-race term in logit units (0 otherwise).
     pub race: f32,
+    /// Version 4: the network has a moves-left head.
+    pub has_ml: bool,
+    /// Moves-left search weight: eval units per predicted ply (0 = off; default from the file).
+    pub ml_weight: f32,
+    /// Largest moves-left adjustment, eval units.
+    pub ml_cap: f32,
     ft_w: Vec<f32>,
     ft_b: Vec<f32>,
     l1_w: Vec<f32>,
@@ -51,6 +69,10 @@ pub struct Network {
     l2_b: Vec<f32>,
     out_w: Vec<f32>,
     out_b: f32,
+    ml1_w: Vec<f32>,
+    ml1_b: Vec<f32>,
+    ml2_w: Vec<f32>,
+    ml2_b: f32,
     // Quantised copies for the search (see QA, QB)
     ft_wq: Vec<i16>,
     ft_bq: Vec<i16>,
@@ -94,6 +116,8 @@ impl Network {
         let l3 = r.u32()? as usize;
         let k = f32::from_bits(r.u32()?);
         let race = if version == 3 { f32::from_bits(r.u32()?) } else { 0.0 };
+        let has_ml = version == 4;
+        let (ml_weight, ml_cap) = if has_ml { (f32::from_bits(r.u32()?), f32::from_bits(r.u32()?)) } else { (0.0, 0.0) };
         if features != NUM_BLOCKS * board_size * board_size {
             return Err(format!("{features} features, expected {} for {board_size}x{board_size}", NUM_BLOCKS * board_size * board_size));
         }
@@ -108,6 +132,9 @@ impl Network {
             k,
             num_dense,
             race,
+            has_ml,
+            ml_weight,
+            ml_cap,
             ft_w: r.f32s(features * hidden)?,
             ft_b: r.f32s(hidden)?,
             l1_w: r.f32s(l2 * (2 * hidden + num_dense))?,
@@ -116,6 +143,10 @@ impl Network {
             l2_b: r.f32s(l3)?,
             out_w: r.f32s(l3)?,
             out_b: r.f32s(1)?[0],
+            ml1_w: if has_ml { r.f32s(l3 * l2)? } else { Vec::new() },
+            ml1_b: if has_ml { r.f32s(l3)? } else { Vec::new() },
+            ml2_w: if has_ml { r.f32s(l3)? } else { Vec::new() },
+            ml2_b: if has_ml { r.f32s(1)?[0] } else { 0.0 },
             ft_wq: Vec::new(),
             ft_bq: Vec::new(),
             l1_wq: Vec::new(),
@@ -183,6 +214,54 @@ impl Network {
 
     /// Win-probability logit for the side to move.
     pub fn logit(&self, pos: &Position) -> f32 {
+        self.forward_f32(pos).0
+    }
+
+    /// Moves-left head output (plies until the game ends / ML_SCALE), f32 path; 0 without a head.
+    pub fn moves_left_raw(&self, pos: &Position) -> f32 {
+        self.forward_f32(pos).1
+    }
+
+    /// Last layers on top of the first dense layer's outputs `y1`: (logit, moves-left output).
+    fn head(&self, pos: &Position, y1: &[f32]) -> (f32, f32) {
+        let mut y2 = [0f32; MAX_L];
+        for j in 0..self.l3 {
+            let w = &self.l2_w[j * self.l2..(j + 1) * self.l2];
+            let s: f32 = w.iter().zip(&y1[..self.l2]).map(|(a, b)| a * b).sum();
+            y2[j] = (s + self.l2_b[j]).clamp(0.0, 1.0);
+        }
+        let s: f32 = self.out_w.iter().zip(&y2[..self.l3]).map(|(a, b)| a * b).sum();
+        let value = s + self.out_b + self.race_term(pos);
+        if !self.has_ml {
+            return (value, 0.0);
+        }
+        let mut m = 0f32;
+        for j in 0..self.l3 {
+            let w = &self.ml1_w[j * self.l2..(j + 1) * self.l2];
+            let s: f32 = w.iter().zip(&y1[..self.l2]).map(|(a, b)| a * b).sum();
+            m += (s + self.ml1_b[j]).clamp(0.0, 1.0) * self.ml2_w[j];
+        }
+        (value, m + self.ml2_b)
+    }
+
+    /// Engine evaluation (side to move, 1 gold = 10) from the logit and the moves-left output.
+    /// In clearly decided positions the side that is winning prefers a shorter predicted game and
+    /// the losing side a longer one: |eval| shrinks by up to `ml_weight` per predicted ply (capped
+    /// at `ml_cap` and at half of |eval|, so it never changes who is winning).
+    #[inline]
+    pub fn combine(&self, logit: f32, ml: f32) -> i32 {
+        let e = logit * self.k;
+        if !self.has_ml || self.ml_weight == 0.0 {
+            return e.round() as i32;
+        }
+        let conf = (2.0 / (1.0 + (-logit.abs()).exp()) - 1.0 - ML_CONF_LO) / (ML_CONF_HI - ML_CONF_LO);
+        let conf = conf.clamp(0.0, 1.0);
+        let plies = (ml * ML_SCALE).clamp(0.0, ML_MAX_PLIES);
+        let adj = (conf * self.ml_weight * plies).min(self.ml_cap).min(e.abs() * 0.5);
+        (e - logit.signum() * adj).round() as i32
+    }
+
+    fn forward_f32(&self, pos: &Position) -> (f32, f32) {
         let h = self.hidden;
         let stm = pos.side;
         let mut feats = Vec::with_capacity(64);
@@ -222,19 +301,13 @@ impl Network {
             let s: f32 = w.iter().zip(inputs).map(|(a, b)| a * b).sum();
             y1[j] = (s + self.l1_b[j]).clamp(0.0, 1.0);
         }
-        let mut y2 = [0f32; MAX_L];
-        for j in 0..self.l3 {
-            let w = &self.l2_w[j * self.l2..(j + 1) * self.l2];
-            let s: f32 = w.iter().zip(&y1[..self.l2]).map(|(a, b)| a * b).sum();
-            y2[j] = (s + self.l2_b[j]).clamp(0.0, 1.0);
-        }
-        let s: f32 = self.out_w.iter().zip(&y2[..self.l3]).map(|(a, b)| a * b).sum();
-        s + self.out_b + self.race_term(pos)
+        self.head(pos, &y1)
     }
 
     /// Evaluation in engine units (1 gold = 10) for the side to move.
     pub fn evaluate(&self, pos: &Position) -> i32 {
-        (self.logit(pos) * self.k).round() as i32
+        let (v, ml) = self.forward_f32(pos);
+        self.combine(v, ml)
     }
 
     // ── Incremental evaluation (used by the search) ─────────────────────────────────────────
@@ -323,8 +396,8 @@ impl Network {
         }
     }
 
-    /// Output layers on top of the first-layer sums (`acc` as in `refresh`).
-    fn output(&self, pos: &Position, acc: &[i16]) -> f32 {
+    /// Output layers on top of the first-layer sums (`acc` as in `refresh`): (logit, moves-left).
+    fn output(&self, pos: &Position, acc: &[i16]) -> (f32, f32) {
         let h = self.hidden;
         let stm = pos.side;
         let ins = 2 * h + self.num_dense;
@@ -358,21 +431,22 @@ impl Network {
             let s: i32 = w.iter().zip(inputs).map(|(&a, &b)| a as i32 * b as i32).sum();
             y1[j] = ((s + self.l1_bq[j]) as f32 * scale).clamp(0.0, 1.0);
         }
-        let mut y2 = [0f32; MAX_L];
-        for j in 0..self.l3 {
-            let w = &self.l2_w[j * self.l2..(j + 1) * self.l2];
-            let s: f32 = w.iter().zip(&y1[..self.l2]).map(|(a, b)| a * b).sum();
-            y2[j] = (s + self.l2_b[j]).clamp(0.0, 1.0);
-        }
-        let s: f32 = self.out_w.iter().zip(&y2[..self.l3]).map(|(a, b)| a * b).sum();
-        s + self.out_b + self.race_term(pos)
+        self.head(pos, &y1)
+    }
+
+    /// Moves-left output of the search's (quantised) path, from scratch.
+    pub fn moves_left_quantized(&self, pos: &Position) -> f32 {
+        let mut acc = vec![0i16; 2 * self.hidden];
+        self.refresh(pos, &mut acc);
+        self.output(pos, &acc).1
     }
 
     /// The search's (quantised) evaluation computed from scratch; equals `evaluate_incremental`.
     pub fn evaluate_quantized(&self, pos: &Position) -> i32 {
         let mut acc = vec![0i16; 2 * self.hidden];
         self.refresh(pos, &mut acc);
-        (self.output(pos, &acc) * self.k).round() as i32
+        let (v, ml) = self.output(pos, &acc);
+        self.combine(v, ml)
     }
 
     /// Evaluation of `pos` at search ply `ply`, using and updating `st`.
@@ -413,7 +487,8 @@ impl Network {
             }
         }
         let acc = &st.acc[ply * h2..ply * h2 + h2];
-        (self.output(pos, acc) * self.k).round() as i32
+        let (v, ml) = self.output(pos, acc);
+        self.combine(v, ml)
     }
 }
 

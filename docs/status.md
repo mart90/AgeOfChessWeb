@@ -4,6 +4,12 @@ _Last updated: 2026-10-28_
 
 ## Current focus
 
+**Reconnecting (2026-10-30).** `client/src/lib/hub.js` owns the game-hub connection: retries
+forever (0/1/2/5 s), and when the page becomes visible again (phones kill sockets in the
+background) it reconnects at once, or pings (`GameHub.Ping`, 1.5 s timeout) and restarts if
+the socket is silently dead. Server keep-alive 5 s, client server-timeout 15 s. GamePage
+joins via `onConnected` (runs after every reconnect) and removes its hub handlers on leaving.
+
 **My library (2026-10-28).** Logged-in users save games with their variations: "📚" next to 🔍
 after a game (GamePage; again = update the same entry), "Save to library" on the analysis board
 (updates the entry it was opened from). `/library` page (nav: between Analyze and Rules) lists
@@ -78,10 +84,30 @@ data matches all data (nn4w −4 vs nn4), so iteration 5 used a sliding window (
 **nn5 vs nn4 +7 ± 17** — plateau; gold victories rising (34% of self-play). nn5 vs nn3 +33
 (all from gold wins). Race term removed in iteration 6 (data by nn3, all 10.8M, v1 inputs): **nn6
 vs nn3 +80, vs nn5 +31, vs hand-written +521**, gold losses as low as with the term. Equal time (50 ms,
-native): **nn6 vs hand-written +397 ± 30**. Best net:
-`training/runs/m10_nn6/net.ggnn` (see docs/training.md). Next: equal-time match; deeper
-labels; browser integration.
-Next: equal-time match.
+native): **nn6 vs hand-written +397 ± 30**. Iteration 7 (by
+nn6): **nn7 vs nn6 +24 ± 17, vs hand-written +486**, but the gain is from gold races again (no race
+term). Iterations 8–10
+overnight: **nn10 vs nn8 +26, vs nn3 +158** (nn9 not promoted). Best net:
+`training/runs/m10_nn10/net.ggnn` (see docs/training.md).
+nn10 draws ~20% vs hand-written at the 400-ply cap while far ahead (value saturation) →
+**moves-left head** (2026-10-30, training.md): head fine-tuned on frozen nn10 (`m10_nn10ml`),
+draws vs hand-written 57 → 17 of 300 at weight 3, no cost vs nn10. **Adopted: weight 3**; current
+network `training/runs/m10_nn10ml/net.ggnn`. Future training runs use `--moves-left`.
+
+**Agreed plan (in this order):**
+1. *(Done 2026-10-30: White 48.0% at 6, 49.2% at 5, 54.8% at 4 — 4 overshoots; see engine.md.)*
+   **Adopted: Black starts with 5 gold** (Mart, 2026-10-30): server `PieceColor.cs`, engine
+   `Position::empty` + `gg --black-gold` default, analysis board, rules/about pages, game-rules.md.
+   Oracle data regenerated (`oracle.jsonl`, 0 mismatches; the test now takes the starting gold from
+   each recording, older files keep 6). Bidding is unchanged (Black gets the winning bid).
+   **Black starting gold 4?** nn10 vs itself at `--black-gold` 6 / 5 / 4 (1200 boards, 12k nodes,
+   count only the A-as-White game per board — identical engines replay the same game). Network
+   self-play currently ends ~55% Black. Rule change would touch C#, Rust, JS, game-rules.md and
+   check `computerBid` defaults; existing training data stays usable.
+2. **Continue vs from scratch:** train from nn9's weights (`--init m10_nn9`, lower lr, few epochs)
+   on exactly nn10's data and match vs nn10 (from scratch). If level, continued training becomes
+   the default (≈2.4 h → ~30 min per iteration), with an occasional from-scratch run.
+Later: browser integration (WASM simd128 first).
 
 **Server scaling review (2026-10-27).** Server CPU load is light (the computer opponent runs in
 the browser); a 2 vCPU / 4 GB VPS should carry thousands of DAU. Done: per-game lock

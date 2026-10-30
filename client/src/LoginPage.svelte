@@ -98,7 +98,7 @@
 
   <p class="switch">
     Don't have an account?
-    <button class="link-btn" onclick={() => navigate('/register')}>Register</button>
+    <button class="link-btn" onclick={() => navigate('/register')}>Sign up</button>
   </p>
 </main>
 
