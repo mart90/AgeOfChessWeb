@@ -308,9 +308,65 @@ public class ServerGame : Game
         }
 
         Black.Gold = winningBid;
+        ResolveHandicap();
 
         // Start white's game clock immediately.
         LastMoveTimestamp = DateTime.UtcNow;
+    }
+
+    // ── Handicap ──────────────────────────────────────────────────────────
+
+    /// <summary>Automatic handicap: one gold per this many Elo points of difference.</summary>
+    private const int HandicapEloPerGold = 100;
+    /// <summary>Rating assumed for players without one (anonymous), as for a new account.</summary>
+    private const int UnratedElo = 1200;
+
+    /// <summary>
+    /// Works out the handicap (see GameSettings.Handicap) now that colours and ratings are final,
+    /// stores it in the settings and adds it to the starting gold. Called once, when the game
+    /// starts (after bidding).
+    /// </summary>
+    public void ResolveHandicap()
+    {
+        int whiteElo = WhiteElo ?? UnratedElo, blackElo = BlackElo ?? UnratedElo;
+        int auto = (int)Math.Round((whiteElo - blackElo) / (double)HandicapEloPerGold, MidpointRounding.AwayFromZero);
+        int manual = Settings.HandicapGold;
+        (Settings.WhiteHandicapGold, Settings.BlackHandicapGold) = (Settings.Handicap, BiddingEnabled) switch
+        {
+            // Without bidding: to Black; automatic is negative when Black is the stronger player
+            ("manual", false) => (0, manual),
+            ("auto",   false) => (0, auto),
+            // With bidding: to the lower-rated player (Black when equal)
+            ("manual", true)  => blackElo <= whiteElo ? (0, manual) : (manual, 0),
+            ("auto",   true)  => auto >= 0 ? (0, auto) : (-auto, 0),
+            _                 => (0, 0),
+        };
+        ApplyHandicapGold();
+    }
+
+    /// <summary>Adds the resolved handicap to the starting gold (also when replaying / resuming).</summary>
+    public void ApplyHandicapGold()
+    {
+        White.Gold += Settings.WhiteHandicapGold;
+        Black.Gold += Settings.BlackHandicapGold;
+    }
+
+    /// <summary>
+    /// Lobby games: puts the creator on the colour they chose (see GameSettings.CreatorColor).
+    /// Called when the game starts. Returns true if the colours were swapped.
+    /// </summary>
+    public bool ApplyCreatorColor()
+    {
+        if (BiddingEnabled || IsComputerGame) return false;
+        bool creatorWhite = Settings.CreatorColor switch
+        {
+            "black"  => false,
+            "random" => Random.Shared.Next(2) == 0,
+            _        => true,
+        };
+        if (creatorWhite) return false;
+        SwapColors();
+        return true;
     }
 
     /// <summary>

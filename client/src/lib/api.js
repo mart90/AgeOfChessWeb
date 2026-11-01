@@ -79,8 +79,10 @@ export async function getGame(gameId) {
   return res.json();
 }
 
-export async function getProfile(username, startIndex = 0, sortCol = 'endedAt', sortDir = 'desc', category = 'all') {
-  const params = new URLSearchParams({ startIndex, sortCol, sortDir, category });
+export async function getProfile(username, startIndex = 0, sortCol = 'endedAt', sortDir = 'desc', category = 'all',
+                                 { unranked = true, opponent = '', history = true } = {}) {
+  const params = new URLSearchParams({ startIndex, sortCol, sortDir, category, unranked, history });
+  if (opponent) params.set('opponent', opponent);
   const res = await fetch(`/api/user/${encodeURIComponent(username)}?${params}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json(); // { username, displayName, stats, games, totalGames }

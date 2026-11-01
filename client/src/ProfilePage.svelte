@@ -23,9 +23,46 @@
 
   const displayGames = $derived(profile?.games ?? []);
 
+  // ── Table options (the two switches are remembered per browser) ──────────
+
+  const TABLE_PREFS_KEY = 'profile_table';
+  let tablePrefs = {};
+  try { tablePrefs = JSON.parse(localStorage.getItem(TABLE_PREFS_KEY) ?? '{}'); } catch { /* defaults */ }
+  let showUnranked   = $state(tablePrefs.showUnranked ?? false);
+  let showHandicap   = $state(tablePrefs.showHandicap ?? false);
+  let opponentFilter = $state('');
+  $effect(() => {
+    try { localStorage.setItem(TABLE_PREFS_KEY, JSON.stringify({ showUnranked, showHandicap })); } catch { /* not remembered */ }
+  });
+
+  // The filter applies from 3 characters (the minimum name length), 300 ms after typing stops
+  const MIN_FILTER_LENGTH = 3;
+  const activeFilter = $derived(opponentFilter.trim().length >= MIN_FILTER_LENGTH ? opponentFilter.trim() : '');
+  let appliedFilter = '';
+  let filterTimer;
+  function onFilterInput() {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => { if (activeFilter !== appliedFilter) fetchGames(0); }, 300);
+  }
+
+  // The opponent filter lives in the Opponent column header (opened with the loupe); the two
+  // switches in a popover at the end of the tab bar.
+  let filterOpen  = $state(false);
+  let optionsOpen = $state(false);
+  const focusOnMount = (el) => el.focus();
+  function clearFilter() {
+    clearTimeout(filterTimer);
+    opponentFilter = '';
+    filterOpen = false;
+    if (appliedFilter) fetchGames(0);
+  }
+  function closeOptions(e) {
+    if (!e.target.closest('.table-options')) optionsOpen = false;
+  }
+
   function sortBy(col) {
     if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-    else { sortCol = col; sortDir = col === 'endedAt' ? 'desc' : 'asc'; }
+    else { sortCol = col; sortDir = col === 'endedAt' || col === 'handicap' ? 'desc' : 'asc'; }
     fetchGames(0);
   }
 
@@ -34,14 +71,19 @@
     return sortDir === 'asc' ? ' ▲' : ' ▼';
   }
 
+  let fetchSeq = 0;   // only the latest request's answer is shown (filter typing sends several)
   async function fetchGames(si) {
+    const seq = ++fetchSeq;
     startIndex = si;
     loading = true;
     error = '';
     try {
-      const data = await getProfile(username, si, sortCol, sortDir, activeTab);
+      const data = await getProfile(username, si, sortCol, sortDir, activeTab,
+        { unranked: showUnranked, opponent: activeFilter, history: !profile });
+      if (seq !== fetchSeq) return;
+      appliedFilter = activeFilter;
       if (si === 0) {
-        profile = data;
+        profile = { ...data, ratingHistory: data.ratingHistory ?? profile?.ratingHistory };   // history: first load only
       } else {
         profile = { ...profile, games: data.games };
       }
@@ -64,19 +106,13 @@
 
   const eloSeries = $derived.by(() => {
     if (!profile) return { bullet: [], blitz: [], rapid: [], slow: [] };
-    const asc = [...profile.games].sort((a, b) => new Date(a.endedAt) - new Date(b.endedAt));
+    // Whole history from the server (not just the games listed below)
     const result = {};
     for (const cat of ['bullet', 'blitz', 'rapid', 'slow']) {
-      const catGames = asc.filter(g => g.category === cat && g.eloDelta != null);
+      const pts = profile.ratingHistory?.[cat] ?? [];
+      // No rated games yet — draw a flat line at current rating so the graph still renders
       const currentElo = profile.stats[cat].elo;
-      if (catGames.length === 0) {
-        // No games yet — draw a flat line at current rating so the graph still renders
-        result[cat] = [currentElo, currentElo];
-        continue;
-      }
-      const pts = [catGames[0].myEloAtGame];
-      for (const g of catGames) pts.push(g.myEloAtGame + g.eloDelta);
-      result[cat] = pts;
+      result[cat] = pts.length ? pts : [currentElo, currentElo];
     }
     return result;
   });
@@ -133,12 +169,13 @@
   onMount(() => fetchGames(0));
 </script>
 
+<svelte:window onclick={closeOptions} />
+
 <main>
-  {#if loading}
-    <p class="muted">Loading…</p>
-  {:else if error}
-    <p class="error">{error}</p>
-  {:else if profile}
+  {#if !profile}
+    <!-- First load only: later fetches (tabs, sorting, filters) keep the page and dim the table -->
+    {#if error}<p class="error">{error}</p>{:else}<p class="muted">Loading…</p>{/if}
+  {:else}
 
     <!-- Header -->
     <div class="profile-header">
@@ -190,36 +227,77 @@
       </div>
     {/if}
 
-    <!-- Tabs -->
+    <!-- Tabs, with the table options at the end -->
     <div class="tabs">
       {#each TABS as t}
         <button class="tab" class:active={activeTab === t} onclick={() => { activeTab = t; fetchGames(0); }}>
           {t.charAt(0).toUpperCase() + t.slice(1)}
-          {#if t !== 'all'}
-            <span class="tab-count">({profile.stats[t].gamesPlayed})</span>
+          {#if profile.gameCounts}
+            <span class="tab-count">({profile.gameCounts[t]})</span>
           {/if}
         </button>
       {/each}
+      <div class="table-options">
+        <!-- The dot: an option differs from its default -->
+        <button class="options-btn" class:changed={showUnranked || showHandicap} title="Table options"
+                aria-label="Table options" aria-expanded={optionsOpen} onclick={() => (optionsOpen = !optionsOpen)}>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+        </button>
+        {#if optionsOpen}
+          <div class="options-pop">
+            <label class="tool-toggle">
+              Show unranked games
+              <input type="checkbox" bind:checked={showUnranked} onchange={() => fetchGames(0)} />
+            </label>
+            <label class="tool-toggle">
+              Show handicap column
+              <input type="checkbox" bind:checked={showHandicap} />
+            </label>
+          </div>
+        {/if}
+      </div>
     </div>
 
-    <!-- History table -->
-    {#if displayGames.length === 0}
-      <p class="muted no-games">No games in this category yet.</p>
-    {:else}
-      <div class="table-wrap">
+    {#if error}<p class="error">{error}</p>{/if}
+
+    <!-- History table (the header stays when nothing matches, so the filter can be changed) -->
+    <div class="table-wrap" class:refreshing={loading}>
         <table>
           <thead>
             <tr>
               <th onclick={() => sortBy('endedAt')}>Date{sortArrow('endedAt')}</th>
-              <th onclick={() => sortBy('opponent')}>Opponent{sortArrow('opponent')}</th>
+              <th class="th-opp" class:filtering={filterOpen} onclick={() => { if (!filterOpen) sortBy('opponent'); }}>
+                {#if filterOpen}
+                  <span class="th-filter">
+                    <input class="opp-filter" type="text" placeholder="Opponent…" aria-label="Filter by opponent"
+                           use:focusOnMount bind:value={opponentFilter} oninput={onFilterInput}
+                           onkeydown={(e) => { if (e.key === 'Escape') clearFilter(); }}
+                           onblur={() => { if (!opponentFilter.trim()) clearFilter(); }} />
+                    <button class="th-icon-btn" title="Clear filter" aria-label="Clear filter"
+                            onmousedown={(e) => e.preventDefault()} onclick={clearFilter}>✕</button>
+                  </span>
+                {:else}
+                  Opponent{sortArrow('opponent')}
+                  <button class="th-icon-btn" title="Filter by opponent" aria-label="Filter by opponent"
+                          onclick={(e) => { e.stopPropagation(); filterOpen = true; }}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5.5 5.5"/></svg></button>
+                {/if}
+              </th>
               <th onclick={() => sortBy('result')}>Result{sortArrow('result')}</th>
-              <th onclick={() => sortBy('eloDelta')}>Rating Δ{sortArrow('eloDelta')}</th>
+              <th onclick={() => sortBy('rating')}>Rating{sortArrow('rating')}</th>
               <th class="col-tc" onclick={() => sortBy('timeControl')}>Time{sortArrow('timeControl')}</th>
               <th onclick={() => sortBy('moveCount')}>Moves{sortArrow('moveCount')}</th>
-              <th onclick={() => sortBy('boardSize')}>Board{sortArrow('boardSize')}</th>
+              <th class="col-board" onclick={() => sortBy('boardSize')}>Board{sortArrow('boardSize')}</th>
+              {#if showHandicap}
+                <th class="col-handicap" onclick={() => sortBy('handicap')}>Handicap{sortArrow('handicap')}</th>
+              {/if}
             </tr>
           </thead>
           <tbody>
+            {#if displayGames.length === 0}
+              <tr><td class="no-games" colspan="8">
+                {appliedFilter || !showUnranked ? 'No games match.' : 'No games in this category yet.'}
+              </td></tr>
+            {/if}
             {#each displayGames as g}
               <tr class="game-row" class:win={g.result === 'win'} class:loss={g.result === 'loss'}
                   onclick={() => navigate(`/game/${g.gameId}`)}>
@@ -230,7 +308,7 @@
                       {g.opponentName}
                     </button>
                   {:else}
-                    <span class="opp-name">{g.opponentName}</span>
+                    <span class="opp-name" class:computer={g.vsComputer}>{g.opponentName}</span>
                   {/if}
                   {#if g.opponentEloAtGame != null}
                     <span class="opp-elo">({g.opponentEloAtGame})</span>
@@ -239,18 +317,23 @@
                 <td class="col-result">
                   <span class="result-badge result-{g.result}">{g.resultDetail}</span>
                 </td>
-                <td class="col-delta" class:delta-pos={g.eloDelta > 0} class:delta-neg={g.eloDelta < 0}>
-                  {#if g.isRanked === false}<span class="unranked">unranked</span>{:else}{fmtDelta(g.eloDelta)}{/if}
+                <td class="col-rating">
+                  {#if g.isRanked === false}<span class="unranked">unranked</span>
+                  {:else if g.myEloAtGame == null || g.eloDelta == null}—
+                  {:else}{g.myEloAtGame + g.eloDelta}
+                    <span class="delta" class:delta-pos={g.eloDelta > 0} class:delta-neg={g.eloDelta < 0}>{fmtDelta(g.eloDelta)}</span>
+                  {/if}
                 </td>
                 <td class="col-tc">{tcLabel(g)}</td>
-                <td class="col-moves">{g.moveCount}</td>
+                <td class="col-moves">{Math.ceil(g.moveCount / 2)}</td>
                 <td class="col-board">{g.boardSize}×{g.boardSize}{g.mapMode === 'r' ? ' 🎲' : ''}</td>
+                {#if showHandicap}<td class="col-handicap">{g.handicap ?? ''}</td>{/if}
               </tr>
             {/each}
           </tbody>
         </table>
-      </div>
-      {#if totalGames > PAGE_SIZE}
+    </div>
+    {#if totalGames > PAGE_SIZE}
         <div class="pagination">
           <button class="page-btn" disabled={startIndex === 0}
                   onclick={() => fetchGames(startIndex - PAGE_SIZE)}>← Prev</button>
@@ -260,7 +343,6 @@
           <button class="page-btn" disabled={startIndex + PAGE_SIZE >= totalGames}
                   onclick={() => fetchGames(startIndex + PAGE_SIZE)}>Next →</button>
         </div>
-      {/if}
     {/if}
 
   {/if}
@@ -282,7 +364,7 @@
 
   .muted  { color: var(--faint); }
   .error  { color: #e07070; }
-  .no-games { margin: 1rem 0; }
+  .no-games { color: var(--muted); padding: 1rem 0.75rem; }
 
   /* ── Header ── */
   .profile-header {
@@ -361,7 +443,73 @@
   .tab:hover:not(.active) { color: var(--fg-2); }
   .tab-count { font-size: 0.8rem; color: var(--faint); margin-left: 0.2rem; }
 
+  /* ── Table options: popover at the end of the tab bar ── */
+  .icon {
+    width: 1.1em; height: 1.1em; flex-shrink: 0;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .table-options { position: relative; display: flex; align-items: center; }
+  .options-btn {
+    position: relative;
+    display: flex; align-items: center;
+    background: none; border: none; border-radius: 4px;
+    color: var(--muted);
+    font-size: 1.05rem;
+    padding: 0.35rem 0.45rem;
+    cursor: pointer;
+  }
+  .options-btn:hover, .options-btn[aria-expanded="true"] { background: var(--line); color: var(--fg); }
+  .options-btn.changed::after {
+    content: ''; position: absolute; top: 0.25rem; right: 0.25rem;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
+  .options-pop {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 50;
+    display: flex; flex-direction: column; gap: 0.7rem;
+    padding: 0.8rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    white-space: nowrap;
+  }
+  .tool-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.2rem;
+    font-size: 0.88rem;
+    color: var(--fg-2);
+    cursor: pointer;
+  }
+
+  /* ── Opponent filter, in the column header ── */
+  .th-icon-btn {
+    display: inline-flex; align-items: center; vertical-align: -0.15em;
+    background: none; border: none; padding: 0 0.15rem; margin-left: 0.25rem;
+    color: var(--faint); font-size: 0.95rem; cursor: pointer;
+  }
+  .th-icon-btn:hover { color: var(--fg); }
+  .th-opp.filtering { cursor: default; padding-top: 0.3rem; padding-bottom: 0.3rem; }
+  .th-filter { display: inline-flex; align-items: center; }
+  .opp-filter {
+    width: 8.5rem;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--fg);
+    padding: 0.2rem 0.45rem;
+    font: inherit;
+    font-size: 0.85rem;
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
+  }
+  .opp-filter:focus { outline: none; border-color: var(--accent); }
+
   /* ── Table ── */
+  .refreshing { opacity: 0.6; transition: opacity 0.15s 0.1s; }
   .table-wrap {
     width: 100%;
     overflow-x: auto;
@@ -404,6 +552,7 @@
   .col-opp   { font-weight: 600; color: var(--fg); }
   .opp-elo   { font-weight: 400; font-size: 0.8rem; color: var(--faint); margin-left: 0.25rem; }
   .opp-name  { color: var(--fg); }
+  .opp-name.computer { font-weight: 400; }
   .opp-link  {
     background: none; border: none; padding: 0;
     color: var(--accent); font-weight: 600; font-size: inherit;
@@ -423,13 +572,15 @@
   .result-win  { color: #7cfc00; background: rgba(124,252,0,0.1);  border: 1px solid rgba(124,252,0,0.25); }
   .result-loss { color: #e07070; background: rgba(220,80,80,0.1);  border: 1px solid rgba(220,80,80,0.25); }
   .result-draw { color: var(--muted);    background: rgba(180,180,180,0.1); border: 1px solid rgba(180,180,180,0.2); }
-  .col-delta { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); }
+  .col-rating { font-variant-numeric: tabular-nums; color: var(--fg); }
+  .delta { font-weight: 600; color: var(--muted); margin-left: 0.2rem; }
   .delta-pos { color: #7cfc00; }
   .delta-neg { color: #e07070; }
 
-  .col-tc    { color: var(--muted); font-variant-numeric: tabular-nums; }
+  td.col-tc    { color: var(--muted); font-variant-numeric: tabular-nums; }
   .col-moves { color: var(--muted); }
-  .col-board { color: var(--muted); }
+  td.col-board { color: var(--muted); }
+  td.col-handicap { color: var(--muted); font-variant-numeric: tabular-nums; }
 
   /* ── Pagination ── */
   .pagination {

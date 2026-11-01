@@ -15,15 +15,16 @@ namespace AgeOfChess.Server.Services;
 ///     computer's side while the human is disconnected counts as "abandoned" instead.
 ///   • Untimed game, both players disconnected, no move for 7 days → ends as "abandoned" (no Elo)
 ///     and moves to history, so it is no longer resumed after a restart.
-///   • Never started (waiting for the 2nd player) → removed after 2 h.
-///   • Started but no move made, both players disconnected → removed after 30 min.
-///   • Started, both players disconnected, no move for 24 h → removed (fallback, e.g. abandoned
-///     during bidding).
+///   • Never started (waiting for the 2nd player) → deleted after 2 h.
+///   • Started but no move made, both players disconnected → deleted after 30 min.
 ///   • Ended → removed 15 min after the game ended (safety net for BroadcastState's 10-minute removal).
+/// Every other game ends one of these ways (timed games on time), so a game with moves is never
+/// dropped from memory unfinished. ("Deleted" = removed from memory and its GameSession row
+/// deleted, so it isn't mistaken for a game lost to a restart, nor resumed after one.)
 ///
 /// Every 30 minutes: deletes in-progress GameSession rows older than 1 h that have no in-memory
-/// game (removed lobbies, timed games lost to a restart). They can never be resumed: every
-/// resumable slow game is loaded into memory at startup.
+/// game (timed games lost to a restart). They can never be resumed: every resumable slow game is
+/// loaded into memory at startup.
 /// </summary>
 public class GameCleanupService(
     GameSessionManager sessions, GameFlowService flow, IServiceScopeFactory scopeFactory,
@@ -33,7 +34,6 @@ public class GameCleanupService(
     private static readonly TimeSpan DbSweepInterval        = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan NeverStartedLimit      = TimeSpan.FromHours(2);
     private static readonly TimeSpan NoMoveLimit            = TimeSpan.FromMinutes(30);
-    private static readonly TimeSpan StaleStartedLimit      = TimeSpan.FromHours(24);
     private static readonly TimeSpan AbandonedUntimedLimit  = TimeSpan.FromDays(7);
     private static readonly TimeSpan EndedGameLimit         = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan OrphanRowMinAge        = TimeSpan.FromHours(1);
@@ -69,8 +69,9 @@ public class GameCleanupService(
 
     private async Task CleanupGamesAsync()
     {
-        var now   = DateTime.UtcNow;
-        var games = sessions.GetAll().ToList();
+        var now     = DateTime.UtcNow;
+        var games   = sessions.GetAll().ToList();
+        var deleted = new List<int>();
 
         foreach (var game in games)
         {
@@ -89,7 +90,7 @@ public class GameCleanupService(
             else if (!game.HasGameStarted)
             {
                 if (now - game.CreatedAt > NeverStartedLimit)
-                    sessions.Remove(game.SessionId);
+                    deleted.Add(game.SessionId);
             }
             else if (FlagFallen(game, now))
             {
@@ -109,14 +110,18 @@ public class GameCleanupService(
                 await flow.BroadcastState(game);
                 log.LogInformation("Game {Id} ended as abandoned by cleanup", game.SessionId);
             }
-            else if (bothDisconnected && game.LastMoveTimestamp == null && now - game.CreatedAt > NoMoveLimit)
+            else if (bothDisconnected && game.MoveList.Count == 0 && now - game.CreatedAt > NoMoveLimit)
             {
-                sessions.Remove(game.SessionId);
+                deleted.Add(game.SessionId);
             }
-            else if (bothDisconnected && now - lastActivity > StaleStartedLimit)
-            {
-                sessions.Remove(game.SessionId);
-            }
+        }
+
+        if (deleted.Count > 0)
+        {
+            foreach (var id in deleted) sessions.Remove(id);
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.GameSessions.Where(s => deleted.Contains(s.Id) && s.Result == GameResult.InProgress).ExecuteDeleteAsync();
         }
 
         // Forget games that are gone

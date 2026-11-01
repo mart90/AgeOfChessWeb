@@ -1,3 +1,5 @@
+using AgeOfChess.Server.GameLogic;
+
 namespace AgeOfChess.Server.Data.Models;
 
 public class HistoricGame
@@ -14,14 +16,8 @@ public class HistoricGame
     public int? WhiteEloDelta { get; set; }
     public int? BlackEloDelta { get; set; }
 
-    // Settings (JSON)
-    public string SettingsJson { get; set; } = "{}";
-
-    // Denormalized from SettingsJson for SQL-level filtering and sorting
-    public int  BoardSize            { get; set; } = 12;
-    public bool TimeControlEnabled   { get; set; } = true;
-    public int  StartTimeMinutes     { get; set; } = 5;
-    public int  TimeIncrementSeconds { get; set; } = 5;
+    /// <summary>The game's settings, stored as columns of this table (see AppDbContext).</summary>
+    public GameSettings Settings { get; set; } = new();
 
     // Bidding
     public int? WhiteBid { get; set; }

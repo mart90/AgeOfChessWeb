@@ -7,10 +7,15 @@ namespace AgeOfChess.Server.Services;
 ///
 /// Weak levels make deliberate mistakes: with probability MistakeRate they play the engine's
 /// second-best move, as long as it is at most MistakeMaxLoss gold worse than the best.
+///
+/// Nnue levels evaluate with the neural network (client/src/lib/engine/network.ggnn), which
+/// exists only for NnueBoardSize boards; they can't be chosen for other sizes.
 /// </summary>
 public static class ComputerLevels
 {
-    public record Level(int Number, int Nodes, int Elo, double MistakeRate = 0, double MistakeMaxLoss = 0);
+    public record Level(int Number, int Nodes, int Elo, double MistakeRate = 0, double MistakeMaxLoss = 0, bool Nnue = false);
+
+    public const int NnueBoardSize = 10;
 
     public static readonly IReadOnlyList<Level> All =
     [
@@ -21,6 +26,8 @@ public static class ComputerLevels
         new(5,  12_000, 1600),
         new(6,  60_000, 1800),
         new(7, 600_000, 2000),
+        new(8,  40_000, 2200, Nnue: true),
+        new(9, 300_000, 2400, Nnue: true),
     ];
 
     public static Level? Get(int? number) => All.FirstOrDefault(l => l.Number == number);

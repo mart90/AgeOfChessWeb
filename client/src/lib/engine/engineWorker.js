@@ -1,14 +1,22 @@
-// Web Worker running engine searches so the UI stays responsive.
+// Web Worker running engine searches so the UI stays responsive. Uses the SIMD build when the
+// browser supports it. Messages: { id, request } (JSON API, engine/src/api.rs) and, before the
+// first search with `nnue: true`, { id, network } with the .ggnn bytes (see engine.js).
 import wasmUrl from './goldrush_engine.wasm?url';
-import { loadEngine } from './engineWasm.js';
+import simdWasmUrl from './goldrush_engine_simd.wasm?url';
+import { loadEngine, simdSupported } from './engineWasm.js';
 
-const ready = loadEngine(wasmUrl);
+const ready = loadEngine(simdSupported() ? simdWasmUrl : wasmUrl);
 
 self.onmessage = async (e) => {
-  const { id, request } = e.data;
+  const { id, request, network } = e.data;
   try {
     const engine = await ready;
-    self.postMessage({ id, result: engine.call(request) });
+    if (network) {
+      engine.loadNetwork(network);
+      self.postMessage({ id, result: { ok: true } });
+    } else {
+      self.postMessage({ id, result: engine.call(request) });
+    }
   } catch (err) {
     self.postMessage({ id, error: err?.message ?? String(err) });
   }

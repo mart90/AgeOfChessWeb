@@ -68,8 +68,12 @@ app.UseDefaultFiles();
 // index.html must be revalidated on every load: it names the hashed bundles of the current build,
 // and a stale copy points at files the next deploy deletes. Vite's hashed bundles
 // (/assets/name-HASH.ext) never change, so they can be cached for good.
+// .ggnn: the engine's evaluation network (client/src/lib/engine/network.ggnn), not a known type.
+var contentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+contentTypes.Mappings[".ggnn"] = "application/octet-stream";
 var staticFileOptions = new StaticFileOptions
 {
+    ContentTypeProvider = contentTypes,
     OnPrepareResponse = ctx =>
     {
         var path = ctx.Context.Request.Path.Value ?? "";

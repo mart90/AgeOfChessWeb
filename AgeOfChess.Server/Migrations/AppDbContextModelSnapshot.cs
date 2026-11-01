@@ -49,9 +49,6 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<int?>("BlackUserId")
                         .HasColumnType("int");
 
-                    b.Property<int>("BoardSize")
-                        .HasColumnType("int");
-
                     b.Property<bool>("CreatedViaMatchmaking")
                         .HasColumnType("tinyint(1)");
 
@@ -75,21 +72,8 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<int>("Result")
                         .HasColumnType("int");
 
-                    b.Property<string>("SettingsJson")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("StartTimeMinutes")
-                        .HasColumnType("int");
-
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("datetime(6)");
-
-                    b.Property<bool>("TimeControlEnabled")
-                        .HasColumnType("tinyint(1)");
-
-                    b.Property<int>("TimeIncrementSeconds")
-                        .HasColumnType("int");
 
                     b.Property<int?>("WhiteEloAtGame")
                         .HasColumnType("int");
@@ -142,9 +126,6 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<int?>("BlackPlayerId")
                         .HasColumnType("int");
 
-                    b.Property<int>("BoardSize")
-                        .HasColumnType("int");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
@@ -165,19 +146,6 @@ namespace AgeOfChess.Server.Migrations
                     b.Property<string>("Result")
                         .HasColumnType("longtext");
 
-                    b.Property<string>("SettingsJson")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("StartTimeMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<bool>("TimeControlEnabled")
-                        .HasColumnType("tinyint(1)");
-
-                    b.Property<int>("TimeIncrementSeconds")
-                        .HasColumnType("int");
-
                     b.Property<int?>("WhiteBid")
                         .HasColumnType("int");
 
@@ -191,6 +159,10 @@ namespace AgeOfChess.Server.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BlackPlayerId");
+
+                    b.HasIndex("WhitePlayerId");
 
                     b.ToTable("HistoricGames");
                 });
@@ -329,9 +301,176 @@ namespace AgeOfChess.Server.Migrations
                         .WithMany()
                         .HasForeignKey("WhiteUserId");
 
+                    b.OwnsOne("AgeOfChess.Server.GameLogic.GameSettings", "Settings", b1 =>
+                        {
+                            b1.Property<int>("GameSessionId")
+                                .HasColumnType("int");
+
+                            b1.Property<bool>("BiddingEnabled")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("BiddingEnabled");
+
+                            b1.Property<int>("BlackHandicapGold")
+                                .HasColumnType("int")
+                                .HasColumnName("BlackHandicapGold");
+
+                            b1.Property<int>("BoardSize")
+                                .HasColumnType("int")
+                                .HasColumnName("BoardSize");
+
+                            b1.Property<bool>("ComputerIsWhite")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("ComputerIsWhite");
+
+                            b1.Property<int?>("ComputerLevel")
+                                .HasColumnType("int")
+                                .HasColumnName("ComputerLevel");
+
+                            b1.Property<string>("CreatorColor")
+                                .IsRequired()
+                                .HasMaxLength(6)
+                                .HasColumnType("varchar(6)")
+                                .HasColumnName("CreatorColor");
+
+                            b1.Property<string>("Handicap")
+                                .IsRequired()
+                                .HasMaxLength(6)
+                                .HasColumnType("varchar(6)")
+                                .HasColumnName("Handicap");
+
+                            b1.Property<int>("HandicapGold")
+                                .HasColumnType("int")
+                                .HasColumnName("HandicapGold");
+
+                            b1.Property<bool>("IsRanked")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("IsRanked");
+
+                            b1.Property<string>("MapMode")
+                                .IsRequired()
+                                .HasMaxLength(1)
+                                .HasColumnType("varchar(1)")
+                                .HasColumnName("MapMode");
+
+                            b1.Property<string>("MapSeed")
+                                .HasColumnType("longtext")
+                                .HasColumnName("RequestedMapSeed");
+
+                            b1.Property<int>("StartTimeMinutes")
+                                .HasColumnType("int")
+                                .HasColumnName("StartTimeMinutes");
+
+                            b1.Property<bool>("TimeControlEnabled")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("TimeControlEnabled");
+
+                            b1.Property<int>("TimeIncrementSeconds")
+                                .HasColumnType("int")
+                                .HasColumnName("TimeIncrementSeconds");
+
+                            b1.Property<int>("WhiteHandicapGold")
+                                .HasColumnType("int")
+                                .HasColumnName("WhiteHandicapGold");
+
+                            b1.HasKey("GameSessionId");
+
+                            b1.ToTable("GameSessions");
+
+                            b1.WithOwner()
+                                .HasForeignKey("GameSessionId");
+                        });
+
                     b.Navigation("BlackUser");
 
+                    b.Navigation("Settings")
+                        .IsRequired();
+
                     b.Navigation("WhiteUser");
+                });
+
+            modelBuilder.Entity("AgeOfChess.Server.Data.Models.HistoricGame", b =>
+                {
+                    b.OwnsOne("AgeOfChess.Server.GameLogic.GameSettings", "Settings", b1 =>
+                        {
+                            b1.Property<int>("HistoricGameId")
+                                .HasColumnType("int");
+
+                            b1.Property<bool>("BiddingEnabled")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("BiddingEnabled");
+
+                            b1.Property<int>("BlackHandicapGold")
+                                .HasColumnType("int")
+                                .HasColumnName("BlackHandicapGold");
+
+                            b1.Property<int>("BoardSize")
+                                .HasColumnType("int")
+                                .HasColumnName("BoardSize");
+
+                            b1.Property<bool>("ComputerIsWhite")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("ComputerIsWhite");
+
+                            b1.Property<int?>("ComputerLevel")
+                                .HasColumnType("int")
+                                .HasColumnName("ComputerLevel");
+
+                            b1.Property<string>("CreatorColor")
+                                .IsRequired()
+                                .HasMaxLength(6)
+                                .HasColumnType("varchar(6)")
+                                .HasColumnName("CreatorColor");
+
+                            b1.Property<string>("Handicap")
+                                .IsRequired()
+                                .HasMaxLength(6)
+                                .HasColumnType("varchar(6)")
+                                .HasColumnName("Handicap");
+
+                            b1.Property<int>("HandicapGold")
+                                .HasColumnType("int")
+                                .HasColumnName("HandicapGold");
+
+                            b1.Property<bool>("IsRanked")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("IsRanked");
+
+                            b1.Property<string>("MapMode")
+                                .IsRequired()
+                                .HasMaxLength(1)
+                                .HasColumnType("varchar(1)")
+                                .HasColumnName("MapMode");
+
+                            b1.Property<string>("MapSeed")
+                                .HasColumnType("longtext")
+                                .HasColumnName("RequestedMapSeed");
+
+                            b1.Property<int>("StartTimeMinutes")
+                                .HasColumnType("int")
+                                .HasColumnName("StartTimeMinutes");
+
+                            b1.Property<bool>("TimeControlEnabled")
+                                .HasColumnType("tinyint(1)")
+                                .HasColumnName("TimeControlEnabled");
+
+                            b1.Property<int>("TimeIncrementSeconds")
+                                .HasColumnType("int")
+                                .HasColumnName("TimeIncrementSeconds");
+
+                            b1.Property<int>("WhiteHandicapGold")
+                                .HasColumnType("int")
+                                .HasColumnName("WhiteHandicapGold");
+
+                            b1.HasKey("HistoricGameId");
+
+                            b1.ToTable("HistoricGames");
+
+                            b1.WithOwner()
+                                .HasForeignKey("HistoricGameId");
+                        });
+
+                    b.Navigation("Settings")
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("AgeOfChess.Server.Data.Models.LibraryGame", b =>

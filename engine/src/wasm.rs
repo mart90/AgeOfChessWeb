@@ -40,3 +40,12 @@ pub unsafe extern "C" fn handle(ptr: *const u8, len: usize) -> *const u8 {
 pub extern "C" fn out_len() -> usize {
     OUT.with(|o| o.borrow().len())
 }
+
+/// Load an evaluation network (`.ggnn` bytes written into memory from `alloc`); 1 = ok, 0 = invalid.
+///
+/// # Safety
+/// `ptr..ptr+len` must be a buffer obtained from `alloc`.
+#[no_mangle]
+pub unsafe extern "C" fn load_nnue(ptr: *const u8, len: usize) -> i32 {
+    crate::api::load_network(std::slice::from_raw_parts(ptr, len)).is_ok() as i32
+}

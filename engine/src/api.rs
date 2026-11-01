@@ -2,8 +2,10 @@
 //! `{ squares: [{x, y, type: "GrassMine", piece: {type: "WhiteKing", isWhite}, mineOwner}],
 //!    whiteGold, blackGold, whiteIsActive }`.
 //!
-//! Requests (`cmd`): `search` {position, timeMs?, depth?, nodes?, multiPv?}, `legal` {position},
-//! `status` {position}, `newGame`.
+//! Requests (`cmd`): `search` {position, timeMs?, depth?, nodes?, multiPv?, nnue?}, `legal` {position},
+//! `status` {position}, `newGame`. `nnue: true` evaluates with the network loaded through
+//! `load_network` (`wasm.rs` export `load_nnue`) when the board size matches; otherwise, or
+//! without a network, the hand-written eval. Search results say which was used (`nnue`).
 
 use crate::eval::EvalParams;
 use crate::movegen::legal_moves;
@@ -58,7 +60,15 @@ pub struct ClientRules {
 #[serde(tag = "cmd", rename_all = "camelCase")]
 enum Request {
     #[serde(rename_all = "camelCase")]
-    Search { position: ClientPosition, time_ms: Option<f64>, depth: Option<u32>, nodes: Option<u64>, multi_pv: Option<usize> },
+    Search {
+        position: ClientPosition,
+        time_ms: Option<f64>,
+        depth: Option<u32>,
+        nodes: Option<u64>,
+        multi_pv: Option<usize>,
+        #[serde(default)]
+        nnue: bool,
+    },
     Legal { position: ClientPosition },
     Status { position: ClientPosition },
     NewGame,
@@ -172,6 +182,14 @@ fn mate_moves(white_score: i32) -> Option<i32> {
 
 thread_local! {
     static SEARCHER: RefCell<Option<Searcher>> = const { RefCell::new(None) };
+    static NETWORK: RefCell<Option<std::sync::Arc<crate::nnue::Network>>> = const { RefCell::new(None) };
+}
+
+/// Load the evaluation network (a `.ggnn` file) for searches with `nnue: true`.
+pub fn load_network(bytes: &[u8]) -> Result<(), String> {
+    let net = crate::nnue::Network::from_bytes(bytes)?;
+    NETWORK.with(|n| *n.borrow_mut() = Some(std::sync::Arc::new(net)));
+    Ok(())
 }
 
 fn with_searcher<R>(f: impl FnOnce(&mut Searcher) -> R) -> R {
@@ -180,6 +198,18 @@ fn with_searcher<R>(f: impl FnOnce(&mut Searcher) -> R) -> R {
         let s = s.get_or_insert_with(|| Searcher::new(EvalParams::default(), 32));
         f(s)
     })
+}
+
+/// Select the eval for a search on `pos`; returns whether the network is used. Switching evals
+/// clears the transposition table (its scores belong to the other eval).
+fn select_eval(s: &mut Searcher, pos: &Position, nnue: bool) -> bool {
+    let net = if nnue { NETWORK.with(|n| n.borrow().clone()).filter(|n| n.board_size == pos.size()) } else { None };
+    let use_net = net.is_some();
+    if use_net != s.nnue.is_some() {
+        s.clear();
+    }
+    s.nnue = net;
+    use_net
 }
 
 /// Handle one JSON request; always returns a JSON object (with `error` on failure).
@@ -214,14 +244,17 @@ fn handle_inner(input: &str) -> Result<Value, String> {
                 "goldThreshold": pos.gold_threshold(),
             }))
         }
-        Request::Search { position, time_ms, depth, nodes, multi_pv: Some(n) } if n > 1 => {
+        Request::Search { position, time_ms, depth, nodes, multi_pv: Some(n), nnue } if n > 1 => {
             let mut pos = position_from_client(&position)?;
             let limits = Limits {
                 max_depth: depth,
                 max_nodes: nodes,
                 max_time_ms: time_ms.or(if depth.is_some() || nodes.is_some() { None } else { Some(1000.0) }),
             };
-            let lines = with_searcher(|s| s.search_multi(&mut pos, limits, n));
+            let (lines, used_net) = with_searcher(|s| {
+                let used = select_eval(s, &pos, nnue);
+                (s.search_multi(&mut pos, limits, n), used)
+            });
             let size = pos.size();
             let stm_white = pos.side == WHITE;
             let json_lines: Vec<Value> = lines
@@ -242,18 +275,22 @@ fn handle_inner(input: &str) -> Result<Value, String> {
                 "lines": json_lines,
                 "depth": lines.iter().map(|r| r.depth).min().unwrap_or(0),
                 "nodes": lines.iter().map(|r| r.nodes).sum::<u64>(),
+                "nnue": used_net,
             }))
         }
-        Request::Search { position, time_ms, depth, nodes, .. } => {
+        Request::Search { position, time_ms, depth, nodes, nnue, .. } => {
             let mut pos = position_from_client(&position)?;
             let limits = Limits {
                 max_depth: depth,
                 max_nodes: nodes,
                 max_time_ms: time_ms.or(if depth.is_some() || nodes.is_some() { None } else { Some(1000.0) }),
             };
-            let r = with_searcher(|s| s.search(&mut pos, limits));
+            let (r, used_net) = with_searcher(|s| {
+                let used = select_eval(s, &pos, nnue);
+                (s.search(&mut pos, limits), used)
+            });
             let Some(best) = r.best else {
-                return Ok(json!({ "best": null }));
+                return Ok(json!({ "best": null, "nnue": used_net }));
             };
             let white_score = if pos.side == WHITE { r.score } else { -r.score };
             let mate = mate_moves(white_score);
@@ -266,6 +303,7 @@ fn handle_inner(input: &str) -> Result<Value, String> {
                 "nodes": r.nodes,
                 "timeMs": r.time_ms,
                 "pv": r.pv.iter().map(|m| m.to_notation(size)).collect::<Vec<_>>(),
+                "nnue": used_net,
             }))
         }
     }

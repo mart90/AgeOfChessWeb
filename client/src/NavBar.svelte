@@ -17,14 +17,39 @@
       : null
   );
 
-  function toggleSettings() { settingsOpen = !settingsOpen; userMenuOpen = false; }
-  function toggleMenu()     { menuOpen = !menuOpen; }
-  function toggleUserMenu() { userMenuOpen = !userMenuOpen; settingsOpen = false; }
+  // Analyze, settings and user menus. With a mouse they open on hover (CSS), and clicking Analyze or
+  // the name goes straight to its page. A tap with a finger or pen opens the menu instead (which
+  // lists that page too). Decided per click, not per device, so touchscreen laptops work both ways.
+  let analyzeOpen       = $state(false);
+  let analyzeDismissed  = $state(false);   // after picking an item, hidden until the pointer leaves
+  let userMenuDismissed = $state(false);
+
+  let lastPointerType = 'mouse';
+  const notePointer = (e) => { lastPointerType = e.pointerType; };
+  /** The click came from a mouse (or the keyboard), not a finger or pen. */
+  const viaMouse = (e) => e.detail === 0 || (e.pointerType || lastPointerType) === 'mouse';
+
+  function openOnly(menu) {
+    settingsOpen = menu === 'settings';
+    userMenuOpen = menu === 'user';
+    analyzeOpen  = menu === 'analyze';
+  }
+  function toggleSettings(e) { if (!viaMouse(e)) openOnly(settingsOpen ? null : 'settings'); }
+  function toggleMenu()      { menuOpen = !menuOpen; }
+  function onUserNameClick(e) {
+    if (viaMouse(e)) userNavTo(`/profile/${authState.user?.username}`);
+    else openOnly(userMenuOpen ? null : 'user');
+  }
+  function onAnalyzeClick(e) {
+    if (viaMouse(e)) analyzeNavTo('/analyze');
+    else openOnly(analyzeOpen ? null : 'analyze');
+  }
 
   function closeDropdowns(e) {
     if (!e.target.closest('.settings-wrap')) settingsOpen = false;
     if (!e.target.closest('.nav-left'))      menuOpen     = false;
     if (!e.target.closest('.user-menu-wrap')) userMenuOpen = false;
+    if (!e.target.closest('.nav-group'))     analyzeOpen  = false;
   }
 
   function toggleCoords() {
@@ -64,13 +89,20 @@
     navigate(path);
   }
 
+  function analyzeNavTo(path) {
+    analyzeOpen = false;
+    analyzeDismissed = true;
+    navigate(path);
+  }
+
   function userNavTo(path) {
     userMenuOpen = false;
+    userMenuDismissed = true;
     navigate(path);
   }
 </script>
 
-<svelte:window onclick={closeDropdowns} />
+<svelte:window onclick={closeDropdowns} onpointerdowncapture={notePointer} />
 
 <nav class="navbar">
   <!-- Hamburger: mobile only -->
@@ -99,12 +131,18 @@
   <div class="nav-center">
     <button class="nav-link" onclick={() => navigate('/')}>Play</button>
     <button class="nav-link" onclick={() => navigate('/watch')}>Watch</button>
-    <!-- Analyze opens the analysis board; hovering it shows its submenu -->
-    <div class="nav-group">
-      <button class="nav-link" onclick={() => navigate('/analyze')}>Analyze</button>
-      <div class="submenu">
+    <!-- Analyze: a mouse click opens the analysis board, hovering shows the menu; a tap opens the menu -->
+    <div class="nav-group" class:dismissed={analyzeDismissed}
+         role="presentation" onpointerleave={() => (analyzeDismissed = false)}>
+      <button class="nav-link" onclick={onAnalyzeClick}>
+        Analyze
+      </button>
+      <div class="submenu" class:open={analyzeOpen}>
         <div class="submenu-box">
-          <button class="dropdown-btn dropdown-item" onclick={() => navigate('/library')}>
+          <button class="dropdown-btn dropdown-item" onclick={() => analyzeNavTo('/analyze')}>
+            Analysis board
+          </button>
+          <button class="dropdown-btn dropdown-item" onclick={() => analyzeNavTo('/library')}>
             My library
           </button>
         </div>
@@ -119,69 +157,66 @@
       <button class="icon-btn" title="Settings" aria-label="Settings" onclick={toggleSettings}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M9.97 3.85 L10.36 1.12 L13.64 1.12 L14.03 3.85 L16.33 4.80 L18.54 3.15 L20.85 5.46 L19.20 7.67 L20.15 9.97 L22.88 10.36 L22.88 13.64 L20.15 14.03 L19.20 16.33 L20.85 18.54 L18.54 20.85 L16.33 19.20 L14.03 20.15 L13.64 22.88 L10.36 22.88 L9.97 20.15 L7.67 19.20 L5.46 20.85 L3.15 18.54 L4.80 16.33 L3.85 14.03 L1.12 13.64 L1.12 10.36 L3.85 9.97 L4.80 7.67 L3.15 5.46 L5.46 3.15 L7.67 4.80 Z M12 8.6 A3.4 3.4 0 1 0 12 15.4 A3.4 3.4 0 1 0 12 8.6 Z"/></svg>
       </button>
-      {#if settingsOpen}
-        <div class="dropdown settings-dropdown">
-          <label class="dropdown-item toggle-item">
-            Show coordinates
-            <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
-          </label>
-          <div class="dropdown-item theme-item">
-            <label for="board-theme" class="volume-label">Board</label>
-            <select
-              id="board-theme"
-              class="theme-select"
-              value={settings.boardTheme}
-              onchange={(e) => { settings.boardTheme = e.currentTarget.value; persistSettings(); }}
-            >
-              {#each BOARD_THEMES as t}
-                <option value={t.id}>{t.name}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="dropdown-item volume-item">
-            <div class="volume-label">
-              Volume
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={settings.volume}
-              oninput={handleVolumeChange}
-              class="volume-slider"
-            />
-          </div>
-          <button
-            class="dropdown-btn dropdown-item"
-            disabled={!currentGame.mapSeed}
-            onclick={copyMapSeed}
+      <div class="dropdown settings-dropdown" class:open={settingsOpen}>
+        <label class="dropdown-item toggle-item">
+          Show coordinates
+          <input type="checkbox" checked={settings.showCoordinates} onchange={toggleCoords} />
+        </label>
+        <div class="dropdown-item theme-item">
+          <label for="board-theme" class="volume-label">Board</label>
+          <select
+            id="board-theme"
+            class="theme-select"
+            value={settings.boardTheme}
+            onchange={(e) => { settings.boardTheme = e.currentTarget.value; persistSettings(); }}
           >
-            {seedCopied ? 'Copied!' : 'Copy board seed'}
-          </button>
+            {#each BOARD_THEMES as t}
+              <option value={t.id}>{t.name}</option>
+            {/each}
+          </select>
         </div>
-      {/if}
+        <div class="dropdown-item volume-item">
+          <div class="volume-label">
+            Volume
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={settings.volume}
+            oninput={handleVolumeChange}
+            class="volume-slider"
+          />
+        </div>
+        <button
+          class="dropdown-btn dropdown-item"
+          disabled={!currentGame.mapSeed}
+          onclick={copyMapSeed}
+        >
+          {seedCopied ? 'Copied!' : 'Copy board seed'}
+        </button>
+      </div>
     </div>
 
     {#if isLoggedIn}
-      <div class="user-menu-wrap">
-        <button class="user-menu-btn" onclick={toggleUserMenu}>
+      <div class="user-menu-wrap" class:dismissed={userMenuDismissed}
+           role="presentation" onpointerleave={() => (userMenuDismissed = false)}>
+        <button class="user-menu-btn" onclick={onUserNameClick}>
           <span class="user-menu-name">{userName}</span>
-          <span class="user-menu-arrow" class:open={userMenuOpen}>▾</span>
+          <span class="menu-arrow" class:open={userMenuOpen}>▾</span>
         </button>
-        {#if userMenuOpen}
-          <div class="dropdown user-dropdown">
-            <button class="dropdown-btn dropdown-item" onclick={() => userNavTo(`/profile/${authState.user?.username}`)}>
-              Profile
-            </button>
-            <button class="dropdown-btn dropdown-item" onclick={() => userNavTo('/settings')}>
-              Account settings
-            </button>
-            <div class="dropdown-divider"></div>
-            <button class="dropdown-btn dropdown-item logout-item" onclick={handleLogout}>
-              Log out
-            </button>
-          </div>
-        {/if}
+        <div class="dropdown user-dropdown" class:open={userMenuOpen}>
+          <button class="dropdown-btn dropdown-item" onclick={() => userNavTo(`/profile/${authState.user?.username}`)}>
+            Profile
+          </button>
+          <button class="dropdown-btn dropdown-item" onclick={() => userNavTo('/settings')}>
+            Account settings
+          </button>
+          <div class="dropdown-divider"></div>
+          <button class="dropdown-btn dropdown-item logout-item" onclick={handleLogout}>
+            Sign out
+          </button>
+        </div>
       </div>
     {:else}
       <button class="nav-btn" onclick={() => navigate('/register')}>Sign up</button>
@@ -268,6 +303,7 @@
     font-size: 1.08rem;
     padding: 0.25rem 0.7rem;
     border-radius: 4px;
+    white-space: nowrap;
   }
   .nav-link:hover { background: var(--line); color: var(--fg); }
 
@@ -282,9 +318,12 @@
     padding-top: 6px;
     z-index: 300;
   }
-  .nav-group:hover .submenu,
+  .submenu.open,
   .nav-group:has(:focus-visible) .submenu { display: block; }   /* keyboard; not after a mouse click */
-  .nav-group:hover > .nav-link { background: var(--line); color: var(--fg); }
+  @media (any-hover: hover) {
+    .nav-group:not(.dismissed):hover .submenu { display: block; }
+    .nav-group:hover > .nav-link { background: var(--line); color: var(--fg); }
+  }
   .submenu-box {
     background: var(--surface);
     border: 1px solid var(--line-strong);
@@ -339,7 +378,10 @@
 
   .icon-btn:hover { background: var(--line); color: var(--fg); }
 
+  /* Settings and user menus: shown on hover (mouse) or when tapped open (touch). The ::before
+     bridges the gap below the button, so the pointer can move into the menu without it closing. */
   .dropdown {
+    display: none;
     position: absolute;
     right: 0;
     top: calc(100% + 6px);
@@ -351,6 +393,17 @@
     box-shadow: 0 4px 16px rgba(0,0,0,0.5);
     z-index: 300;
   }
+  .dropdown::before { content: ''; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
+  .dropdown.open { display: block; }
+  @media (any-hover: hover) {
+    .settings-wrap:hover .dropdown,
+    .user-menu-wrap:not(.dismissed):hover .dropdown { display: block; }
+    .user-menu-wrap:not(.dismissed):hover .menu-arrow { transform: rotate(180deg); }
+  }
+  /* Keyboard, and keep settings open while its board select is in use */
+  .settings-wrap:has(:focus-visible) .dropdown,
+  .settings-wrap:has(select:focus) .dropdown,
+  .user-menu-wrap:has(:focus-visible) .dropdown { display: block; }
 
   .dropdown-item {
     display: flex;
@@ -466,13 +519,13 @@
     white-space: nowrap;
   }
 
-  .user-menu-arrow {
+  .menu-arrow {
     font-size: 1rem;
     color: var(--faint);
     transition: transform 0.15s;
     flex-shrink: 0;
   }
-  .user-menu-arrow.open { transform: rotate(180deg); }
+  .menu-arrow.open { transform: rotate(180deg); }
 
   .user-dropdown { right: 0; min-width: 170px; }
 
@@ -499,7 +552,11 @@
   .nav-btn:hover { background: var(--surface-3); color: var(--fg); }
 
   /* ── Mobile breakpoint ── */
-  @media (max-width: 640px) {
+  /* Narrow but not phone-sized: drop the name next to the logo first, so the links fit on one line */
+  @media (max-width: 900px) {
+    .logo-text   { display: none; }
+  }
+  @media (max-width: 680px) {
     .nav-left    { display: flex; }
     .nav-center  { display: none; }
     .logo-text   { display: none; }

@@ -25,22 +25,34 @@ public class UserController(AppDbContext db) : ControllerBase
         var user   = await db.Users.FindAsync(userId);
         if (user == null) return NotFound();
 
-        user.DisplayName = req.DisplayNameSameAsUsername || string.IsNullOrWhiteSpace(req.DisplayName)
+        string? displayName = req.DisplayNameSameAsUsername || string.IsNullOrWhiteSpace(req.DisplayName)
             ? null
             : req.DisplayName!.Trim();
+        if (AuthController.DisplayNameError(displayName) is { } error)
+            return BadRequest(error);
+        user.DisplayName = displayName;
 
         await db.SaveChangesAsync();
         return Ok(AuthController.MapUser(user));
     }
 
-    private static string? ComputerOpponentName(HistoricGame g)
+    private static string? ComputerOpponentName(HistoricGame g) =>
+        g.Settings.ComputerLevel is int level ? ComputerLevels.Name(level) : null;
+
+    /// <summary>Time-control category, as EloService.GetCategory, by name.</summary>
+    private static string Category(bool timeControlEnabled, int startTimeMinutes) =>
+        !timeControlEnabled || startTimeMinutes >= 30 ? "slow"
+        : startTimeMinutes >= 10 ? "rapid"
+        : startTimeMinutes >= 3  ? "blitz"
+        :                          "bullet";
+
+    /// <summary>The resolved handicap as "B +10" / "W +3" (automatic can be negative: "B −2"), or null.</summary>
+    private static string? HandicapLabel(GameSettings s)
     {
-        try
-        {
-            var gs = JsonSerializer.Deserialize<GameSettings>(g.SettingsJson);
-            return gs?.ComputerLevel is int level ? ComputerLevels.Name(level) : null;
-        }
-        catch { return null; }
+        var (side, gold) = s.BlackHandicapGold != 0 ? ("B", s.BlackHandicapGold)
+                         : s.WhiteHandicapGold != 0 ? ("W", s.WhiteHandicapGold)
+                         : (null, 0);
+        return side == null ? null : $"{side} {(gold > 0 ? "+" : "−")}{Math.Abs(gold)}";
     }
 
     // GET /api/user/{username}  — public profile
@@ -51,7 +63,10 @@ public class UserController(AppDbContext db) : ControllerBase
         [FromQuery] int    startIndex = 0,
         [FromQuery] string sortCol    = "endedAt",
         [FromQuery] string sortDir    = "desc",
-        [FromQuery] string category   = "all")
+        [FromQuery] string category   = "all",
+        [FromQuery] bool   unranked   = true,
+        [FromQuery] string? opponent  = null,
+        [FromQuery] bool   history    = true)
     {
         var user = await db.Users.FirstOrDefaultAsync(u => u.Username == username);
         if (user == null) return NotFound();
@@ -63,14 +78,62 @@ public class UserController(AppDbContext db) : ControllerBase
             .Where(g => (g.WhitePlayerId == userId || g.BlackPlayerId == userId)
                         && g.Result != null);
 
-        // Category filter — SQL level using denormalized columns
+        // Rating history for the graph: every rated game, whatever the table shows. Per category
+        // the rating before the first game, then after each game. Only on request (the page asks on
+        // its first load; tabs, sorting and filters don't change it).
+        Dictionary<string, List<int>>? ratingHistory = null;
+        if (history)
+        {
+            var rated = await baseQuery
+                .Where(g => (g.WhitePlayerId == userId ? g.WhiteEloDelta : g.BlackEloDelta) != null)
+                .OrderBy(g => g.EndedAt)
+                .Select(g => new
+                {
+                    g.Settings.TimeControlEnabled,
+                    g.Settings.StartTimeMinutes,
+                    Before = (g.WhitePlayerId == userId ? g.WhiteEloAtGame : g.BlackEloAtGame)!.Value,
+                    Delta  = (g.WhitePlayerId == userId ? g.WhiteEloDelta  : g.BlackEloDelta)!.Value,
+                })
+                .ToListAsync();
+            ratingHistory = new[] { "bullet", "blitz", "rapid", "slow" }.ToDictionary(c => c, _ => new List<int>());
+            foreach (var r in rated)
+            {
+                var series = ratingHistory[Category(r.TimeControlEnabled, r.StartTimeMinutes)];
+                if (series.Count == 0) series.Add(r.Before);
+                series.Add(r.Before + r.Delta);
+            }
+        }
+
+        if (!unranked)
+            baseQuery = baseQuery.Where(g => g.Settings.IsRanked && g.Settings.ComputerLevel == null);
+
+        // Opponent name filter: human opponents whose display name contains the text
+        opponent = opponent?.Trim();
+        if (!string.IsNullOrEmpty(opponent))
+            baseQuery = baseQuery.Where(g => g.Settings.ComputerLevel == null
+                && db.Users.Any(u => u.Id == (g.WhitePlayerId == userId ? g.BlackPlayerId : g.WhitePlayerId)
+                                     && (u.DisplayName ?? u.Username).Contains(opponent)));
+
+        // Games per category (with the filters above), for the tabs (the per-category counts on User are rated games only)
+        var countRows = await baseQuery
+            .GroupBy(g => !g.Settings.TimeControlEnabled || g.Settings.StartTimeMinutes >= 30 ? "slow"
+                        : g.Settings.StartTimeMinutes >= 10 ? "rapid"
+                        : g.Settings.StartTimeMinutes >= 3  ? "blitz"
+                        :                                     "bullet")
+            .Select(grp => new { Category = grp.Key, Count = grp.Count() })
+            .ToListAsync();
+        var gameCounts = new[] { "bullet", "blitz", "rapid", "slow" }
+            .ToDictionary(c => c, c => countRows.FirstOrDefault(r => r.Category == c)?.Count ?? 0);
+        gameCounts["all"] = countRows.Sum(r => r.Count);
+
+        // Category filter — SQL level
         if (category != "all")
             baseQuery = category switch
             {
-                "bullet" => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes < 3),
-                "blitz"  => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes >= 3 && g.StartTimeMinutes < 10),
-                "rapid"  => baseQuery.Where(g => g.TimeControlEnabled && g.StartTimeMinutes >= 10 && g.StartTimeMinutes < 30),
-                _        => baseQuery.Where(g => !g.TimeControlEnabled || g.StartTimeMinutes >= 30),
+                "bullet" => baseQuery.Where(g => g.Settings.TimeControlEnabled && g.Settings.StartTimeMinutes < 3),
+                "blitz"  => baseQuery.Where(g => g.Settings.TimeControlEnabled && g.Settings.StartTimeMinutes >= 3 && g.Settings.StartTimeMinutes < 10),
+                "rapid"  => baseQuery.Where(g => g.Settings.TimeControlEnabled && g.Settings.StartTimeMinutes >= 10 && g.Settings.StartTimeMinutes < 30),
+                _        => baseQuery.Where(g => !g.Settings.TimeControlEnabled || g.Settings.StartTimeMinutes >= 30),
             };
 
         bool asc = sortDir == "asc";
@@ -103,20 +166,29 @@ public class UserController(AppDbContext db) : ControllerBase
         }
         else
         {
-            // All other sorts — SQL level using denormalized columns
+            // All other sorts — SQL level
             totalGames = await baseQuery.CountAsync();
 
             var sortedQuery = sortCol switch
             {
                 "result"  => asc ? baseQuery.OrderBy(g => g.Result)    : baseQuery.OrderByDescending(g => g.Result),
-                "eloDelta" => asc
-                    ? baseQuery.OrderBy(g => g.WhitePlayerId == userId ? g.WhiteEloDelta : g.BlackEloDelta)
-                    : baseQuery.OrderByDescending(g => g.WhitePlayerId == userId ? g.WhiteEloDelta : g.BlackEloDelta),
+                // Rating after the game (as shown); unrated games last either way
+                "rating" => asc
+                    ? baseQuery.OrderBy(g => (g.WhitePlayerId == userId ? g.WhiteEloAtGame + g.WhiteEloDelta : g.BlackEloAtGame + g.BlackEloDelta) == null)
+                               .ThenBy(g => g.WhitePlayerId == userId ? g.WhiteEloAtGame + g.WhiteEloDelta : g.BlackEloAtGame + g.BlackEloDelta)
+                               .ThenByDescending(g => g.EndedAt)
+                    : baseQuery.OrderBy(g => (g.WhitePlayerId == userId ? g.WhiteEloAtGame + g.WhiteEloDelta : g.BlackEloAtGame + g.BlackEloDelta) == null)
+                               .ThenByDescending(g => g.WhitePlayerId == userId ? g.WhiteEloAtGame + g.WhiteEloDelta : g.BlackEloAtGame + g.BlackEloDelta)
+                               .ThenByDescending(g => g.EndedAt),
                 "timeControl" => asc
-                    ? baseQuery.OrderBy(g => g.TimeControlEnabled ? g.StartTimeMinutes * 60 + g.TimeIncrementSeconds : int.MaxValue)
-                    : baseQuery.OrderByDescending(g => g.TimeControlEnabled ? g.StartTimeMinutes * 60 + g.TimeIncrementSeconds : int.MaxValue),
+                    ? baseQuery.OrderBy(g => g.Settings.TimeControlEnabled ? g.Settings.StartTimeMinutes * 60 + g.Settings.TimeIncrementSeconds : int.MaxValue)
+                    : baseQuery.OrderByDescending(g => g.Settings.TimeControlEnabled ? g.Settings.StartTimeMinutes * 60 + g.Settings.TimeIncrementSeconds : int.MaxValue),
                 "moveCount" => asc ? baseQuery.OrderBy(g => g.MoveCount)  : baseQuery.OrderByDescending(g => g.MoveCount),
-                "boardSize" => asc ? baseQuery.OrderBy(g => g.BoardSize)  : baseQuery.OrderByDescending(g => g.BoardSize),
+                "boardSize" => asc ? baseQuery.OrderBy(g => g.Settings.BoardSize)  : baseQuery.OrderByDescending(g => g.Settings.BoardSize),
+                // By size, whichever side got it
+                "handicap"  => asc
+                    ? baseQuery.OrderBy(g => Math.Abs(g.Settings.BlackHandicapGold) + Math.Abs(g.Settings.WhiteHandicapGold)).ThenByDescending(g => g.EndedAt)
+                    : baseQuery.OrderByDescending(g => Math.Abs(g.Settings.BlackHandicapGold) + Math.Abs(g.Settings.WhiteHandicapGold)).ThenByDescending(g => g.EndedAt),
                 _           => asc ? baseQuery.OrderBy(g => g.EndedAt)    : baseQuery.OrderByDescending(g => g.EndedAt),
             };
 
@@ -134,14 +206,12 @@ public class UserController(AppDbContext db) : ControllerBase
         {
             bool isWhite = g.WhitePlayerId == userId;
 
-            // Settings JSON: map mode, ranked flag, computer opponent
-            GameSettings? gs = null;
-            try { gs = JsonSerializer.Deserialize<GameSettings>(g.SettingsJson); } catch { }
-            bool vsComputer = gs?.ComputerLevel != null;
+            var gs = g.Settings;
+            bool vsComputer = gs.ComputerLevel != null;
 
             int? opponentId = isWhite ? g.BlackPlayerId : g.WhitePlayerId;
             User? opp = !vsComputer && opponentId.HasValue && opponents.TryGetValue(opponentId.Value, out var o) ? o : null;
-            string  opponentName     = vsComputer ? ComputerLevels.Name(gs!.ComputerLevel!.Value) : opp?.EffectiveDisplayName ?? "Anonymous";
+            string  opponentName     = vsComputer ? ComputerLevels.Name(gs.ComputerLevel!.Value) : opp?.EffectiveDisplayName ?? "Anonymous";
             string? opponentUsername = opp?.Username;
 
             int? myEloAtGame  = isWhite ? g.WhiteEloAtGame : g.BlackEloAtGame;
@@ -172,24 +242,17 @@ public class UserController(AppDbContext db) : ControllerBase
                 _     => "—",
             };
 
-            // Derive category from denormalized columns (no JSON parse needed)
-            string cat = !g.TimeControlEnabled      ? "slow" :
-                          g.StartTimeMinutes >= 30  ? "slow" :
-                          g.StartTimeMinutes >= 10  ? "rapid" :
-                          g.StartTimeMinutes >= 3   ? "blitz" :
-                                                      "bullet";
-
-            string mapMode = gs?.MapMode ?? "m";
+            string cat = Category(gs.TimeControlEnabled, gs.StartTimeMinutes);
 
             return new
             {
                 gameId               = g.Id,
                 endedAt              = g.EndedAt,
-                boardSize            = g.BoardSize,
-                mapMode,
-                timeControlEnabled   = g.TimeControlEnabled,
-                startTimeMinutes     = g.StartTimeMinutes,
-                timeIncrementSeconds = g.TimeIncrementSeconds,
+                boardSize            = gs.BoardSize,
+                mapMode              = gs.MapMode,
+                timeControlEnabled   = gs.TimeControlEnabled,
+                startTimeMinutes     = gs.StartTimeMinutes,
+                timeIncrementSeconds = gs.TimeIncrementSeconds,
                 category             = cat,
                 opponentName,
                 opponentUsername,
@@ -199,8 +262,9 @@ public class UserController(AppDbContext db) : ControllerBase
                 result,
                 resultDetail,
                 moveCount            = g.MoveCount,
-                isRanked             = (gs?.IsRanked ?? true) && !vsComputer,
+                isRanked             = gs.IsRanked && !vsComputer,
                 vsComputer,
+                handicap             = HandicapLabel(gs),
             };
         }).ToList();
 
@@ -217,6 +281,8 @@ public class UserController(AppDbContext db) : ControllerBase
             },
             games = gamesResponse,
             totalGames,
+            gameCounts,
+            ratingHistory,
         });
     }
 }

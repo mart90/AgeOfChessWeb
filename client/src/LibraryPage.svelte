@@ -75,7 +75,7 @@
   });
 
   function formatDate(iso) {
-    const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+    const d = new Date(iso);
     return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   }
 </script>

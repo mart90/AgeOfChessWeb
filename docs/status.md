@@ -1,14 +1,49 @@
 # Current Work & Status
 
-_Last updated: 2026-10-28_
+_Last updated: 2026-10-30_
 
 ## Current focus
 
-**Reconnecting (2026-10-30).** `client/src/lib/hub.js` owns the game-hub connection: retries
-forever (0/1/2/5 s), and when the page becomes visible again (phones kill sockets in the
-background) it reconnects at once, or pings (`GameHub.Ping`, 1.5 s timeout) and restarts if
-the socket is silently dead. Server keep-alive 5 s, client server-timeout 15 s. GamePage
-joins via `onConnected` (runs after every reconnect) and removes its hub handlers on leaving.
+**Handicap (2026-10-31, game-rules.md).** Lobby and vs-computer tabs: Handicap None / Automatic /
+Manual (+ amount), with a "?" tooltip (`InfoTip.svelte`, also behind `BidHelp.svelte`). Lobbies
+now have "Your color" (White / Black / Random; `GameSettings.CreatorColor`, applied by swapping
+when the game starts). Ranked is forced off for handicap and seeded games (client + server).
+Automatic = 1 gold / 100 Elo is a placeholder.
+
+**Settings columns (2026-10-31).** The `SettingsJson` column is gone: `GameSettings` is an EF owned
+type mapped to plain columns of `GameSessions` and `HistoricGames` (`AppDbContext.MapSettings`;
+the existing BoardSize / time-control columns are reused, the requested seed is
+`RequestedMapSeed`). Migration `SettingsColumns` copies the old JSON values over before dropping
+it; applied to dev. **Production:** `db-migrations/20261031_SettingsColumns.sql` runs on the next
+full deploy (`deploy.py`); delete that file afterwards. Live games and ServerGame use their own
+copy of the settings (`GameSettings.Clone`).
+Also pending for production (2026-11-01): `db-migrations/20261101_HistoricGamePlayerIndexes.sql`
+(indexes on `HistoricGames.WhitePlayerId` / `BlackPlayerId` for the profile query; applied to
+dev). Delete it after the deploy too.
+
+**Network in the browser (2026-10-31, engine.md).** `client/src/lib/engine/network.ggnn` (nn17),
+SIMD wasm build with baseline fallback. Analyze page uses it on 10×10 ("Engine (NNUE)"). New
+computer levels on 10×10 only: 8 (40k network nodes, ~2200) and 9 (300k, ~2400); the level picker
+is now a dropdown. Needs a full deploy (`Program.cs` serves `.ggnn`).
+
+**Reconnecting (2026-10-30, reworked 2026-11-01).** `client/src/lib/hub.js` owns the game-hub
+connection. Each connect attempt uses a fresh HubConnection with a time limit (5 s, growing), so
+an attempt hanging on a dead network can't block reconnecting (it used to: SignalR can't restart
+a connection while a start is pending; measured 13 s headless, ~30 s on phones → now ~60 ms).
+When the page comes back: after a freeze (timers didn't run ≥ 20 s, or bfcache restore) the
+connection is replaced without asking; after a shorter absence it's pinged (`GameHub.Ping`,
+1.5 s) and replaced if silent; a pending retry wait or slow attempt is cut short. Handlers
+(`hub.on/off`) carry over to new connections; `hub.invoke` made while reconnecting waits up to
+10 s. Disconnects 5 s after the last subscriber leaves. Server keep-alive 5 s, client
+server-timeout 15 s. GamePage joins via `onConnected` (runs after every reconnect); status text
+"Reconnecting…".
+
+**Games lost overnight (fixed 2026-11-01).** `GameCleanupService` removed any started game from
+memory after 24 h without a move with both players away — including untimed games, meant to be
+kept 7 days — and the orphan sweep then deleted the row: the game was gone ("interrupted when the
+server restarted"). The 24 h rule is gone (timed games end on the flag, untimed after 7 days as
+abandoned); games removed unfinished (lobby never joined, no moves made) now also lose their DB
+row, so "server restarted" only shows for real restarts.
 
 **My library (2026-10-28).** Logged-in users save games with their variations: "📚" next to 🔍
 after a game (GamePage; again = update the same entry), "Save to library" on the analysis board
@@ -93,6 +128,14 @@ nn10 draws ~20% vs hand-written at the 400-ply cap while far ahead (value satura
 **moves-left head** (2026-10-30, training.md): head fine-tuned on frozen nn10 (`m10_nn10ml`),
 draws vs hand-written 57 → 17 of 300 at weight 3, no cost vs nn10. **Adopted: weight 3**; current
 network `training/runs/m10_nn10ml/net.ggnn`. Future training runs use `--moves-left`.
+Iterations 11–13 (2026-10-30, continued / continued / from scratch): **nn12 +16 vs nn10ml, nn13
++14 vs nn12; vs nn3 +189** (nn10: +158). Iterations 14–15 (continued, 2026-10-31): nn14 +3,
+**nn15 +13 vs nn14, +206 vs nn3**. Iteration 16 (from scratch): **nn16 +10 vs nn15, +215 vs nn3,
+vs hand-written 1559–41**. Iterations 17–18 (continued): nn17 +5 vs nn16, nn18 −12 (not
+promoted); vs nn3 flat at +215. Iteration 19 (from scratch): nn19 +5 vs nn17, +215 vs nn3 —
+plateau. Best net: `training/runs/m10_nn19/net.ggnn`; training paused. Self-play is ~81% mates /
+17% gold wins (5% for nn13–nn15); hand-written wins by gold less often than before (1.4% vs 2.9% for nn6/nn7).
+Move ordering measured (engine.md): near perfect, so no policy network for now.
 
 **Agreed plan (in this order):**
 1. *(Done 2026-10-30: White 48.0% at 6, 49.2% at 5, 54.8% at 4 — 4 overshoots; see engine.md.)*
@@ -104,7 +147,9 @@ network `training/runs/m10_nn10ml/net.ggnn`. Future training runs use `--moves-l
    count only the A-as-White game per board — identical engines replay the same game). Network
    self-play currently ends ~55% Black. Rule change would touch C#, Rust, JS, game-rules.md and
    check `computerBid` defaults; existing training data stays usable.
-2. **Continue vs from scratch:** train from nn9's weights (`--init m10_nn9`, lower lr, few epochs)
+2. *(Done: continued −12 ± 17 vs from scratch in 12 vs 144 min; adopted with a from-scratch run every
+   3rd iteration — see training.md. Iterations 11–13 started 2026-10-30.)*
+   **Continue vs from scratch:** train from nn9's weights (`--init m10_nn9`, lower lr, few epochs)
    on exactly nn10's data and match vs nn10 (from scratch). If level, continued training becomes
    the default (≈2.4 h → ~30 min per iteration), with an occasional from-scratch run.
 Later: browser integration (WASM simd128 first).

@@ -24,9 +24,22 @@ One engine, two targets: **native** (multi-threaded training-game generation) an
   `alloc`, `dealloc`, `handle(ptr, len)`, `out_len`; imports only `env.now_ms`.
 - JSON API in `src/api.rs` (`search`, `legal`, `status`, `newGame`); positions use the
   client's square format. `src/wasm.rs` is the raw export layer.
-- `npm run build:engine` (in `client/`) rebuilds and copies the binary to
-  `client/src/lib/engine/goldrush_engine.wasm`. **The .wasm is committed**, so the server's
-  normal `npm run build` / `deploy.py` needs no Rust toolchain.
+- `npm run build:engine` (in `client/`, `client/scripts/build-engine.mjs`) builds two binaries:
+  `goldrush_engine.wasm` (baseline) and `goldrush_engine_simd.wasm` (`+simd128`); the worker
+  uses the SIMD one when `WebAssembly.validate` accepts a v128 module (`engineWasm.js`
+  `simdSupported`). `npm run build:engine -- PATH/net.ggnn` also copies a network to
+  `client/src/lib/engine/network.ggnn`. **The .wasm files and the network are committed**, so
+  the server's normal `npm run build` / `deploy.py` needs no Rust toolchain.
+- **Evaluation network in the browser (2026-10-31):** `network.ggnn` = `training/runs/m10_nn17`
+  (1.9 MB, fetched once per page when first needed, then copied into each worker; served with a
+  `.ggnn` content type mapping in `Program.cs`). Wasm export `load_nnue(ptr, len)`; search
+  requests take `nnue: true` and the result reports `nnue` (false on boards the network doesn't
+  fit, i.e. not 10×10, or if loading failed — then the hand-written eval is used). Switching eval
+  clears the TT. V8 speed, start positions, CPU shared with a training run (ratio is what
+  matters): hand-written 566k / 619k nodes/s (baseline / SIMD), network 56k / 148k — SIMD is
+  needed (network 4.2× slower than hand-written with SIMD, as native; 10× without).
+- Analyze page: on 10×10 boards analysis and *Engine move* use the network ("Engine (NNUE)");
+  Engine move then searches 150k nodes instead of 600k (about the same time).
 - Client side (`client/src/lib/engine/`): `engineWasm.js` (loader), `engineWorker.js`
   (searches off the main thread), `engine.js` (main-thread instance for legal moves/status +
   worker wrapper with cancel).
@@ -41,7 +54,12 @@ One engine, two targets: **native** (multi-threaded training-game generation) an
 
 - Levels (node budget per move → same strength on every device; Elo = Mart's estimates,
   set by Mart on 2026-10-26): 1: 1k + mistakes ~800 · 2: 1k ~1000 · 3: 2.4k ~1200 · 4: 6k ~1400 ·
-  5: 12k ~1600 · 6: 60k ~1800 · 7: 600k ~2000. Defined in
+  5: 12k ~1600 · 6: 60k ~1800 · 7: 600k ~2000 · **network levels (2026-10-31, 10×10 boards only,
+  `nnue` in the level): 8: 40k ~2200 · 9: 300k ~2400** (Mart's labels). Calibration (2026-10-31): nn17's network at
+  N nodes vs level 7 (hand-written, 600k), holdout boards: 20k 61.5% (+81 ± 50, 200 games) ·
+  40k 78.0% (+220 ± 59, 200) · 100k 89.7% (+376, 68) · 300k 93.5% (+463, 200) · 600k 98.0%
+  (+676 ± 339, 100). Level 9 was 1.2M first, then 600k (Mart: too slow), now 300k (~1 s per move on a desktop).
+  Levels 8–9 bid for colours like level 7 (hand-written eval, `levels.js` `bidNodes`). Defined in
   `AgeOfChess.Server/Services/ComputerLevels.cs` and `client/src/lib/engine/levels.js` (keep in sync).
 - **Level 1 mistakes:** search the two best moves (multi-PV 2, 1k nodes each) and with
   probability 0.6 play the second if it is at most 5 gold worse (`ComputerMistakeRate/MaxLoss`
@@ -90,12 +108,12 @@ One engine, two targets: **native** (multi-threaded training-game generation) an
   More likely the eval overrates White on mirrored boards: median bid 7, while self-play puts
   the fair Black starting gold at ~4 (White 48.3% with 5 gold, 46.7% with 6).
   Submitted via hub method `SubmitComputerBid`. Normal resolution follows (creator wins ties); `SwapColors`
-  also flips `Settings.ComputerIsWhite`, which is persisted to `SettingsJson`. Computer moves
+  also flips `Settings.ComputerIsWhite`, which is persisted (`GameFlowService.PersistStartAsync`). Computer moves
   are rejected while bidding is open (`GameStateDto.BiddingInProgress`).
 - Games are stored in history like any other (opponent shown as "Computer (Level N)",
   "unranked" in the rating column); resume after restart and replays work as usual.
-- Ranked/unranked and computer info live in `GameSettings` (serialised in `SettingsJson`),
-  so no DB migration was needed. `Create lobby` has a *Ranked* checkbox (default on);
+- Ranked/unranked and computer info live in `GameSettings` (columns of `GameSessions` /
+  `HistoricGames`, see docs/status.md). `Create lobby` has a *Ranked* checkbox (default on);
   matchmaking games are always ranked; unranked games skip `ApplyEloUpdates`.
 
 ## Rules validation
@@ -191,3 +209,22 @@ override: `position.rules = { queenDrops: "", queenCost: 72 }`.
   below was measured with (Elo estimates not yet re-measured).
 - Default eval vs. old JS-style eval (same search, 100 ms): **+207 ± 76 Elo** (120 games).
   The old eval buys ~40% more pieces and games last longer (167 plies).
+
+## Move ordering (2026-10-31)
+
+`gg selfplay --order-stats` reports how early the search finds the move that decides each
+interior node. nn15 self-play, 60 holdout games at 12k nodes (avg depth 4.9):
+
+| Remaining depth | Cut nodes: cutoff by the 1st move | Effort before the cutoff move |
+|---|---|---|
+| 1 | 78% | 11.5% |
+| 2 | 88% | 5.4% |
+| 3 | 93% | 3.4% |
+| 4 | 97% | 1.6% |
+| 5+ | 99% | 0.6% |
+
+Placements are ~50% of legal moves but only 1.5% of cutoffs (quiet placements; usually found
+late). Cutoffs: captures 45%, TT move 23%, killers 20%, quiet piece moves 6%, placements on
+mines 5%. Conclusion: the ordering (TT, MVV, killers, history) is already near what perfect
+ordering would give, so a policy network would gain little as an ordering aid; any gain would have
+to come from pruning placements more aggressively, which LMR/LMP already do for late quiets.

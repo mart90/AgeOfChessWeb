@@ -2,7 +2,8 @@
 // lib/analysisWorker.js: same postMessage({ type: 'start' | 'update' | 'stop', payload })
 // interface, emits onmessage({ data: { type: 'depth-result', depth, topMoves, timeMs } })
 // with topMoves = [{ move, score, mate, pv }] (score: gold, White's point of view).
-import { EngineClient } from './engine.js';
+// `new EngineAnalysis({ nnue: true })`: use the evaluation network on boards it was trained for.
+import { EngineClient, NNUE_BOARD_SIZE } from './engine.js';
 
 const MULTI_PV = 5;
 const MAX_DEPTH = 90;   // engine limit; in practice analysis runs until stopped
@@ -13,6 +14,11 @@ export class EngineAnalysis {
   #position = null;
   #running = false;
   #version = 0;
+  #nnue;
+
+  constructor({ nnue = false } = {}) {
+    this.#nnue = nnue;
+  }
 
   postMessage({ type, payload }) {
     if (type === 'start' || type === 'update') {
@@ -42,11 +48,12 @@ export class EngineAnalysis {
 
   async #loop(version) {
     const position = this.#position;
+    const nnue = this.#nnue && position.squares.length === NNUE_BOARD_SIZE * NNUE_BOARD_SIZE;
     for (let depth = 1; depth <= MAX_DEPTH; depth++) {
       const t0 = performance.now();
       let res;
       try {
-        res = await this.#client.call({ cmd: 'search', position, depth, multiPv: MULTI_PV });
+        res = await this.#client.call({ cmd: 'search', position, depth, multiPv: MULTI_PV, nnue });
       } catch (e) {
         if (version === this.#version && e.message !== 'cancelled') this.#emit({ type: 'error', message: e.message });
         return;

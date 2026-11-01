@@ -1,37 +1,53 @@
 import * as signalR from '@microsoft/signalr';
 
 /**
- * The connection to the game hub: one per page, kept up for as long as anything is subscribed.
+ * The connection to the game hub, shared by the page and kept up while anything is subscribed.
  *
- * Phones drop the socket while the page is in the background, often without either side noticing
- * for a while, and SignalR's default reconnect gives up after four tries (which happen in the
- * background). So here reconnecting never gives up, and when the page becomes visible again the
- * connection is checked straight away: restarted if it's down or still waiting out a retry delay,
- * pinged if it looks up.
+ * Phones freeze a page in the background and drop its socket, often without either side noticing
+ * for a while. A connect attempt made on a network that isn't back yet can hang until the browser
+ * gives up (30 s or more), and a SignalR connection can't be restarted while one is pending. So:
+ *   - every connect attempt uses a fresh HubConnection and is abandoned after a time limit;
+ *   - when the page comes back after being frozen, the old connection is replaced straight away
+ *     (the server drops clients it hasn't heard from in 30 s anyway); after a shorter absence it's
+ *     pinged, and replaced if it doesn't answer;
+ *   - coming back also cuts a retry delay short, or a connect attempt that's taking too long.
  *
- * Usage: register event handlers with `hub.on` (and remove them with `hub.off`), and do the
- * joining in `onConnected`, which runs once connected and again after every reconnect.
+ * Usage: `hub.on` / `hub.off` for server events (they carry over to new connections), `hub.invoke`
+ * for calls (made while reconnecting, they wait for the connection), and do the joining in
+ * `onConnected`, which runs once connected and again after every reconnect.
  */
 
-const RETRY_DELAYS          = [0, 1000, 2000, 5000];   // then every 5 s
-const CHECK_AFTER_HIDDEN_MS = 3000;
-const PING_TIMEOUT_MS       = 1500;
+const RETRY_DELAYS     = [0, 1000, 2000, 4000];   // then every 4 s
+const START_TIMEOUT_MS = 5000;     // per connect attempt; longer for later attempts (slow networks)
+const KICK_AFTER_MS    = 1000;     // coming back abandons a connect attempt that's been going this long
+const PING_TIMEOUT_MS  = 1500;
+const PROBE_AFTER_MS   = 2000;     // back after being hidden this long: ping
+const FROZEN_MS        = 20000;    // the page's timers didn't run this long: the connection is dead
+const INVOKE_WAIT_MS   = 10000;    // calls made while disconnected wait this long for a connection
+const IDLE_STOP_MS     = 5000;     // disconnect this long after the last subscriber left
 
-const { Connected, Disconnected, Reconnecting } = signalR.HubConnectionState;
-const retryDelay = (n) => RETRY_DELAYS[Math.min(n, RETRY_DELAYS.length - 1)];
+const retryDelay   = (n) => RETRY_DELAYS[Math.min(n, RETRY_DELAYS.length - 1)];
+const startTimeout = (n) => START_TIMEOUT_MS * Math.min(n + 1, 4);
 
-let connection = null;
-let connecting = null;          // the running connect loop, if any
-let wake       = null;          // cuts the connect loop's current wait short
-let restarting = false;
+let connection = null;          // the current connection, set once it's connected
+let attempting = null;          // the connection being started, if any
+let connecting = false;         // the connect loop is running
+let kick       = null;          // cuts the connect loop's current wait (or slow attempt) short
+let idleTimer  = null;
+let watching   = false;
+let lastTick   = Date.now();    // heartbeat, to notice the page was frozen
+let wasFrozen  = false;
 let hiddenAt   = null;
+const handlers           = new Map();   // event → Set of handlers
 const connectedListeners = new Set();
 const statusListeners    = new Set();
+const waiters            = new Set();   // invokes waiting for a connection
 
-/** The game hub connection (handlers can be added before it's connected). */
+const hub = { on, off, invoke };
+
+/** The game hub: `on`, `off` and `invoke` (handlers can be added before it's connected). */
 export function getGameHub() {
-  if (!connection) build();
-  return connection;
+  return hub;
 }
 
 /**
@@ -39,11 +55,15 @@ export function getGameHub() {
  * Returns an unsubscribe function.
  */
 export function onConnected(fn) {
-  getGameHub();
+  watchPage();
+  clearTimeout(idleTimer);
   connectedListeners.add(fn);
-  if (connection.state === Connected) fn();
+  if (connection) fn();
   else ensureConnecting();
-  return () => connectedListeners.delete(fn);
+  return () => {
+    connectedListeners.delete(fn);
+    if (!connectedListeners.size) idleTimer = setTimeout(stopIfIdle, IDLE_STOP_MS);
+  };
 }
 
 /** `fn('disconnected' | 'connected')` on connection changes. Returns an unsubscribe function. */
@@ -52,77 +72,159 @@ export function onConnectionStatus(fn) {
   return () => statusListeners.delete(fn);
 }
 
+function on(event, fn) {
+  if (!handlers.has(event)) {
+    handlers.set(event, new Set());
+    for (const conn of [connection, attempting]) if (conn) dispatch(conn, event);
+  }
+  handlers.get(event).add(fn);
+}
+
+function off(event, fn) {
+  handlers.get(event)?.delete(fn);
+}
+
+async function invoke(method, ...args) {
+  const conn = connection ?? await waitForConnection();
+  return conn.invoke(method, ...args);
+}
+
+// ── Connecting ──────────────────────────────────────────────────────────────
+
 function build() {
-  connection = new signalR.HubConnectionBuilder()
+  const conn = new signalR.HubConnectionBuilder()
     .withUrl('/hub/game', {
-      // Called on every connect, so it picks up a login that happened after the page load
+      // Read on every connect, so it picks up a login that happened after the page load
       accessTokenFactory: () => localStorage.getItem('auth_token') ?? '',
     })
-    .withAutomaticReconnect({ nextRetryDelayInMilliseconds: ({ previousRetryCount }) => retryDelay(previousRetryCount) })
     .build();
   // The server pings every 5 s (Program.cs): notice a dead connection after 15 s instead of 30
-  connection.serverTimeoutInMilliseconds = 15000;
+  conn.serverTimeoutInMilliseconds = 15000;
+  for (const event of handlers.keys()) dispatch(conn, event);
+  conn.onclose(() => { if (conn === connection) lost(); });
+  return conn;
+}
 
-  connection.onreconnecting(() => emitStatus('disconnected'));
-  connection.onreconnected(connected);
-  connection.onclose(() => {
-    emitStatus('disconnected');
-    if (connectedListeners.size) ensureConnecting();
+/** Passes `event` on to the handlers, as long as `conn` is the current connection. */
+function dispatch(conn, event) {
+  conn.on(event, (...args) => {
+    if (conn !== connection) return;
+    for (const fn of [...handlers.get(event)]) fn(...args);
   });
+}
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { hiddenAt = Date.now(); return; }
-    const away = hiddenAt == null ? 0 : Date.now() - hiddenAt;
-    hiddenAt = null;
-    check(away >= CHECK_AFTER_HIDDEN_MS);
+/** Connects if not connected, retrying until it's up (or nothing needs it any more). */
+function ensureConnecting() {
+  if (connecting || connection || !connectedListeners.size) return;
+  connecting = true;
+  (async () => {
+    for (let attempt = 0; connectedListeners.size; attempt++) {
+      const conn = attempting = build();
+      const result = await race(conn.start().then(() => 'ok', () => 'failed'), startTimeout(attempt), Date.now() + KICK_AFTER_MS);
+      attempting = null;
+      if (result === 'ok' && connectedListeners.size) { connection = conn; return; }
+      conn.stop().catch(() => {});   // abandoned: may still be hanging, it's not awaited
+      if (result === 'kicked') { attempt = -1; continue; }
+      if (await race(new Promise(resolve => setTimeout(resolve, retryDelay(attempt + 1))), null, 0) === 'kicked') attempt = -1;
+    }
+  })().finally(() => {
+    connecting = false;
+    if (connection) connected();
   });
-  window.addEventListener('online', () => check(true));
+}
+
+/**
+ * Waits for `promise`, `timeoutMs` (if given) or a kick, whichever comes first: resolves to the
+ * promise's value, 'timeout' or 'kicked'. Kicks before `kickableAt` (a timestamp) are ignored.
+ */
+function race(promise, timeoutMs, kickableAt) {
+  let timer;
+  return new Promise(resolve => {
+    if (timeoutMs != null) timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    kick = () => { if (Date.now() >= kickableAt) resolve('kicked'); };
+    promise.then(resolve);
+  }).finally(() => { clearTimeout(timer); kick = null; });
+}
+
+function connected() {
+  emitStatus('connected');
+  for (const fn of [...connectedListeners]) fn();
+  for (const resolve of [...waiters]) resolve(connection);
+}
+
+/** The current connection closed. */
+function lost() {
+  connection = null;
+  emitStatus('disconnected');
+  ensureConnecting();
+}
+
+/** The current connection is (presumably) dead: drop it without waiting for it, and reconnect. */
+function replace() {
+  const old = connection;
+  connection = null;   // ignores its events and its close from here on
+  old?.stop().catch(() => {});
+  emitStatus('disconnected');
+  ensureConnecting();
+}
+
+function stopIfIdle() {
+  if (connectedListeners.size || !connection) return;
+  const old = connection;
+  connection = null;
+  old.stop().catch(() => {});
+}
+
+function waitForConnection() {
+  ensureConnecting();
+  return new Promise((resolve, reject) => {
+    const done = (conn) => { clearTimeout(timer); waiters.delete(done); resolve(conn); };
+    const timer = setTimeout(() => { waiters.delete(done); reject(new Error('Not connected to the game server')); }, INVOKE_WAIT_MS);
+    waiters.add(done);
+  });
 }
 
 function emitStatus(s) { for (const fn of statusListeners) fn(s); }
 
-function connected() {
-  emitStatus('connected');
-  for (const fn of connectedListeners) fn();
-}
+// ── Coming back (phone unlocked, tab shown, network back) ───────────────────
 
-/** Starts the connection if it's down, retrying until it's up. */
-function ensureConnecting() {
-  if (connecting || restarting || connection.state !== Disconnected) return;
-  connecting = (async () => {
-    for (let attempt = 0; connection.state === Disconnected; attempt++) {
-      try {
-        await connection.start();
-      } catch {
-        await new Promise(resolve => { wake = resolve; setTimeout(resolve, retryDelay(attempt + 1)); });
-        wake = null;
-      }
+function watchPage() {
+  if (watching) return;
+  watching = true;
+  setInterval(() => {
+    const now = Date.now();
+    if (now - lastTick > FROZEN_MS) {
+      wasFrozen = true;
+      if (!document.hidden) check(false);
     }
-  })().finally(() => {
-    connecting = null;
-    if (connection.state === Connected) connected();
+    lastTick = now;
+  }, 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    check(hiddenAt != null && Date.now() - hiddenAt >= PROBE_AFTER_MS);
+    hiddenAt = null;
   });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) { wasFrozen = true; check(false); } });
+  window.addEventListener('online', () => check(true));
 }
 
-/** Back in view / back online: get connected now rather than after the next retry delay. */
+/** Gets connected now rather than after the next retry; `probe` pings a connection that looks up. */
 async function check(probe) {
+  // The heartbeat may not have run yet since the page woke up
+  const frozen = wasFrozen || Date.now() - lastTick > FROZEN_MS;
+  wasFrozen = false;
+  lastTick = Date.now();   // so the heartbeat doesn't report the same freeze again
   if (!connectedListeners.size) return;
-  if (connection.state === Disconnected) { wake?.(); ensureConnecting(); }
-  else if (connection.state === Reconnecting) restart();
-  else if (connection.state === Connected && probe && !(await ping())) restart();
+  if (!connection) { kick?.(); ensureConnecting(); return; }
+  if (frozen) { replace(); return; }
+  if (!probe) return;
+  const conn = connection;
+  if (!(await ping(conn)) && conn === connection) replace();
 }
 
-function ping() {
+function ping(conn) {
   return Promise.race([
-    connection.invoke('Ping').then(() => true, () => false),
+    conn.invoke('Ping').then(() => true, () => false),
     new Promise(resolve => setTimeout(() => resolve(false), PING_TIMEOUT_MS)),
   ]);
-}
-
-async function restart() {
-  if (restarting) return;
-  restarting = true;
-  try { await connection.stop(); } catch { /* already down */ }
-  restarting = false;
-  ensureConnecting();
 }

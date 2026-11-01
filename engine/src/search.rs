@@ -39,6 +39,60 @@ struct TTEntry {
     flag: u8,
 }
 
+/// Move-ordering statistics (`gg selfplay --order-stats`): how early the best move is searched.
+/// Depth buckets: remaining depth 1, 2, 3, 4, 5+. Index buckets: 0, 1, 2, 3-5, 6-10, 11+.
+/// Categories of the deciding move: TT move, capture, tactical placement (on a mine), killer,
+/// quiet piece move, quiet placement.
+#[derive(Clone, Default)]
+pub struct OrderStats {
+    pub nodes: [u64; 5],
+    pub legal: [u64; 5],
+    pub legal_placements: [u64; 5],
+    pub searched: [u64; 5],
+    pub cuts: [u64; 5],
+    pub cut_idx: [[u64; 6]; 5],
+    /// [category][index bucket]
+    pub cut_cat_idx: [[u64; 6]; 6],
+    /// Sum over cut nodes of the share of the node's subtree spent before the cutoff move.
+    pub cut_waste: [f64; 5],
+    pub exact: [u64; 5],
+    pub exact_idx: [[u64; 6]; 5],
+}
+
+impl OrderStats {
+    pub fn add(&mut self, o: &OrderStats) {
+        for d in 0..5 {
+            self.nodes[d] += o.nodes[d];
+            self.legal[d] += o.legal[d];
+            self.legal_placements[d] += o.legal_placements[d];
+            self.searched[d] += o.searched[d];
+            self.cuts[d] += o.cuts[d];
+            self.cut_waste[d] += o.cut_waste[d];
+            self.exact[d] += o.exact[d];
+            for i in 0..6 {
+                self.cut_idx[d][i] += o.cut_idx[d][i];
+                self.exact_idx[d][i] += o.exact_idx[d][i];
+            }
+        }
+        for c in 0..6 {
+            for i in 0..6 {
+                self.cut_cat_idx[c][i] += o.cut_cat_idx[c][i];
+            }
+        }
+    }
+
+    pub fn idx_bucket(i: usize) -> usize {
+        match i {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            3..=5 => 3,
+            6..=10 => 4,
+            _ => 5,
+        }
+    }
+}
+
 const TT_EXACT: u8 = 1;
 const TT_LOWER: u8 = 2;
 const TT_UPPER: u8 = 3;
@@ -73,6 +127,8 @@ pub struct Searcher {
     excluded_root: Vec<Move>,
     /// Called every few thousand nodes with the node count; return true to abort.
     pub should_stop: Option<Box<dyn FnMut(u64) -> bool>>,
+    /// Move-ordering statistics; collected when set.
+    pub order_stats: Option<Box<OrderStats>>,
 }
 
 impl Searcher {
@@ -145,6 +201,7 @@ impl Searcher {
             root_best: Move::NULL,
             excluded_root: Vec::new(),
             should_stop: None,
+            order_stats: None,
         }
     }
 
@@ -465,6 +522,8 @@ impl Searcher {
         let mut quiets_tried = 0;
 
         let mut searched = 0usize;
+        let n_start = self.nodes;
+        let mut cut_info = (0usize, 0u64); // (category, nodes before the cutoff move)
         for i in 0..moves.len() {
             let m = Self::pick(&mut moves, &mut scores, i);
             if ply == 0 && !self.excluded_root.is_empty() && self.excluded_root.contains(&m) {
@@ -478,6 +537,7 @@ impl Searcher {
                 continue;
             }
 
+            let n_before = self.nodes;
             let u = pos.make(m);
             self.nn_record(ply + 1, pos, &u);
             let gives_check = pos.in_check();
@@ -521,6 +581,20 @@ impl Searcher {
                         self.root_best = m;
                     }
                     if s >= beta {
+                        if self.order_stats.is_some() {
+                            let cat = if m == tt_move {
+                                0
+                            } else if tactical {
+                                if m.is_placement() { 2 } else { 1 }
+                            } else if is_killer {
+                                3
+                            } else if m.is_placement() {
+                                5
+                            } else {
+                                4
+                            };
+                            cut_info = (cat, n_before);
+                        }
                         if !tactical {
                             if self.killers[ply][0] != m {
                                 self.killers[ply][1] = self.killers[ply][0];
@@ -532,6 +606,27 @@ impl Searcher {
                         break;
                     }
                 }
+            }
+        }
+
+        if let Some(st) = self.order_stats.as_mut() {
+            let d = (depth.clamp(1, 5) - 1) as usize;
+            st.nodes[d] += 1;
+            st.legal[d] += moves.len() as u64;
+            st.legal_placements[d] += moves.iter().filter(|m| m.is_placement()).count() as u64;
+            st.searched[d] += searched as u64;
+            let ib = OrderStats::idx_bucket(searched.saturating_sub(1));
+            if best >= beta {
+                st.cuts[d] += 1;
+                st.cut_idx[d][ib] += 1;
+                st.cut_cat_idx[cut_info.0][ib] += 1;
+                let total = (self.nodes - n_start).max(1);
+                st.cut_waste[d] += (cut_info.1 - n_start) as f64 / total as f64;
+            } else if best > orig_alpha {
+                // index of the best move among the searched ones
+                let bi = moves.iter().position(|&x| x == best_move).unwrap_or(0);
+                st.exact[d] += 1;
+                st.exact_idx[d][OrderStats::idx_bucket(bi)] += 1;
             }
         }
 

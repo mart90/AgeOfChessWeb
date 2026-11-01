@@ -1,7 +1,11 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
+  import { slide } from 'svelte/transition';
   import { createGame, createComputerGame, getMyGames, getGameToken, cancelChallenge, getOpenLobbies, joinLobby } from './lib/api.js';
   import { COMPUTER_LEVELS } from './lib/engine/levels.js';
+  import { NNUE_BOARD_SIZE } from './lib/engine/engine.js';
+  import BidHelp from './BidHelp.svelte';
+  import InfoTip from './InfoTip.svelte';
   import { navigate }   from './lib/navigate.js';
   import { startMatchmakingHub, stopMatchmakingHub } from './lib/matchmakingHub.js';
   import { authState } from './lib/auth.svelte.js';
@@ -57,7 +61,7 @@
   // ── Create lobby ─────────────────────────────────────────────────────────
 
   let biddingEnabled = $state(_lb.biddingEnabled ?? false);
-  let isPrivate      = $state(_lb.isPrivate ?? false);
+  let isPublic       = $state(_lb.isPublic ?? true);
   let isRanked       = $state(_lb.isRanked ?? true);
   let mapSeed        = $state('');
   let creating       = $state(false);
@@ -77,6 +81,30 @@
 
   const seedActive = $derived(mapSeed.trim() !== '');
   const seedValid  = $derived(!seedActive || seedError === null);
+  // Board size of the game to be created (a valid seed fixes it)
+  const effectiveBoardSize = $derived(seedActive && seedValid ? parseInt(mapSeed.trim().split('_')[1]) : boardSize);
+
+  // ── Colour and handicap (lobby and computer tabs) ─────────────────────────
+  // The handicap is shared by both tabs; bidding and colour are per tab.
+
+  let lobbyColor   = $state(_lb.color ?? 'white');      // the creator's colour: 'white' | 'black' | 'random'
+  let handicap     = $state(_lb.handicap ?? 'none');    // 'none' | 'auto' | 'manual'
+  let handicapGold = $state(_lb.handicapGold ?? 1);     // manual amount
+  const validHandicapGold = $derived(Math.max(1, Math.round(Number(handicapGold)) || 1));
+
+  const tabBidding = $derived(tab === 'computer' ? computerBidding : biddingEnabled);
+
+  const tabColor   = $derived(tab === 'computer' ? computerColor : lobbyColor);
+  function setTabBidding(v) { if (tab === 'computer') computerBidding = v; else biddingEnabled = v; }
+  function setTabColor(v)   { if (tab === 'computer') computerColor = v; else lobbyColor = v; }
+
+  // Without bidding the handicap goes to Black, so the player must choose their colour
+  const colorRequired = $derived(handicap !== 'none' && !tabBidding);
+  $effect(() => { if (colorRequired && tabColor === 'random') setTabColor('white'); });
+
+  // Handicap games and games on a chosen board are never ranked (the server enforces it too)
+  const rankedLock = $derived(handicap !== 'none' ? 'Handicap games are always unranked'
+    : seedActive ? 'Games with a set board seed are always unranked' : '');
 
   async function handleCreate() {
     creating = true;
@@ -84,7 +112,11 @@
     try {
       const modeSettings = MODES[selectedMode].settings;
       const trimmedSeed = mapSeed.trim() || null;
-      const settings = { ...modeSettings, boardSize, biddingEnabled, mapMode, mapSeed: trimmedSeed, isPrivate: authState.token ? isPrivate : false, isRanked };
+      const settings = {
+        ...modeSettings, boardSize, biddingEnabled, mapMode, mapSeed: trimmedSeed,
+        isPrivate: authState.token ? !isPublic : false, isRanked: isRanked && !rankedLock,
+        color: lobbyColor, handicap, handicapGold: validHandicapGold,
+      };
       const { gameId, whitePlayerToken, inviteUrl: serverInviteUrl } = await createGame(settings);
       const serverUrl = new URL(serverInviteUrl);
       const inviteUrl = window.location.origin + serverUrl.pathname + serverUrl.search;
@@ -103,6 +135,11 @@
   // Board settings are shared with the "Create lobby" tab. Always unranked and untimed.
 
   let computerLevel = $state(_cp.level ?? 3);
+  // Network (NNUE) levels exist only for the network's board size
+  const availableLevels = $derived(COMPUTER_LEVELS.filter(l => !l.nnue || effectiveBoardSize === NNUE_BOARD_SIZE));
+  $effect(() => {
+    if (!availableLevels.some(l => l.level === computerLevel)) computerLevel = availableLevels.at(-1).level;
+  });
   let computerColor = $state(_cp.color ?? 'white');  // the player's colour: 'white' | 'black' | 'random'
   let computerBidding = $state(_cp.bidding ?? false);  // bid for colours (decides colours instead of computerColor)
   let startingComputerGame = $state(false);
@@ -118,6 +155,7 @@
     try {
       const { gameId, playerToken, isWhite } = await createComputerGame({
         boardSize, mapMode, mapSeed: mapSeed.trim() || null, level: computerLevel, color: computerColor, biddingEnabled: computerBidding,
+        handicap, handicapGold: validHandicapGold,
       });
       localStorage.setItem(`token_${gameId}`, playerToken);
       localStorage.setItem(`color_${gameId}`, isWhite ? 'white' : 'black');
@@ -143,11 +181,32 @@
   let autoTimeSel   = $state(_ap.autoTimeSel ?? 'any');
   let biddingPref   = $state(_ap.biddingPref ?? 'Disabled');
 
+  // Less used settings (bidding, handicap, board generation, seed) are folded away under an arrow,
+  // except those set to something other than their default: they always show. Which ones show is
+  // worked out when the tab changes or the arrow is clicked, not while editing (a row doesn't
+  // vanish when it's set back to its default). Open/closed is remembered.
+  let moreOpen = $state(false);
+  try { moreOpen = localStorage.getItem('play_more_options') === 'open'; } catch { /* closed */ }
+  $effect(() => { try { localStorage.setItem('play_more_options', moreOpen ? 'open' : 'closed'); } catch { /* not remembered */ } });
+  function changedOptions() {
+    const changed = tab === 'autopair'
+      ? { bidding: biddingPref !== 'Disabled', generation: mapModePref !== 'm' }
+      : { bidding: tabBidding, handicap: handicap !== 'none', generation: mapMode !== 'm', seed: seedActive };
+    return new Set(Object.keys(changed).filter(k => changed[k]));
+  }
+  let pinned = $state(untrack(changedOptions));
+  $effect.pre(() => { tab; pinned = untrack(changedOptions); });
+  const shown = (key) => moreOpen || pinned.has(key);
+  const anyFolded = $derived(pinned.size < (tab === 'autopair' ? 2 : 4));
+  function toggleMore() { moreOpen = !moreOpen; pinned = changedOptions(); }
+
   $effect(() => {
     localStorage.setItem('autopair_settings', JSON.stringify({ autoTimeSel, biddingPref, boardSizeMin, boardSizeMax, mapModePref }));
   });
   $effect(() => {
-    localStorage.setItem('lobby_settings', JSON.stringify({ selectedMode, boardSize, biddingEnabled, mapMode, isPrivate, isRanked }));
+    localStorage.setItem('lobby_settings', JSON.stringify({
+      selectedMode, boardSize, biddingEnabled, mapMode, isPublic, isRanked, color: lobbyColor, handicap, handicapGold: validHandicapGold,
+    }));
   });
   let queueing      = $state(false);
   let queueCount    = $state(0);
@@ -317,16 +376,13 @@
   <div class="panel">
     <!-- Computer level (replaces time control on the computer tab) -->
     {#if tab === 'computer'}
-      <div class="tc-group">
-        <div class="section-label">Computer level</div>
-        <div class="modes">
-          {#each COMPUTER_LEVELS as l}
-            <button class="mode-btn level-btn" class:selected={computerLevel === l.level} onclick={() => computerLevel = l.level}>
-              <span>Level {l.level}</span>
-              <span class="level-elo">~{l.elo}</span>
-            </button>
+      <div class="option-row">
+        <label for="computer-level">Computer level</label>
+        <select id="computer-level" bind:value={computerLevel}>
+          {#each availableLevels as l}
+            <option value={l.level}>Level {l.level} (~{l.elo}{l.nnue ? ', NNUE' : ''})</option>
           {/each}
-        </div>
+        </select>
       </div>
     {:else}
     <!-- Time control -->
@@ -384,86 +440,123 @@
       </div>
     {/if}
 
-    <!-- Bidding (different control per tab) -->
-    {#if tab === 'lobby'}
+    <!-- Colour, ranked and public (lobby / computer) -->
+    {#if tab !== 'autopair'}
       <div class="option-row">
-        <label class="checkbox-label">
-          Bid for colors
-          <input type="checkbox" bind:checked={biddingEnabled} />
-        </label>
+        <label for="your-color">Your color</label>
+        <select id="your-color" bind:value={() => tabColor, setTabColor} disabled={tabBidding} title={tabBidding ? 'Decided by bidding' : ''}>
+          <option value="white">White</option>
+          <option value="black">Black</option>
+          <option value="random" disabled={colorRequired}>Random</option>
+        </select>
       </div>
-      {#if authState.token}
+      {#if tab === 'lobby' && authState.token}
         <div class="option-row">
-          <label class="checkbox-label">
-            Ranked
-            <input type="checkbox" bind:checked={isRanked} />
-          </label>
+          <InfoTip align="end" below enabled={!!rankedLock}>
+            {#snippet trigger()}
+              <label class="checkbox-label">
+                Ranked
+                <input type="checkbox" bind:checked={() => isRanked && !rankedLock, (v) => (isRanked = v)} disabled={!!rankedLock} />
+              </label>
+            {/snippet}
+            {rankedLock}
+          </InfoTip>
         </div>
         <div class="option-row">
           <label class="checkbox-label">
-            Private
-            <input type="checkbox" bind:checked={isPrivate} />
+            Public
+            <input type="checkbox" bind:checked={isPublic} />
           </label>
         </div>
       {/if}
-    {:else if tab === 'computer'}
-      <div class="option-row">
-        <label class="checkbox-label">
-          Bid for colors
-          <input type="checkbox" bind:checked={computerBidding} />
-        </label>
-      </div>
-      <div class="option-row">
-        <label for="computer-color">Your color</label>
-        <select id="computer-color" bind:value={computerColor} disabled={computerBidding} title={computerBidding ? 'Decided by bidding' : ''}>
-          <option value="white">White</option>
-          <option value="black">Black</option>
-          <option value="random">Random</option>
-        </select>
-      </div>
-    {:else}
-      <div class="option-row">
-        <label for="bidding-pref">Bid for colors</label>
-        <select id="bidding-pref" bind:value={biddingPref}>
-          {#each BIDDING_OPTIONS as opt}
-            <option value={opt}>{opt}</option>
-          {/each}
-        </select>
-      </div>
     {/if}
 
-    <!-- Map layout -->
-    {#if tab !== 'autopair'}
-      <div class="option-row">
-        <label for="map-mode">Board generation</label>
-        <select id="map-mode" bind:value={mapMode} disabled={seedActive && seedValid}>
-          <option value="m">Mirrored</option>
-          <option value="r">Full random</option>
-        </select>
-      </div>
-      <div class="option-row seed-row">
-        <label for="map-seed">Board seed</label>
-        <input
-          id="map-seed"
-          type="text"
-          bind:value={mapSeed}
-          placeholder="Paste a seed to replay a generated board"
-          spellcheck="false"
-          autocomplete="off"
-          class:seed-invalid={seedActive && seedError}
-          class:seed-ok={seedActive && !seedError}
-        />
-      </div>
-      {#if seedError}<p class="error seed-error">{seedError}</p>{/if}
+    <!-- Bidding, handicap, board generation and seed: folded away under the arrow below while
+         they're at their defaults -->
+    {#if tab === 'autopair'}
+      {#if shown('bidding')}
+        <div transition:slide={{ duration: 150 }} class="option-row">
+          <span class="label-help"><label for="bidding-pref">Bid for colors</label> <BidHelp align="start" below /></span>
+          <select id="bidding-pref" bind:value={biddingPref}>
+            {#each BIDDING_OPTIONS as opt}
+              <option value={opt}>{opt}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+      {#if shown('generation')}
+        <div transition:slide={{ duration: 150 }} class="option-row">
+          <label for="map-mode-pref">Board generation</label>
+          <select id="map-mode-pref" bind:value={mapModePref}>
+            <option value="m">Mirrored</option>
+            <option value="r">Full random</option>
+            <option value="any">Any</option>
+          </select>
+        </div>
+      {/if}
     {:else}
-      <div class="option-row">
-        <label for="map-mode-pref">Board generation</label>
-        <select id="map-mode-pref" bind:value={mapModePref}>
-          <option value="m">Mirrored</option>
-          <option value="r">Full random</option>
-          <option value="any">Any</option>
-        </select>
-      </div>
+      {#if shown('bidding')}
+        <div transition:slide={{ duration: 150 }} class="option-row">
+          <label class="checkbox-label">
+            <span class="label-help">Bid for colors <BidHelp align="start" below /></span>
+            <input type="checkbox" bind:checked={() => tabBidding, setTabBidding} />
+          </label>
+        </div>
+      {/if}
+      {#if shown('handicap')}
+        <div transition:slide={{ duration: 150 }} class="option-row">
+          <span class="label-help">
+            <label for="handicap">Handicap</label>
+            <InfoTip align="start" below label="How the handicap works">
+              Gold is added to Black's starting stockpile. When "Automatic" is chosen, the amount is
+              calculated based on the Elo difference between the players.
+              <br><br>In games with bidding enabled, the gold is added <em>after</em> bidding resolution,
+              to the stockpile of the lower rated player.
+            </InfoTip>
+          </span>
+          <div class="handicap-controls">
+            <select id="handicap" bind:value={handicap}>
+              <option value="none">None</option>
+              <option value="auto">Automatic</option>
+              <option value="manual">Manual</option>
+            </select>
+            <input type="number" class="handicap-gold" min="1" step="1" aria-label="Handicap gold"
+                   bind:value={handicapGold} disabled={handicap !== 'manual'}
+                   onchange={() => (handicapGold = validHandicapGold)} />
+          </div>
+        </div>
+      {/if}
+      {#if shown('generation')}
+        <div transition:slide={{ duration: 150 }} class="option-row">
+          <label for="map-mode">Board generation</label>
+          <select id="map-mode" bind:value={mapMode} disabled={seedActive && seedValid}>
+            <option value="m">Mirrored</option>
+            <option value="r">Full random</option>
+          </select>
+        </div>
+      {/if}
+      {#if shown('seed')}
+        <div transition:slide={{ duration: 150 }} class="option-row seed-row">
+          <label for="map-seed">Board seed</label>
+          <input
+            id="map-seed"
+            type="text"
+            bind:value={mapSeed}
+            placeholder="Paste a seed to replay a generated board"
+            spellcheck="false"
+            autocomplete="off"
+            class:seed-invalid={seedActive && seedError}
+            class:seed-ok={seedActive && !seedError}
+          />
+        </div>
+      {/if}
+    {/if}
+    {#if tab !== 'autopair' && seedError}<p class="error seed-error">{seedError}</p>{/if}
+    {#if moreOpen || anyFolded}
+      <button class="more-toggle" onclick={toggleMore} aria-expanded={moreOpen}
+              title={moreOpen ? 'Fewer options' : 'More options'} aria-label={moreOpen ? 'Fewer options' : 'More options'}>
+        <svg class="chevron" class:open={moreOpen} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
     {/if}
 
     <!-- Tab-specific bottom section -->
@@ -620,9 +713,11 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+    min-height: 1.85rem;  /* as tall as a select, so slider / switch rows space like the rest */
   }
   .option-row label { font-size: 0.95rem; color: var(--fg-2); white-space: nowrap; }
   .option-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .label-help { display: inline-flex; align-items: center; gap: 0.4rem; }
   .board-range-label { font-size: 0.95rem; color: var(--fg-2); white-space: nowrap; }
 
   .dual-range {
@@ -672,9 +767,6 @@
     cursor: pointer;
     border: 2px solid var(--surface);
   }
-  .level-btn { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; white-space: nowrap; }
-  .level-elo { font-size: 0.79rem; color: var(--muted); }
-  .mode-btn.selected .level-elo { color: var(--fg-2); }
   .hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
   .unranked-tag {
     font-size: 0.76rem; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 0.35rem;
@@ -690,6 +782,18 @@
     cursor: pointer;
   }
 
+  .handicap-controls { display: flex; align-items: center; gap: 0.5rem; }
+  .handicap-gold {
+    width: 4.5rem;
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.95rem;
+  }
+  .handicap-gold:disabled { opacity: 0.35; cursor: default; }
+
   select {
     background: var(--surface-2);
     border: 1px solid var(--line-strong);
@@ -698,6 +802,24 @@
     padding: 0.35rem 0.6rem;
     font-size: 0.95rem;
   }
+
+  /* ── More options (folded) ── */
+  .more-toggle {
+    align-self: center;
+    display: flex; align-items: center; gap: 0.4rem;
+    margin: -0.4rem 0;
+    padding: 0.15rem 0.6rem;
+    background: none; border: none; border-radius: 6px;
+    color: var(--muted); font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .more-toggle:hover { background: var(--line); color: var(--fg); }
+  .chevron {
+    width: 1.4rem; height: 1.4rem;
+    fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    transition: transform 0.15s;
+  }
+  .chevron.open { transform: rotate(180deg); }
 
   .action-btn {
     padding: 0.8rem;

@@ -32,13 +32,9 @@ public class GameCreationService(AppDbContext db, GameSessionManager sessions)
 
         var session = new GameSession
         {
-            SettingsJson          = JsonSerializer.Serialize(settings),
+            Settings              = settings.Clone(),   // the game keeps (and changes) its own copy
             WhiteUserId           = white.UserId,
             BlackUserId           = black.UserId,
-            BoardSize             = settings.BoardSize,
-            TimeControlEnabled    = settings.TimeControlEnabled,
-            StartTimeMinutes      = settings.StartTimeMinutes,
-            TimeIncrementSeconds  = settings.TimeIncrementSeconds,
             IsPrivate             = isPrivate,
             CreatedViaMatchmaking = createdViaMatchmaking,
         };

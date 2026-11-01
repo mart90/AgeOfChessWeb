@@ -131,6 +131,17 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
                 }
                 else
                 {
+                    bool swapped = game.ApplyCreatorColor();
+                    game.ResolveHandicap();
+                    if (swapped || game.Settings.HasHandicap)
+                        await flow.PersistStartAsync(game);
+                    if (swapped)
+                    {
+                        if (game.WhiteConnectionId != null)
+                            await Clients.Client(game.WhiteConnectionId).SendAsync("ColorAssigned", true);
+                        if (game.BlackConnectionId != null)
+                            await Clients.Client(game.BlackConnectionId).SendAsync("ColorAssigned", false);
+                    }
                     await Clients.Group(game.GroupName)
                         .SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
                 }
@@ -351,8 +362,9 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         if (!bidding.BothBid) return false;
 
         // Persist post-bidding state for slow games (tokens may have been swapped by ResolveBidding)
-        if (game.IsSlowGame)
-            await flow.PersistBiddingResultAsync(game);
+        // and the resolved handicap (replays need it)
+        if (game.IsSlowGame || game.Settings.HasHandicap)
+            await flow.PersistStartAsync(game);
         return true;
     }
 
@@ -658,11 +670,16 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
             MapMode            = game.Settings.MapMode,
             MapSeed            = actualMapSeed,
             IsRanked           = game.Settings.IsRanked,
+            Handicap           = game.Settings.Handicap,
+            HandicapGold       = game.Settings.HandicapGold,
+            // CreatorColor stays "white": the players are placed directly below
         };
 
-        // Without bidding: swap colors. With bidding: same initial assignment (bidding will resolve).
+        // Without bidding: swap colors, except in handicap games (the handicap goes to a chosen side).
+        // With bidding: same initial assignment (bidding will resolve).
+        bool swap = !rematchSettings.BiddingEnabled && !rematchSettings.HasHandicap;
         GameCreationService.PlayerInfo whiteInfo, blackInfo;
-        if (!rematchSettings.BiddingEnabled)
+        if (swap)
         {
             whiteInfo = new GameCreationService.PlayerInfo(game.BlackUserId, game.BlackElo, game.Black.PlayedByStr);
             blackInfo = new GameCreationService.PlayerInfo(game.WhiteUserId, game.WhiteElo, game.White.PlayedByStr);
@@ -677,13 +694,12 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         var creationService = scope.ServiceProvider.GetRequiredService<GameCreationService>();
         var (_, newGame) = await creationService.CreateAsync(rematchSettings, whiteInfo, blackInfo, isPrivate: game.IsPrivate);
 
-        // Without bidding: old White → new Black, old Black → new White
-        // With bidding:    old White → new White, old Black → new Black (colors TBD by bid)
-        bool biddingEnabled = rematchSettings.BiddingEnabled;
-        string oldWhiteToken = biddingEnabled ? newGame.WhitePlayerToken : newGame.BlackPlayerToken;
-        string oldBlackToken = biddingEnabled ? newGame.BlackPlayerToken : newGame.WhitePlayerToken;
-        bool   oldWhiteIsNewWhite = biddingEnabled;   // with bidding, initial; may change after bid
-        bool   oldBlackIsNewWhite = !biddingEnabled;  // without bidding: old Black becomes new White
+        // Swapped: old White → new Black, old Black → new White
+        // Otherwise old White → new White, old Black → new Black (with bidding: colors TBD by bid)
+        string oldWhiteToken = swap ? newGame.BlackPlayerToken : newGame.WhitePlayerToken;
+        string oldBlackToken = swap ? newGame.WhitePlayerToken : newGame.BlackPlayerToken;
+        bool   oldWhiteIsNewWhite = !swap;   // with bidding, initial; may change after bid
+        bool   oldBlackIsNewWhite = swap;
 
         if (game.WhiteConnectionId != null)
             await Clients.Client(game.WhiteConnectionId)

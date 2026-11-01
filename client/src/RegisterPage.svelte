@@ -109,6 +109,7 @@
           bind:value={displayName}
           disabled={sameAsUsername}
           placeholder={sameAsUsername ? (username || 'Same as username') : ''}
+          minlength="3"
           maxlength="40"
         />
       </label>

@@ -22,7 +22,28 @@ export async function instantiateEngine(bytes) {
     return res;
   }
 
-  return { call };
+  /** Load an evaluation network (.ggnn bytes) for searches with `nnue: true`. */
+  function loadNetwork(bytes) {
+    const data = new Uint8Array(bytes);
+    const ptr = ex.alloc(data.length);
+    new Uint8Array(ex.memory.buffer, ptr, data.length).set(data);
+    const ok = ex.load_nnue(ptr, data.length);
+    ex.dealloc(ptr, data.length);
+    if (!ok) throw new Error('invalid network file');
+  }
+
+  return { call, loadNetwork };
+}
+
+/** Whether this WebAssembly runtime supports SIMD (simd128): a tiny module using v128. */
+export function simdSupported() {
+  try {
+    return WebAssembly.validate(new Uint8Array([
+      0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11,
+    ]));
+  } catch {
+    return false;
+  }
 }
 
 /** Browser: fetch and instantiate from a URL. */

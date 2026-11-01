@@ -58,20 +58,25 @@ public class GameFlowService(IHubContext<GameHub> hub, GameSessionManager sessio
         await db.SaveChangesAsync();
     }
 
-    public async Task PersistBiddingResultAsync(ServerGame game)
+    /// <summary>
+    /// Persists what's decided when a game starts: colours (bidding or the lobby creator's choice may
+    /// have swapped them), Black's starting gold and the resolved handicap.
+    /// </summary>
+    public async Task PersistStartAsync(ServerGame game)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var session = await db.GameSessions.FindAsync(game.SessionId);
         if (session == null) return;
 
-        // Tokens and user IDs may have been swapped by ResolveBidding
+        // Tokens and user IDs may have been swapped (ResolveBidding / ApplyCreatorColor)
         session.WhitePlayerToken = game.WhitePlayerToken;
         session.BlackPlayerToken = game.BlackPlayerToken;
         session.WhiteUserId      = game.WhiteUserId;
         session.BlackUserId      = game.BlackUserId;
-        session.BlackStartingGold = game.Black.Gold;
-        session.SettingsJson      = JsonSerializer.Serialize(game.Settings);   // ComputerIsWhite may have flipped
+        // Without the handicap, which is in the settings and added again on resume / replay
+        session.BlackStartingGold = game.Black.Gold - game.Settings.BlackHandicapGold;
+        db.Entry(session.Settings).CurrentValues.SetValues(game.Settings);   // ComputerIsWhite may have flipped
         if (game.TimeControlEnabled)
         {
             session.WhiteTimeMsRemaining = game.White.TimeMiliseconds;
@@ -118,11 +123,7 @@ public class GameFlowService(IHubContext<GameHub> hub, GameSessionManager sessio
             WhiteBid = whiteBid,
             BlackBid = blackBid,
             MapSeed = session.MapSeed,
-            SettingsJson = session.SettingsJson,
-            BoardSize = session.BoardSize,
-            TimeControlEnabled = session.TimeControlEnabled,
-            StartTimeMinutes = session.StartTimeMinutes,
-            TimeIncrementSeconds = session.TimeIncrementSeconds,
+            Settings = session.Settings.Clone(),
             MovesJson = JsonSerializer.Serialize(game.MoveList.Select(m => m.ToNotation())),
             MoveCount = game.MoveList.Count,
             Result = game.Result,
@@ -157,8 +158,8 @@ public class GameFlowService(IHubContext<GameHub> hub, GameSessionManager sessio
 
         var category = EloService.GetCategory(new GameSettings
         {
-            TimeControlEnabled = session.TimeControlEnabled,
-            StartTimeMinutes   = session.StartTimeMinutes,
+            TimeControlEnabled = session.Settings.TimeControlEnabled,
+            StartTimeMinutes   = session.Settings.StartTimeMinutes,
         });
 
         var (wElo, bElo) = category switch

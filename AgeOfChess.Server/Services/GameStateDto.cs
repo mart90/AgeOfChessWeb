@@ -25,17 +25,22 @@ public record GameStateDto(
     long TurnStartedAt,
     bool TimeControlEnabled,
     bool IsRanked,
-    /// <summary>Computer opponent: level, side and node budget per move (null/false for human games).</summary>
+    /// <summary>Computer opponent: level, side and node budget per move (null/false for human games);
+    /// ComputerNnue: search with the evaluation network.</summary>
     int? ComputerLevel,
     bool ComputerIsWhite,
     int? ComputerNodes,
+    bool ComputerNnue,
     /// <summary>Weak computer levels: chance to play the second-best move, and the max loss (gold) allowed.</summary>
     double ComputerMistakeRate,
     double ComputerMistakeMaxLoss,
     bool BiddingEnabled,
     bool BiddingInProgress,
     /// <summary>Standing draw offer: "w", "b" or null.</summary>
-    string? DrawOfferBy
+    string? DrawOfferBy,
+    /// <summary>Handicap option ("none" | "auto" | "manual") and manual amount, for rematches.</summary>
+    string Handicap,
+    int HandicapGold
 );
 
 public record SquareDto(
@@ -88,10 +93,13 @@ public static class GameStateDtoBuilder
             game.Settings.ComputerLevel,
             game.Settings.ComputerIsWhite,
             ComputerLevels.Get(game.Settings.ComputerLevel)?.Nodes,
+            ComputerLevels.Get(game.Settings.ComputerLevel)?.Nnue ?? false,
             ComputerLevels.Get(game.Settings.ComputerLevel)?.MistakeRate ?? 0,
             ComputerLevels.Get(game.Settings.ComputerLevel)?.MistakeMaxLoss ?? 0,
             game.BiddingEnabled,
             game.Bidding != null && !game.Bidding.BothBid,
-            game.DrawOfferByWhite switch { true => "w", false => "b", null => null }
+            game.DrawOfferByWhite switch { true => "w", false => "b", null => null },
+            game.Settings.Handicap,
+            game.Settings.HandicapGold
         );
 }

@@ -37,12 +37,11 @@ public class GameResumeService(AppDbContext db, GameSessionManager sessions)
 
     private void TryResumeGame(GameSession session)
     {
-        // Only restore slow games — use denormalized columns to avoid JSON parse
-        bool isSlow = !session.TimeControlEnabled || session.StartTimeMinutes >= 30;
+        // Only restore slow games
+        bool isSlow = !session.Settings.TimeControlEnabled || session.Settings.StartTimeMinutes >= 30;
         if (!isSlow) return;
 
-        var settings = JsonSerializer.Deserialize<GameSettings>(session.SettingsJson);
-        if (settings == null) return;
+        var settings = session.Settings.Clone();   // changed below; the tracked entity isn't
 
         // Need the map seed to recreate the exact same board
         if (string.IsNullOrEmpty(session.MapSeed)) return;
@@ -72,6 +71,7 @@ public class GameResumeService(AppDbContext db, GameSessionManager sessions)
         // Set post-bidding starting gold for Black (null = default 10g which the constructor already set)
         if (session.BlackStartingGold.HasValue)
             game.Black.Gold = session.BlackStartingGold.Value;
+        game.ApplyHandicapGold();
 
         // Replay all stored moves to reconstruct the board position
         foreach (var notation in moveNotations)

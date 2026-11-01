@@ -36,7 +36,10 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         string? MapSeed = null,
         string MapMode = "m",
         bool IsPrivate = false,
-        bool IsRanked = true
+        bool IsRanked = true,
+        string Color = "white",      // the creator's colour: "white" | "black" | "random" (ignored with bidding)
+        string Handicap = "none",    // "none" | "auto" | "manual" (see GameSettings.Handicap)
+        int HandicapGold = 1
     );
 
     public record CreateComputerGameRequest(
@@ -45,13 +48,35 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         string? MapSeed = null,
         int Level = 3,
         string Color = "white",   // "white" | "black" | "random" — the human's colour (ignored with bidding)
-        bool BiddingEnabled = false
+        bool BiddingEnabled = false,
+        string Handicap = "none",
+        int HandicapGold = 1
     );
+
+    private const int MaxHandicapGold = 999;
+
+    /// <summary>
+    /// Checks the colour / handicap options. A handicap without bidding goes to Black, so the
+    /// creator must pick their colour. Returns an error message, or null when valid.
+    /// </summary>
+    private static string? ValidateColorAndHandicap(string color, bool bidding, string handicap, int handicapGold)
+    {
+        if (color is not ("white" or "black" or "random")) return "Unknown colour.";
+        if (handicap is not ("none" or "auto" or "manual")) return "Unknown handicap.";
+        if (handicap == "manual" && handicapGold is < 1 or > MaxHandicapGold)
+            return $"The handicap must be between 1 and {MaxHandicapGold} gold.";
+        if (handicap != "none" && !bidding && color == "random")
+            return "Choose a colour for a handicap game.";
+        return null;
+    }
 
     // POST /api/game
     [HttpPost]
     public async Task<IActionResult> CreateGame([FromBody] CreateGameRequest req)
     {
+        if (ValidateColorAndHandicap(req.Color, req.BiddingEnabled, req.Handicap, req.HandicapGold) is { } error)
+            return BadRequest(error);
+
         var settings = new GameSettings
         {
             BoardSize            = req.BoardSize,
@@ -61,7 +86,11 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             BiddingEnabled       = req.BiddingEnabled,
             MapSeed              = req.MapSeed,
             MapMode              = req.MapMode,
-            IsRanked             = req.IsRanked,
+            // Handicap games and games on a chosen board are never ranked
+            IsRanked             = req.IsRanked && req.Handicap == "none" && string.IsNullOrEmpty(req.MapSeed),
+            CreatorColor         = req.Color,
+            Handicap             = req.Handicap,
+            HandicapGold         = req.HandicapGold,
         };
 
         // Resolve creator info if authenticated
@@ -103,6 +132,12 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
     {
         var level = ComputerLevels.Get(req.Level);
         if (level == null) return BadRequest("Unknown computer level.");
+        // A map seed fixes the size: "m_10x10_..."
+        var seedSize = req.MapSeed?.Split('_') is [_, var wxh, ..] && int.TryParse(wxh.Split('x')[0], out var w) ? w : (int?)null;
+        if (level.Nnue && (seedSize ?? req.BoardSize) != ComputerLevels.NnueBoardSize)
+            return BadRequest($"Level {level.Number} is only available on {ComputerLevels.NnueBoardSize}×{ComputerLevels.NnueBoardSize} boards.");
+        if (ValidateColorAndHandicap(req.Color, req.BiddingEnabled, req.Handicap, req.HandicapGold) is { } error)
+            return BadRequest(error);
 
         // With bidding the human starts as the "creator" (white token) and the bids decide
         bool humanIsWhite = req.BiddingEnabled || req.Color switch
@@ -122,6 +157,8 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             IsRanked           = false,
             ComputerLevel      = level.Number,
             ComputerIsWhite    = !humanIsWhite,
+            Handicap           = req.Handicap,
+            HandicapGold       = req.HandicapGold,
         };
 
         GameCreationService.PlayerInfo human = new();
@@ -164,8 +201,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         var game = sessions.GetById(gameId);
         var session = await db.GameSessions.FindAsync(gameId);
         if (game == null || session == null) return NotFound();
-        var settings = JsonSerializer.Deserialize<GameSettings>(session.SettingsJson);
-        if (!LobbyVisibleTo(game, session.IsPrivate, settings?.IsRanked ?? true, CurrentUserId()))
+        if (!LobbyVisibleTo(game, session.IsPrivate, session.Settings.IsRanked, CurrentUserId()))
             return NotFound();
 
         // Game already has two players (i.e. it's in the session manager and both tokens are set)
@@ -268,19 +304,15 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
 
         // Private flag and settings (ranked, custom map seed) live in the DB row
         var sessionIds = waitingGames.Select(g => g.SessionId).ToList();
-        var dbRows = await db.GameSessions
+        var rowById = (await db.GameSessions
             .Where(s => sessionIds.Contains(s.Id))
-            .Select(s => new { s.Id, s.SettingsJson, s.IsPrivate })
-            .ToListAsync();
-        var rowById      = dbRows.ToDictionary(r => r.Id);
-        var settingsById = dbRows.ToDictionary(r => r.Id, r => r.SettingsJson);
+            .Select(s => new { s.Id, s.IsPrivate, s.Settings.IsRanked, CustomSeed = s.Settings.MapSeed != null })
+            .ToListAsync())
+            .ToDictionary(r => r.Id);
 
         var publicGames = waitingGames.Where(g =>
-        {
-            if (!rowById.TryGetValue(g.SessionId, out var row)) return false;
-            var s = JsonSerializer.Deserialize<GameSettings>(row.SettingsJson);
-            return LobbyVisibleTo(g, row.IsPrivate, s?.IsRanked ?? true, userId);
-        }).ToList();
+            rowById.TryGetValue(g.SessionId, out var row) && LobbyVisibleTo(g, row.IsPrivate, row.IsRanked, userId)
+        ).ToList();
         if (publicGames.Count == 0) return Ok(Array.Empty<object>());
 
         // Fetch creator user records for Elo lookup
@@ -308,14 +340,9 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             var map = g.GetMap();
 
             // Only expose the seed if the creator explicitly pasted one
-            string? customSeed = null;
-            bool isRanked = true;
-            if (settingsById.TryGetValue(g.SessionId, out var sJson))
-            {
-                var s = JsonSerializer.Deserialize<GameSettings>(sJson);
-                if (s?.MapSeed != null) customSeed = map.Seed;
-                if (s != null) isRanked = s.IsRanked;
-            }
+            var row = rowById[g.SessionId];
+            string? customSeed = row.CustomSeed ? map.Seed : null;
+            bool isRanked = row.IsRanked;
 
             return new
             {
@@ -441,7 +468,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             .FirstOrDefaultAsync(s => s.Id == gameId);
 
         string mapSeed;
-        string settingsJson;
+        GameSettings settings;
         string movesJson;
         string? result;
         string whiteName;
@@ -455,7 +482,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             if (string.IsNullOrEmpty(session.MapSeed)) return NotFound();
 
             mapSeed = session.MapSeed;
-            settingsJson = session.SettingsJson;
+            settings = session.Settings.Clone();
             movesJson = session.MovesJson;
             if (session.Result == GameResult.InProgress)
             {
@@ -481,7 +508,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             if (string.IsNullOrEmpty(historicGame.MapSeed)) return NotFound();
 
             mapSeed = historicGame.MapSeed;
-            settingsJson = historicGame.SettingsJson;
+            settings = historicGame.Settings.Clone();
             movesJson = historicGame.MovesJson;
             result = historicGame.Result;
 
@@ -507,9 +534,6 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             blackPlayerToken = Guid.NewGuid().ToString("N");
         }
 
-        var settings = JsonSerializer.Deserialize<GameSettings>(settingsJson);
-        if (settings == null) return StatusCode(500);
-
         settings.MapSeed = mapSeed;
         settings.TimeControlEnabled = false;
 
@@ -520,6 +544,7 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
 
         if (blackStartingGold.HasValue)
             game.Black.Gold = blackStartingGold.Value;
+        game.ApplyHandicapGold();
 
         var snapshots = new List<GameStateDto>();
         snapshots.Add(GameStateDtoBuilder.Build(game));  // state before any moves

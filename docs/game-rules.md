@@ -41,7 +41,7 @@ Source of truth for the rules is the server: `AgeOfChess.Server/GameLogic/` (mai
 | Base income | +1 gold at the start of each of your turns |
 | Mine income | +3 gold per owned mine, at the start of the owner's turn (`MINE_INCOME = 3`) |
 | Treasure capture | +20 gold |
-| Black starting gold | 5 (White starts with 0; 6 before 2026-10-30); overridden by bidding |
+| Black starting gold | 5 (White starts with 0; 6 before 2026-10-30); overridden by bidding, plus any handicap |
 
 - A mine becomes yours when you move or place a piece onto it, and stays yours until the
   opponent occupies it.
@@ -123,6 +123,20 @@ see status.md. Old rules remain available in the engine as `Rules::classic()` / 
 Both players secretly bid gold for the right to play White. The highest bidder plays White, and
 the winning bid becomes Black's starting gold. Bids may be negative (Black is better on that
 board), in which case Black starts in debt. Mainly intended for fully random maps.
+
+## Handicap (optional; lobby and vs-computer games)
+
+Extra starting gold: **None** (default), **Manual** (a fixed amount, ≥ 1) or **Automatic**
+(1 gold per 100 Elo difference, rounded; unrated players count as 1200 — placeholder formula).
+- Without bidding it goes to Black (the creator must pick a colour, not random). Automatic is
+  signed: it is subtracted from Black's gold when Black is the higher-rated player.
+- With bidding it is added after the bids resolve, to the lower-rated player (Black when equal),
+  so White can start with gold too.
+- Handicap games are always unranked (as are games on a chosen board seed), and a rematch keeps
+  the colours instead of swapping them.
+- Server: `GameSettings.Handicap`/`HandicapGold`, resolved into `WhiteHandicapGold`/
+  `BlackHandicapGold` by `ServerGame.ResolveHandicap` when the game starts; replays and resumed
+  games add those again.
 
 ## Time controls & ratings
 

@@ -60,6 +60,7 @@
               bind:value={displayName}
               disabled={sameAsUsername}
               placeholder={sameAsUsername ? (authState.user?.username ?? '') : ''}
+              minlength="3"
               maxlength="40"
             />
           </label>

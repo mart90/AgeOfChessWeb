@@ -172,7 +172,17 @@ cd engine && ./target/release/gg match --a-nnue ../training/runs/m10_nn1/net.ggn
 | m10_nn7 | all 12.3M, + 1.58M by nn6, no race term | +24 ± 17 vs nn6 | +486 ± 36 |
 | m10_nn8 | all 13.8M, + 1.54M by nn7 | +35 ± 17 vs nn7, +128 ± 18 vs nn3 | — |
 | m10_nn9 | all 15.4M, + 1.60M by nn8 | −2 ± 17 vs nn8, +113 ± 18 vs nn3 | — (not promoted) |
-| **m10_nn10** (current) | all 17.0M, + 1.60M by nn8 | +26 ± 17 vs nn8, +158 ± 19 vs nn3 | — |
+| m10_nn10 | all 17.0M, + 1.60M by nn8 | +26 ± 17 vs nn8, +158 ± 19 vs nn3 | — |
+| m10_nn10ml | nn10 + moves-left head (frozen trunk) | −9 ± 17 vs nn10 | 273–10–17 (150 × 2) |
+| m10_nn11 | continued from nn10ml, + 1.55M by nn10ml (18.6M), lr 1e-4, 5 ep | −12 ± 17 vs nn10ml, +166 ± 19 vs nn3 | — (not promoted) |
+| m10_nn12 | continued from nn10ml, + 1.55M by nn10ml (20.1M) | +16 ± 17 vs nn10ml, +174 ± 19 vs nn3 | — |
+| m10_nn13 | from scratch, all 21.6M, + 1.52M by nn12 | +14 ± 17 vs nn12, +189 ± 20 vs nn3 | — |
+| m10_nn14 | continued from nn13, + 1.50M by nn13 (23.1M) | +3 ± 17 vs nn13, +175 ± 19 vs nn3 | — |
+| m10_nn15 | continued from nn14, + 1.49M by nn14 (24.6M) | +13 ± 17 vs nn14, +206 ± 20 vs nn3 | 1565–35–0, +660 ± 60 |
+| m10_nn16 | from scratch, all 26.1M, + 1.49M by nn15 | +10 ± 17 vs nn15, +215 ± 20 vs nn3 | 1559–41–0, +632 ± 56 |
+| m10_nn17 | continued from nn16, + 1.55M by nn16 (27.6M) | +5 ± 17 vs nn16, +215 ± 20 vs nn3 | — |
+| m10_nn18 | continued from nn17, + 1.54M by nn17 (29.2M) | −12 ± 17 vs nn17, +216 ± 20 vs nn3 | — (not promoted) |
+| **m10_nn19** (current) | from scratch, all 32.4M (+ 1.54M by nn17) | +5 ± 17 vs nn17, +215 ± 20 vs nn3 | — |
 
 nn2's self-play ended in a gold victory only 9% of the time (3m: 42%, nn1: 35%). nn3 gains on
 nn2 but not on the hand-written eval (92% score, where Elo estimates compress) — use a stronger
@@ -356,11 +366,93 @@ file and gating match here, to see whether the self-play figure moves now.
 **Black starts with 5 gold from 2026-10-30** (and no random openings): record new figures as
 "Black gold 5". `gg match` prints the starting gold with the White %.
 
+| Source (Black gold 5) | White % |
+|---|---|
+| nn10c (continued from nn9, 1 epoch) vs nn10, 800 holdout boards × 2 | 49.8% ± 2.4 |
+| nn10c2 (continued from nn9, clean val) vs nn10, same boards | 53.8% ± 2.4 |
+| nn10c3 (continued from nn9, lr 1e-4) vs nn10 | 50.3% ± 2.4 |
+| self-play nn11 / nn12 / nn13 data (no random openings, train2 boards) | 51.4% / 50.8% / 51.5% |
+| gating nn11 vs nn10ml / vs nn3 | 50.9% / 52.6% (± 2.4) |
+| gating nn12 vs nn10ml / vs nn3 | 50.7% / 50.7% |
+| gating nn13 vs nn12 / vs nn3 | 51.6% / 51.3% |
+| self-play nn14 / nn15 data | 50.9% / 51.0% |
+| gating nn14 vs nn13 / vs nn3 | 52.6% / 49.5% |
+| gating nn15 vs nn14 / vs nn3 | 48.1% / 50.1% |
+| self-play nn16 data | 50.6% |
+| gating nn16 vs nn15 / vs nn3 | 53.2% / 50.6% |
+| nn16 / nn15 vs hand-written | 50.7% / 49.9% |
+| self-play nn17 / nn18 data | 50.7% / 51.2% |
+| gating nn17 vs nn16 / vs nn3 | 51.3% / 50.7% |
+| gating nn18 vs nn17 / vs nn3 | 51.1% / 51.3% |
+| self-play nn19 data (by nn17) | 51.1% |
+| gating nn19 vs nn17 / vs nn3 | 53.4% / 50.2% |
+
+Self-play White % now matches the gating matches (before: ~45% vs ~47%), so the random openings
+(searched with a quarter of the nodes) probably explained the extra ~2–3 points; can't fully
+separate it from the gold change, which happened at the same time.
+
 Fixed 2026-10-30: the train/val split hashed the file's index in the sorted file list, so adding
 `nn10_m10_*` (sorts before `nn1_`) reshuffled other files' games between train and val. Harmless
 for from-scratch runs, but a run continued from an older network validated partly on games that
 network trained on (e.g. `m10_nn10c` from nn9: val loss 0.0165 vs nn10's 0.0177 — leaked, judge
 it by the match). The split now hashes the file name.
+
+**Continued vs from-scratch training (2026-10-30).** `m10_nn10c2`: nn9's weights trained further on
+exactly nn10's data (`--init m10_nn9 --lr 3e-4 --patience 2`), validated only on `nn10_m10_*`
+(`--val-files`, games nn9 never saw). Best epoch 2 of 4, **11.8 min** (nn10 from scratch: 47
+epochs, 144 min). **vs nn10: −12 ± 17.** nn10 is ~+28 over nn9 (chained via nn8), so the
+continued run recovered roughly half of that gap in a twelfth of the time; level within error.
+(The first attempt, `m10_nn10c`, validated on leaked games and stopped after 1 epoch: −23 ± 17.)
+
+**Adopted (Mart, 2026-10-30): continued training, from scratch every 3rd iteration.** Continued
+runs: `--init <best> --val-files "nnN_m10_*"` (validate on the new self-play only). A gate keeps
+strength from going backwards; the from-scratch runs stop drift building up. Iterations from 11 on
+use the moves-left head (`--moves-left`), Black gold 5, no random openings, and new boards:
+`engine/testdata/seeds_m10_train2.txt` (300k mirrored 10×10, none in the old training set or
+the holdout; the old file's training boards 0–168499 are used up, 180000+ is the holdout).
+Game ids for train2 data: 200000 + board index.
+
+**Iterations 11–13 (2026-10-30).** LR check first: nn9 continued on nn10's data at lr 1e-4 for a
+fixed 5 epochs (`m10_nn10c3`) scored −8 ± 17 vs nn10 (lr 3e-4 with early stopping: −12), so
+continued runs use lr 1e-4, 5 epochs (~16 min training; gendata 77 min is now the main cost).
+nn11 (continued) −12 vs nn10ml, not promoted; nn12 (continued) +16 vs nn10ml, promoted; nn13 (from
+scratch, 56 epochs, 218 min) +14 vs nn12, promoted. vs nn3: nn10 +158 → nn11 +166 → nn12 +174 →
+nn13 +189. Moves-left error ~21 plies (nn10ml: 23.5). Style swing again: nn13 wins by mate (805
+mates, 24 gold wins vs nn12; nn12 won 451 by gold), unlike nn10–nn12 which won mostly by racing.
+
+**Iterations 14–15 (2026-10-31, continued).** nn14 +3 vs nn13 (promoted, best epoch 1), nn15 +13
+vs nn14 (promoted); vs nn3: nn13 +189, nn14 +175, nn15 +206. Self-play by nn13/nn14 is now
+**~91% mates, ~5% gold wins, ~4% stalemates** (nn10ml's: 63% / 36% / 1%), so new data has few
+gold races. Iteration 16 (from scratch, data by nn15, boards 70000-83999, 47 epochs, 214 min):
+**nn16 +10 vs nn15, +215 vs nn3**, promoted.
+
+Gold check (Mart's question: do the fewer gold wins in self-play mean the networks defend gold
+races worse?): vs hand-written on the same 800 holdout boards × 2, the hand-written eval wins by
+gold **1.4% (nn16), 1.7% (nn15)** of games vs 2.9% for nn6 and nn7, 3.8% for nn3. Not worse; the
+networks just finish games by mate before a race matters. No draws any more (moves-left head).
+
+**Iterations 17–18 (2026-10-31, continued).** nn17 +5 vs nn16 (promoted, within noise), nn18 −12
+vs nn17 (not promoted); vs nn3 flat: nn16 +215, nn17 +215, nn18 +216. Self-play by nn16/nn17 has
+gold wins again (16%, after 5% for nn13–nn15). Stopped before iteration 19 (from scratch) as
+Mart asked. Time-control games nn16 (250 ms) vs hand-written (500 ms): nn16 won 5 of 6 (3 in
+Mart's library).
+
+**Iteration 19 (2026-10-31 – 11-01, from scratch).** nn19 **+5 ± 17 vs nn17** (promoted, within
+noise), **+215 vs nn3**: the plateau holds (nn16–nn19 all ≈ +215). Best epoch 66 of 70 (gains
+after epoch ~50 tiny). Self-play by nn17: 81% mates / 17% gold. vs nn17, nn19 conceded far
+more gold wins (160) than it won (61) but won more by mate (724 vs 598). Stopped here as Mart
+asked.
+
+**Window + deep data (2026-11-01, running).** Plateau test, both from scratch, gated vs nn19
+and nn3: **A `m10_w10`** = last ~10M positions only (nn13–nn19 data files); **B `m10_w10deep`** =
+A + 1M positions by nn19 at **48k nodes** (4×, `deep48k_m10_1m.bin`, train2 boards
+126000–134999), weighted 3× (`train.py --weight "deep48k_*=3"`; `--data` now takes
+comma-separated globs; with `--weight` the log also prints, per epoch, the loss on the weighted
+files' validation games vs a 100k sample of their training positions, to spot memorisation). A vs nn19 shows what dropping old data costs; B − A what deeper labels
+gain.
+Result A: **−99 ± 18 vs nn19, +95 vs nn3** (nn19 +215). Only 5.4M training positions after the
+filters (nn19: 16.5M); train/val loss 0.0198/0.0244 vs nn19's 0.0170/0.0184 — it overfits. Old
+data still helps a lot: the network is data-limited (argues against a bigger network too).
 
 ## Next steps
 

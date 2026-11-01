@@ -1,3 +1,5 @@
+using AgeOfChess.Server.GameLogic;
+
 namespace AgeOfChess.Server.Data.Models;
 
 public enum GameResult
@@ -27,8 +29,8 @@ public class GameSession
 
     public string MapSeed { get; set; } = string.Empty;
 
-    // Serialized GameSettings used to create this game (JSON)
-    public string SettingsJson { get; set; } = "{}";
+    /// <summary>The game's settings, stored as columns of this table (see AppDbContext).</summary>
+    public GameSettings Settings { get; set; } = new();
 
     public bool IsPrivate { get; set; } = false;
 
@@ -37,12 +39,6 @@ public class GameSession
     /// Matchmaking games should not appear in "open lobbies" lists.
     /// </summary>
     public bool CreatedViaMatchmaking { get; set; } = false;
-
-    // Denormalized from SettingsJson so EF Core can filter/sort at the SQL level
-    public int  BoardSize            { get; set; } = 12;
-    public bool TimeControlEnabled   { get; set; } = true;
-    public int  StartTimeMinutes     { get; set; } = 5;
-    public int  TimeIncrementSeconds { get; set; } = 5;
 
     // Updated on every move persist so we can sort by it in SQL
     public int  MoveCount { get; set; } = 0;

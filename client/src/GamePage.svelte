@@ -4,6 +4,7 @@
   import { navigate as navigateTo } from './lib/navigate.js';
   import Board from './Board.svelte';
   import MoveList from './MoveList.svelte';
+  import BidHelp from './BidHelp.svelte';
   import { settings } from './lib/settings.svelte.js';
   import { currentGame } from './lib/currentGame.svelte.js';
   import { playSound, stopClockSound, preloadClockSound } from './lib/sound.js';
@@ -20,6 +21,7 @@
   import { wheelNav } from './lib/wheelNav.js';
   import { pieceSrc } from './lib/boardTheme.js';
   import { computeComputerBid, BID_BUDGET_FACTOR } from './lib/engine/computerBid.js';
+  import { bidNodes } from './lib/engine/levels.js';
   import { createComputerGame } from './lib/api.js';
 
   const { gameId } = $props();
@@ -41,11 +43,15 @@
   // Fit the board to the window height: the layout width is chosen so the board fills exactly
   // the height left over by the panels (no vertical scrolling, also on 1080p and 1440p).
   const MOVE_LIST_WIDTH = 280 + 8;   // .move-list-col + .game-body gap
+  // Stacked (mobile) layout: clearly portrait screens (narrower than 4:5; wider ones fit the
+  // desktop layout with the shop still in view), and narrow windows. Same as the
+  // @media rule at the end of the styles.
+  const STACKED_LAYOUT = '(max-aspect-ratio: 4/5), (max-width: 700px)';
   let gameBodyEl   = $state(null);
   let boardWrapEl  = $state(null);
   let layoutWidth  = $state(null);
   function fitBoard() {
-    if (!gameBodyEl || !boardWrapEl || window.innerWidth <= 700) { layoutWidth = null; return; }
+    if (!gameBodyEl || !boardWrapEl || matchMedia(STACKED_LAYOUT).matches) { layoutWidth = null; return; }
     const pageBottomPadding = 8;
     const other = gameBodyEl.getBoundingClientRect().bottom + window.scrollY
                 - boardWrapEl.offsetHeight + pageBottomPadding;
@@ -226,8 +232,8 @@
     // Weak levels ask for the two best moves and sometimes play the second (if not too costly).
     const makesMistakes = (s.computerMistakeRate ?? 0) > 0;
     const request = makesMistakes
-      ? { cmd: 'search', position, nodes: s.computerNodes, multiPv: 2 }
-      : { cmd: 'search', position, nodes: s.computerNodes };
+      ? { cmd: 'search', position, nodes: s.computerNodes, multiPv: 2, nnue: !!s.computerNnue }
+      : { cmd: 'search', position, nodes: s.computerNodes, nnue: !!s.computerNnue };
     computerEngine.call(request)
       .then(async (res) => {
         const wait = COMPUTER_MIN_THINK_MS - (performance.now() - started);
@@ -280,7 +286,7 @@
     computerEngine ??= new EngineClient();
     const squares = $state.snapshot(s.squares);
     const search = (position, nodes) => computerEngine.call({ cmd: 'search', position, nodes });
-    computeComputerBid(squares, s.computerNodes * BID_BUDGET_FACTOR, search, (s.mapSeed ?? '').startsWith('r'))
+    computeComputerBid(squares, bidNodes(s.computerNodes, s.computerNnue) * BID_BUDGET_FACTOR, search, (s.mapSeed ?? '').startsWith('r'))
       .then(({ bid }) => hub?.invoke('SubmitComputerBid', playerToken, bid))
       .catch((e) => {
         if (e?.message !== 'cancelled') {
@@ -308,9 +314,12 @@
         mapMode: seed.startsWith('r') ? 'r' : 'm',
         mapSeed: playAgainSameBoard ? seed : null,
         level: gameState.computerLevel,
-        // Without bidding colors swap, as in a PvP rematch; with bidding the bid decides
-        color: (gameState.biddingEnabled ? isWhite : !isWhite) ? 'white' : 'black',
+        // As in a PvP rematch: without bidding colors swap, except in handicap games (the handicap
+        // goes to a chosen side); with bidding the bid decides
+        color: (gameState.biddingEnabled || gameState.handicap !== 'none' ? isWhite : !isWhite) ? 'white' : 'black',
         biddingEnabled: gameState.biddingEnabled,
+        handicap: gameState.handicap,
+        handicapGold: gameState.handicapGold,
       });
       localStorage.setItem(`token_${newId}`, token);
       localStorage.setItem(`color_${newId}`, white ? 'white' : 'black');
@@ -920,7 +929,7 @@
     const on = (event, fn) => { hub.on(event, fn); cleanups.push(() => hub.off(event, fn)); };
 
     cleanups.push(onConnectionStatus((status) => {
-      if (status === 'disconnected') statusMsg = 'Connection lost — reconnecting…';
+      if (status === 'disconnected') statusMsg = 'Reconnecting…';
     }));
 
     on('GameStarted', async (state) => {
@@ -1388,48 +1397,56 @@
       </div>
 
   <!-- Controls: bidding form OR bid-reveal acknowledgement OR shop+resign -->
+  {#snippet shopSpacer()}
+    <!-- Invisible copy of the shop: the bidding bars take exactly its height (no layout shift) -->
+    <div class="shop shop-spacer" aria-hidden="true">
+      {#each SHOP as item}
+        <button class="shop-piece" tabindex="-1">
+          <img src={shopImgSrc(item.code)} alt="" width="44" height="44" draggable="false" />
+          <span class="cost">{item.cost}</span>
+        </button>
+      {/each}
+    </div>
+  {/snippet}
   {#if biddingState && !isSpectator}
     <div class="controls bid-controls">
-      {#if biddingState.revealedCreatorBid != null}
-        <span class="bid-label">
-          {isWhite ? 'You' : 'Opp'}: <strong>{biddingState.revealedCreatorBid}g</strong>
-          &nbsp;·&nbsp;
-          {isWhite ? 'Opp' : 'You'}: <strong>{biddingState.revealedJoinerBid}g</strong>
-        </span>
-        <span class="bid-waiting">Resolving…</span>
-      {:else if !bidSubmitted}
-        <span class="bid-label">Bid for White:</span>
-        <span class="bid-help">
-          <button class="bid-help-btn" tabindex="-1">?</button>
-          <div class="bid-help-tip">
-            Both players secretly bid gold for the right to play White. The higher bidder
-            wins White and their bid is added to Black's starting gold.
-            <br><br>Bids can be negative when Black is better, which can happen on full random maps. In that case, Black starts with negative gold.
-            <br><br>
-            <strong>Example:</strong> You bid 8g, the opponent bids 6g. You play White, and the opponent plays Black with 8 starting gold.
-          </div>
-        </span>
-        <input
-          class="bid-input"
-          type="number"
-          bind:value={myBid}
-          onkeydown={(e) => e.key === 'Enter' && submitBid()}
-        />
-        <button class="bid-submit-btn" onclick={submitBid}>Submit</button>
-      {:else}
-        {#if isComputerGame && computerBidding}
-          <span class="bid-waiting"><span class="spinner"></span>Bid submitted — the computer is deciding on its bid…</span>
+      {@render shopSpacer()}
+      <div class="bid-content">
+        {#if biddingState.revealedCreatorBid != null}
+          <span class="bid-label">
+            {isWhite ? 'You' : 'Opp'}: <strong>{biddingState.revealedCreatorBid}g</strong>
+            &nbsp;·&nbsp;
+            {isWhite ? 'Opp' : 'You'}: <strong>{biddingState.revealedJoinerBid}g</strong>
+          </span>
+          <span class="bid-waiting">Resolving…</span>
+        {:else if !bidSubmitted}
+          <span class="bid-label">Bid for White:</span>
+          <BidHelp />
+          <input
+            class="bid-input"
+            type="number"
+            bind:value={myBid}
+            onkeydown={(e) => e.key === 'Enter' && submitBid()}
+          />
+          <button class="bid-submit-btn" onclick={submitBid}>Submit</button>
         {:else}
-          <span class="bid-waiting">Bid submitted — waiting for opponent…</span>
+          {#if isComputerGame && computerBidding}
+            <span class="bid-waiting"><span class="spinner"></span>Bid submitted — the computer is deciding on its bid…</span>
+          {:else}
+            <span class="bid-waiting">Bid submitted — waiting for opponent…</span>
+          {/if}
         {/if}
-      {/if}
+      </div>
     </div>
   {:else if pendingBidReveal && !isSpectator}
     <div class="controls bid-controls">
-      <span class="bid-label">
-        You won White — opponent bid <strong>{pendingBidReveal.opponentBid}g</strong>
-      </span>
-      <button class="bid-submit-btn" onclick={() => pendingBidReveal = null}>Got it</button>
+      {@render shopSpacer()}
+      <div class="bid-content">
+        <span class="bid-label">
+          You won White — opponent bid <strong>{pendingBidReveal.opponentBid}g</strong>
+        </span>
+        <button class="bid-submit-btn" onclick={() => pendingBidReveal = null}>Got it</button>
+      </div>
     </div>
   {:else if gameState && !gameState.gameEnded && !isSpectator}
     <div class="controls">
@@ -1870,11 +1887,14 @@
     padding: 0.6rem 0.85rem;
     background: var(--surface); border-radius: 6px;
   }
-  .shop { display: flex; gap: 0.35rem; flex: 1; justify-content: center; }
+  .shop { display: flex; gap: 0.35rem; flex: 1; min-width: 0; justify-content: center; }
 
+  /* Desktop: the shop scales with the window height, like the board (which fills the height), at a
+     fixed button shape, so the row always fits under the board */
   .shop-piece {
-    display: flex; flex-direction: column; align-items: center;
-    padding: 0.3rem 0.4rem;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 8.5vh; aspect-ratio: 6 / 5; min-width: 0;
+    padding: 0.4vh;
     background: var(--surface-2); border: 2px solid transparent; border-radius: 8px;
     color: var(--fg); gap: 2px;
     transition: border-color 0.1s, background 0.1s;
@@ -1885,7 +1905,8 @@
   .shop-piece:disabled { opacity: 0.3; cursor: default; }
 
 
-  .cost { font-size: 0.85rem; font-weight: 700; color: #f5c518; font-variant-numeric: tabular-nums; }
+  .shop-piece img { height: 55%; width: auto; }
+  .cost { font-size: 1.6vh; font-weight: 700; color: #f5c518; font-variant-numeric: tabular-nums; }
   .cost.dim { color: var(--faint); }
 
   /* ── Side panel: move list / chat (~80%) above the game actions (~20%) ── */
@@ -1940,50 +1961,13 @@
     stroke-linecap: round; stroke-linejoin: round;
   }
 
-  /* ── Bidding help tooltip ── */
-  .bid-help {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-  }
-  .bid-help-btn {
-    width: 1.35em; height: 1.35em;
-    border-radius: 50%;
-    background: var(--surface-2);
-    border: 1px solid var(--faint);
-    color: var(--accent);
-    font-size: 0.79rem;
-    font-weight: 700;
-    cursor: default;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-  .bid-help-tip {
-    display: none;
-    position: absolute;
-    bottom: calc(100% + 8px);
-    left: 50%;
-    transform: translateX(-50%);
-    width: 270px;
-    background: var(--bg);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.8rem;
-    color: var(--muted);
-    line-height: 1.55;
-    z-index: 100;
-    pointer-events: none;
-    text-align: left;
-  }
-  .bid-help-tip strong { color: var(--fg-2); }
-  .bid-help:hover .bid-help-tip,
-  .bid-help:focus-within .bid-help-tip { display: block; }
-
   /* ── Bidding controls bar ── */
-  .bid-controls { justify-content: center; gap: 0.6rem; flex-wrap: wrap; }
+  .bid-controls { display: grid; }
+  .bid-controls > * { grid-area: 1 / 1; min-width: 0; }
+  .shop-spacer { visibility: hidden; }
+  .bid-content {
+    display: flex; align-items: center; justify-content: center; gap: 0.6rem; flex-wrap: wrap;
+  }
   .bid-label { font-size: 0.9rem; color: var(--fg-2); }
   .bid-label strong { color: #f5c518; }
   .bid-input {
@@ -2032,12 +2016,13 @@
   .rematch-btn.accept:hover { background: var(--button-hover); border-color: var(--button-hover); color: #fff; }
   .rematch-waiting { font-size: 0.85rem; color: var(--muted); font-style: italic; text-align: center; }
 
-  /* Resign / draw in the player bar: phones only */
+  /* Resign / draw in the player bar: stacked layout only */
   .bar-controls { display: none; align-items: center; gap: 0.35rem; flex-shrink: 0; }
   .bar-controls .action-btn.icon-only { padding: 0.3rem 0.6rem; }
 
-  /* ── Phones ── (last, so these override the rules above) */
-  @media (max-width: 700px) {
+  /* ── Stacked layout: phones, portrait tablets (STACKED_LAYOUT in the script) ── (last, so these
+     override the rules above) */
+  @media (max-aspect-ratio: 4/5), (max-width: 700px) {
     .game-body { flex-direction: column; flex-wrap: nowrap; }
     .board-col    { order: 1; flex: none; }
     .player-panel.me { order: 2; width: 100%; flex: none; }
@@ -2051,7 +2036,8 @@
     /* Shop straight on the page background, smaller pieces */
     .controls { padding: 0; background: none; }
     .shop { gap: 0.3rem; }
-    .shop-piece { flex: 1; padding: 0.15rem 0.2rem; }
+    .shop-piece { flex: 1; padding: 0.15rem 0.2rem; height: auto; aspect-ratio: auto; }
     .shop-piece img { width: 36px; height: 36px; }
+    .cost { font-size: 0.85rem; }
   }
 </style>

@@ -7,6 +7,7 @@
     python training/train.py --data "training/data/*.bin" --run first
 """
 import argparse
+import fnmatch
 import glob
 import json
 import math
@@ -96,8 +97,13 @@ def load(paths, args):
         key = np.uint64(zlib.crc32(os.path.basename(path).encode()))
         h = ((games + key * np.uint64(1 << 32)) * np.uint64(2654435761)) % np.uint64(1000)
         is_val = h < np.uint64(int(1000 * args.val_fraction))
+        if args.val_files and not fnmatch.fnmatch(os.path.basename(path), args.val_files):
+            is_val[:] = False   # --val-files: validate only on matching files (e.g. data an --init network never saw)
         idx = np.nonzero(keep)[0]
-        train.append(np.stack([np.full(len(idx), fi), idx], axis=1)[~is_val[idx]])
+        rows = np.stack([np.full(len(idx), fi), idx], axis=1)[~is_val[idx]]
+        reps = max([int(n) for pat, n in (w.rsplit("=", 1) for w in args.weight or [])
+                    if fnmatch.fnmatch(os.path.basename(path), pat)] or [1])
+        train.append(np.tile(rows, (reps, 1)))   # --weight: train rows repeated (validation unchanged)
         val.append(np.stack([np.full(len(idx), fi), idx], axis=1)[is_val[idx]])
     train = np.concatenate(train)
     val = np.concatenate(val)
@@ -213,7 +219,9 @@ def evaluate(model, files, rows, args, k):
 
 def main():
     p = argparse.ArgumentParser(description="Train the evaluation network")
-    p.add_argument("--data", default="training/data/*.bin", help="glob of gendata files")
+    p.add_argument("--data", default="training/data/*.bin", help="glob of gendata files (several: comma-separated)")
+    p.add_argument("--weight", action="append", metavar="PATTERN=N",
+                   help="repeat the training positions of files whose name matches PATTERN N times per epoch")
     p.add_argument("--run", default=time.strftime("run_%Y%m%d_%H%M"), help="name under training/runs/")
     p.add_argument("--epochs", type=int, default=100, help="upper limit; early stopping usually ends sooner")
     p.add_argument("--batch-size", type=int, default=8192)
@@ -235,6 +243,8 @@ def main():
                    help="with --init: train only the moves-left head; the value output stays exactly the same")
     p.add_argument("--patience", type=int, default=4, help="early stopping: epochs without val improvement")
     p.add_argument("--val-fraction", type=float, default=0.05)
+    p.add_argument("--val-files", help="validate only on files whose name matches this pattern (others train fully); "
+                                         "use with --init so validation games are new to the init network")
     p.add_argument("--max-positions", type=int, default=0, help="subsample training positions (0 = all)")
     p.add_argument("--no-augment", dest="augment", action="store_false", help="disable the 8 board symmetries")
     p.add_argument("--keep-check", dest="skip_check", action="store_false", help="keep positions in check")
@@ -252,7 +262,7 @@ def main():
     t_start = time.time()
 
     print(f"Using cpu ({args.threads} threads)")
-    paths = sorted(glob.glob(args.data))
+    paths = sorted({f for g in args.data.split(",") for f in glob.glob(g)})
     if not paths:
         raise SystemExit(f"no files match {args.data}")
     files, train, val, st = load(paths, args)
@@ -326,6 +336,18 @@ def main():
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=args.lr_factor, patience=args.lr_patience,
                                                        min_lr=args.min_lr)
 
+    # --weight: also report the value loss on the weighted files alone, on their validation games and
+    # on a fixed sample of their training positions; a growing gap means the repeats get memorised.
+    weighted = None
+    if args.weight:
+        wf = [fi for fi, path in enumerate(paths)
+              if any(fnmatch.fnmatch(os.path.basename(path), w.rsplit("=", 1)[0]) for w in args.weight)]
+        w_train = np.unique(train[np.isin(train[:, 0], wf)], axis=0)
+        w_train = w_train[np.random.default_rng(0).choice(len(w_train), min(100_000, len(w_train)), replace=False)]
+        weighted = (w_train, val[np.isin(val[:, 0], wf)])
+        print(f"Weighted files: {len(wf)}; reporting their loss on {len(weighted[0]):,} train / "
+              f"{len(weighted[1]):,} val positions each epoch")
+
     history = []
     best = dict(val_loss=math.inf, epoch=0)
     bad_epochs = 0
@@ -374,6 +396,11 @@ def main():
         history.append(dict(epoch=epoch, train_loss=train_loss, val_loss=val_vloss, val_ml_mae=val_ml_mae,
                             train_acc=train_acc, val_acc=val_acc, val_close_acc=val_close,
                             val_gap=val_gap, val_gap_close=val_gap_close, lr=lr, time_s=elapsed))
+        if weighted:
+            w_tl = evaluate(model, files, weighted[0], args, k)[0]
+            w_vl = evaluate(model, files, weighted[1], args, k)[0]
+            print(f"  weighted files: loss={w_tl:.5f}/{w_vl:.5f} (train sample / val), gap {w_vl - w_tl:.5f}")
+            history[-1].update(weighted_train_loss=w_tl, weighted_val_loss=w_vl)
         sched.step(val_loss)
         if opt.param_groups[0]["lr"] < lr:
             print(f"  Learning rate {lr:.2e} -> {opt.param_groups[0]['lr']:.2e}")

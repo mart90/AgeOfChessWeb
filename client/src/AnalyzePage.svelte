@@ -11,7 +11,7 @@
   import { sameSquare } from './lib/boardUtils.js';
   import { serializeTree, deserializeTree, getNodePath, nodeAtPath } from './lib/treeStorage.js';
   import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js'
-  import { engineSearch, cancelSearch } from './lib/engine/engine.js';
+  import { engineSearch, cancelSearch, NNUE_BOARD_SIZE } from './lib/engine/engine.js';
   import { SHOP, MINE_INCOME } from './lib/constants.js'
   import { EngineAnalysis as AnalysisWorker } from './lib/engine/engineAnalysis.js';
   import { settings, persistSettings } from './lib/settings.svelte.js';
@@ -141,7 +141,7 @@
 
   function startWorker() {
     if (!analysisWorker) {
-      analysisWorker = new AnalysisWorker();
+      analysisWorker = new AnalysisWorker({ nnue: true });
 
       analysisWorker.onmessage = (event) => {
         const { type, depth, topMoves } = event.data;
@@ -195,7 +195,11 @@
   }
 
   // ── Engine move (Rust engine via WebAssembly, see lib/engine/) ──────────────
+  // On 10x10 boards the engine evaluates with the network (NNUE): ~4x fewer nodes per second,
+  // so a quarter of the nodes for about the same thinking time (still much stronger).
+  const useNnue = $derived(mapSize === NNUE_BOARD_SIZE);
   const ENGINE_MOVE_NODES = 600_000;
+  const ENGINE_MOVE_NODES_NNUE = 150_000;
   let engineThinking = $state(false);
   let engineError    = $state('');
   let searchToken    = 0;              // invalidates results of aborted searches
@@ -216,7 +220,7 @@
     else placePieceAt(best.toPos, best.pieceType, whiteIsActive);
   }
 
-  // While analyzing: play the current top move. Otherwise: think for 600k nodes and play.
+  // While analyzing: play the current top move. Otherwise: think (fixed nodes) and play.
   async function engineMove() {
     if (engineThinking || !squares.length) return;
     engineError = '';
@@ -229,7 +233,7 @@
     const token = ++searchToken;
     engineThinking = true;
     try {
-      const res = await engineSearch(position, { nodes: ENGINE_MOVE_NODES });
+      const res = await engineSearch(position, useNnue ? { nodes: ENGINE_MOVE_NODES_NNUE, nnue: true } : { nodes: ENGINE_MOVE_NODES });
       // Ignore the result if the position changed meanwhile
       if (token !== searchToken || JSON.stringify(getCurrentPosition()) !== before) return;
       engineThinking = false;
@@ -988,7 +992,7 @@
         <span class="move-score">{formatEval(analysisResults[0])}</span>
         <span class="move-notation">{toNotation(analysisResults[0])}</span>
       {:else}
-        <span class="mobile-engine-idle">{analyzing ? 'Analyzing…' : 'Engine'}</span>
+        <span class="mobile-engine-idle">{#if analyzing}Analyzing…{:else}Engine{#if useNnue} <span class="nnue-tag">(NNUE)</span>{/if}{/if}</span>
       {/if}
     </span>
     <button class="ctrl-btn" onclick={toggleAnalysis} disabled={!mapSize}>{analyzing ? 'Stop' : 'Analyze'}</button>
@@ -1194,13 +1198,13 @@
 
     <!-- On mobile only the line list is shown here (buttons and best line sit under the board) -->
     <div class="section" class:desktop-only={!analysisResults.length && !engineError}>
-      <div class="section-label">Engine</div>
+      <div class="section-label">Engine{#if useNnue} <span class="nnue-tag">(NNUE)</span>{/if}</div>
       <div class="ctrl-row desktop-only">
         <button class="action-btn grow" onclick={toggleAnalysis} disabled={!mapSize}>
           {analyzing ? "Stop" : "Analyze"}
         </button>
         <button class="ctrl-btn" onclick={engineMove} disabled={!mapSize || engineThinking}
-                title={analyzing ? 'Play the top move' : 'Think (600k nodes) and play a move'}>
+                title={analyzing ? 'Play the top move' : `Think (${useNnue ? '150k nodes, network eval' : '600k nodes'}) and play a move`}>
           {engineThinking ? 'Thinking…' : 'Engine move'}
         </button>
       </div>
@@ -1368,6 +1372,8 @@
   .section-label {
     font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
   }
+  /* Smaller than the label: raised so its capitals centre on the label's */
+  .nnue-tag { font-size: 0.62rem; letter-spacing: 0.04em; margin-left: 0.45em; vertical-align: 0.05em; }
 
   /* ── Shop ── */
   .shop-row { display: flex; gap: 0.2rem; }
@@ -1481,8 +1487,30 @@
   .mobile-engine-idle { color: var(--faint); }
   .mobile-engine .ctrl-btn { flex: 0 0 auto; padding: 0.35rem 0.75rem; }
 
-  /* ── Mobile: stack vertically ── */
-  @media (max-width: 640px) {
+  /* ── In between (4:5 to 4:3): the desktop layout, but with the move list under the board, so
+     the board can use the full width next to the side panel. The board leaves at least
+     200px of height for the move list. (Before the stacked rule below, which wins where they
+     meet at 4:5.) ── */
+  @media (min-aspect-ratio: 4/5) and (max-aspect-ratio: 4/3) and (min-width: 641px) {
+    .board-and-list {
+      --board: min(100vw - 270px - 1.5rem, 100vh - 46px - 1.5rem - 200px);
+      flex-direction: column;
+      align-items: stretch;
+      width: var(--board);
+      max-width: none;
+    }
+    .board-wrap { width: 100%; height: auto; flex: none; }
+    .movelist-col {
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+      border-top: 1px solid var(--line);
+    }
+  }
+
+  /* ── Mobile: stack vertically. Clearly portrait screens (narrower than 4:5: phones, portrait
+     tablets), and very narrow windows ── */
+  @media (max-aspect-ratio: 4/5), (max-width: 640px) {
     .mobile-only { display: flex; }
     .desktop-only { display: none; }
     .sandbox-wrap {
@@ -1497,6 +1525,7 @@
     .board-and-list {
       flex-direction: column;
       height: auto;
+      width: 100%;        /* full width (it would shrink to the canvas' default 300px) */
       align-items: stretch;
     }
     /* On mobile the board is constrained by width, not height */

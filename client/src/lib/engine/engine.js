@@ -2,7 +2,10 @@
 // - engineCall(): synchronous calls (legal moves, game status) on a main-thread instance.
 // - EngineClient: searches in its own Web Worker; cancel() terminates it.
 // - engineSearch()/engineNewGame()/cancelSearch(): a shared client used for play mode.
+// Searches with `nnue: true` use the evaluation network (network.ggnn, 10x10 boards only; the
+// engine falls back to the hand-written eval elsewhere and reports `nnue` in the result).
 import wasmUrl from './goldrush_engine.wasm?url';
+import networkUrl from './network.ggnn?url';
 import EngineWorker from './engineWorker.js?worker';
 import { loadEngine } from './engineWasm.js';
 
@@ -25,11 +28,25 @@ export function engineCall(request) {
   return syncEngine.call(request);
 }
 
+// Network bytes, fetched once per page and copied into each worker that needs them.
+let networkBytes = null;
+function getNetworkBytes() {
+  networkBytes ??= fetch(networkUrl).then(r => {
+    if (!r.ok) throw new Error(`network: HTTP ${r.status}`);
+    return r.arrayBuffer();
+  });
+  return networkBytes;
+}
+
+/** Board sizes the evaluation network was trained for. */
+export const NNUE_BOARD_SIZE = 10;
+
 /** An engine running in a dedicated Web Worker. */
 export class EngineClient {
   #worker = null;
   #nextId = 1;
   #pending = new Map();
+  #networkSent = null;   // promise: the current worker has the network
 
   #getWorker() {
     if (!this.#worker) {
@@ -46,12 +63,30 @@ export class EngineClient {
     return this.#worker;
   }
 
-  call(request) {
+  #post(message) {
     return new Promise((resolve, reject) => {
       const id = this.#nextId++;
       this.#pending.set(id, { resolve, reject });
-      this.#getWorker().postMessage({ id, request });
+      this.#getWorker().postMessage({ id, ...message });
     });
+  }
+
+  async call(request) {
+    if (request.nnue) {
+      const worker = this.#getWorker();
+      if (!this.#networkSent) {
+        const sent = getNetworkBytes().then(network => this.#post({ network }));
+        this.#networkSent = sent;
+        // A failed load (e.g. offline) falls back to the hand-written eval; retry next time
+        sent.catch(e => {
+          if (this.#networkSent === sent) this.#networkSent = null;
+          if (e?.message !== 'cancelled') console.warn('[Engine] network not loaded:', e);
+        });
+      }
+      try { await this.#networkSent; } catch (e) { if (e?.message === 'cancelled') throw e; }
+      if (worker !== this.#worker) throw new Error('cancelled');
+    }
+    return this.#post({ request });
   }
 
   /** Abort any running request by terminating the worker (pending promises reject). */
@@ -59,6 +94,7 @@ export class EngineClient {
     if (!this.#worker) return;
     this.#worker.terminate();
     this.#worker = null;
+    this.#networkSent = null;
     for (const p of this.#pending.values()) p.reject(new Error('cancelled'));
     this.#pending.clear();
   }

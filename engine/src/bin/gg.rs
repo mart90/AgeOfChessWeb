@@ -3,6 +3,7 @@
 //!   gg bench    [--seeds F] [--positions N] [--depth D]
 //!   gg selfplay --seeds F [--games N] [--threads T] [--time MS | --nodes N | --depth D]
 //!               [--params P.json] [--out games.jsonl] [--max-plies P] [--verbose]
+//!               [--order-stats]  (move-ordering statistics: how early the best move is searched)
 //!   gg match    --a A.json --b B.json --seeds F [--games N] [--threads T] [--time MS|--nodes N|--depth D]
 //!               (each seed is played twice with colours swapped; "default" = built-in params;
 //!                per-engine limits: --a-nodes/--b-nodes, --a-time/--b-time, --a-depth/--b-depth;
@@ -27,7 +28,7 @@
 
 use goldrush_engine::eval::EvalParams;
 use goldrush_engine::movegen::{legal_moves, perft};
-use goldrush_engine::search::{Limits, Searcher, MATE_BOUND};
+use goldrush_engine::search::{Limits, OrderStats, Searcher, MATE_BOUND};
 use goldrush_engine::seed::position_from_seed;
 use goldrush_engine::*;
 use std::collections::HashMap;
@@ -357,16 +358,23 @@ fn selfplay(a: &Args) {
     let seeds = Arc::new(seeds);
     let tally = Arc::new(Mutex::new((HashMap::<String, u32>::new(), 0usize, 0u64, 0f64, 0u64, [0u32; 2])));
     let net = load_nnue(a, "");
+    let order_stats = a.get("order-stats").is_some();
+    let ostats = Arc::new(Mutex::new(OrderStats::default()));
     let start = Instant::now();
 
     let handles: Vec<_> = (0..threads)
         .map(|_| {
             let (next, seeds, out, tally, params, net) = (next.clone(), seeds.clone(), out.clone(), tally.clone(), params.clone(), net.clone());
+            let ostats = ostats.clone();
             std::thread::spawn(move || {
                 let mut w = Searcher::new(params.clone(), 32);
                 let mut b = Searcher::new(params, 32);
                 w.nnue = net.clone();
                 b.nnue = net;
+                if order_stats {
+                    w.order_stats = Some(Box::default());
+                    b.order_stats = Some(Box::default());
+                }
                 loop {
                     let i = next.fetch_add(1, Ordering::SeqCst);
                     if i >= games {
@@ -375,6 +383,12 @@ fn selfplay(a: &Args) {
                     w.clear();
                     b.clear();
                     let (rec, st) = play_game(&seeds[i], [&mut w, &mut b], [limits; 2], max_plies, verbose, None, None, [None; 2], 0);
+                    for e in [&mut w, &mut b] {
+                        if let Some(os) = e.order_stats.as_mut() {
+                            ostats.lock().unwrap().add(os);
+                            **os = OrderStats::default();
+                        }
+                    }
                     {
                         let mut o = out.lock().unwrap();
                         writeln!(o, "{}", serde_json::to_string(&rec).unwrap()).unwrap();
@@ -417,6 +431,45 @@ fn selfplay(a: &Args) {
         t.2 as f64 / (t.3 / 1000.0).max(1e-9) / 1e3,
         (t.5[0] + t.5[1]) as f64 / games as f64
     );
+    if order_stats {
+        print_order_stats(&ostats.lock().unwrap());
+    }
+}
+
+fn print_order_stats(o: &OrderStats) {
+    let pct = |a: u64, b: u64| 100.0 * a as f64 / b.max(1) as f64;
+    let ib = ["0", "1", "2", "3-5", "6-10", "11+"];
+    println!("
+Move ordering (interior nodes, by remaining depth; index = position among searched moves)");
+    println!("depth  nodes      legal  plac%  searched  cut%   cut at index: {}   waste%  | exact: best at {}", ib.join("/"), ib.join("/"));
+    for d in 0..5 {
+        let n = o.nodes[d];
+        let ci: Vec<String> = (0..6).map(|i| format!("{:.1}", pct(o.cut_idx[d][i], o.cuts[d]))).collect();
+        let ei: Vec<String> = (0..6).map(|i| format!("{:.1}", pct(o.exact_idx[d][i], o.exact[d]))).collect();
+        println!(
+            "{:>4}  {:>9}  {:>5.1}  {:>5.1}  {:>7.2}  {:>5.1}   {}   {:>5.1}  | {} ({})",
+            if d == 4 { "5+".to_string() } else { (d + 1).to_string() },
+            n,
+            o.legal[d] as f64 / n.max(1) as f64,
+            pct(o.legal_placements[d], o.legal[d]),
+            o.searched[d] as f64 / n.max(1) as f64,
+            pct(o.cuts[d], n),
+            ci.join("/"),
+            100.0 * o.cut_waste[d] / o.cuts[d].max(1) as f64,
+            ei.join("/"),
+            o.exact[d]
+        );
+    }
+    let cats = ["TT move", "capture", "placement on mine", "killer", "quiet move", "quiet placement"];
+    let total: u64 = o.cuts.iter().sum();
+    println!("
+Cutoff move by category (share of all cuts; then where it was found: index {})", ib.join("/"));
+    for (c, name) in cats.iter().enumerate() {
+        let row = &o.cut_cat_idx[c];
+        let n: u64 = row.iter().sum();
+        let ci: Vec<String> = (0..6).map(|i| format!("{:.1}", pct(row[i], n))).collect();
+        println!("  {:<18} {:>5.1}%   {}", name, pct(n, total), ci.join("/"));
+    }
 }
 
 fn run_match(a: &Args) {

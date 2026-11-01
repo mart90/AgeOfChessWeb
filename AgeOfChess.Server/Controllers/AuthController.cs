@@ -24,6 +24,15 @@ public class AuthController(AppDbContext db, IConfiguration config) : Controller
     );
 
     public record LoginRequest(string Username, string Password);
+
+    // Display names (null = same as the username, which has its own rules)
+    public const int DisplayNameMinLength = 3, DisplayNameMaxLength = 40;
+    /// <summary>Why <paramref name="displayName"/> (already trimmed) isn't allowed, or null if it is.</summary>
+    public static string? DisplayNameError(string? displayName) =>
+        displayName == null                          ? null
+        : displayName.Length < DisplayNameMinLength ? $"Display name must be at least {DisplayNameMinLength} characters."
+        : displayName.Length > DisplayNameMaxLength ? $"Display name must be at most {DisplayNameMaxLength} characters."
+        : null;
     public record GoogleAuthRequest(string Credential);
 
     // POST /api/auth/register
@@ -48,6 +57,8 @@ public class AuthController(AppDbContext db, IConfiguration config) : Controller
         string? displayName = req.DisplayNameSameAsUsername || string.IsNullOrWhiteSpace(req.DisplayName)
             ? null
             : req.DisplayName!.Trim();
+        if (DisplayNameError(displayName) is { } displayNameError)
+            return BadRequest(displayNameError);
 
         var user = new User
         {
@@ -109,7 +120,8 @@ public class AuthController(AppDbContext db, IConfiguration config) : Controller
                 Username    = username,
                 GoogleId    = payload.Subject,
                 Email       = payload.Email,
-                DisplayName = payload.Name?.Trim(),
+                // A Google name that doesn't fit the rules: shown as the username instead
+                DisplayName = DisplayNameError(payload.Name?.Trim()) == null ? payload.Name?.Trim() : null,
             };
 
             db.Users.Add(user);
