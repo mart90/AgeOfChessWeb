@@ -41,7 +41,7 @@ public class GameController(
         bool IsRanked = true,
         string Color = "white",      // the creator's colour: "white" | "black" | "random" (ignored with bidding)
         string Handicap = "none",    // "none" | "auto" | "manual" (see GameSettings.Handicap)
-        int HandicapGold = 1
+        int? HandicapGold = null     // the manual amount
     );
 
     public record CreateComputerGameRequest(
@@ -52,7 +52,7 @@ public class GameController(
         string Color = "white",   // "white" | "black" | "random" — the human's colour (ignored with bidding)
         bool BiddingEnabled = false,
         string Handicap = "none",
-        int HandicapGold = 1
+        int? HandicapGold = null     // the manual amount
     );
 
     private const int MaxHandicapGold = 999;
@@ -61,11 +61,11 @@ public class GameController(
     /// Checks the colour / handicap options. A handicap without bidding goes to Black, so the
     /// creator must pick their colour. Returns an error message, or null when valid.
     /// </summary>
-    private static string? ValidateColorAndHandicap(string color, bool bidding, string handicap, int handicapGold)
+    private static string? ValidateColorAndHandicap(string color, bool bidding, string handicap, int? handicapGold)
     {
         if (color is not ("white" or "black" or "random")) return "Unknown colour.";
         if (handicap is not ("none" or "auto" or "manual")) return "Unknown handicap.";
-        if (handicap == "manual" && handicapGold is < 1 or > MaxHandicapGold)
+        if (handicap == "manual" && handicapGold is not (>= 1 and <= MaxHandicapGold))
             return $"The handicap must be between 1 and {MaxHandicapGold} gold.";
         if (handicap != "none" && !bidding && color == "random")
             return "Choose a colour for a handicap game.";
@@ -255,8 +255,8 @@ public class GameController(
                 mapSeed              = g.GetMap().Seed,
                 boardSize            = g.MapSize,
                 timeControlEnabled   = g.TimeControlEnabled,
-                startTimeMinutes     = g.StartTimeMinutes,
-                timeIncrementSeconds = g.TimeIncrementSeconds,
+                startTimeMinutes     = g.Settings.StartTimeMinutes,
+                timeIncrementSeconds = g.Settings.TimeIncrementSeconds,
                 whiteName            = g.White.PlayedByStr,
                 blackName            = g.Black.PlayedByStr,
                 whiteElo             = g.WhiteElo,
@@ -292,8 +292,8 @@ public class GameController(
                     isMyTurn             = me.IsActive,
                     waitingForOpponent   = !g.HasGameStarted,
                     timeControlEnabled   = g.TimeControlEnabled,
-                    startTimeMinutes     = g.StartTimeMinutes,
-                    timeIncrementSeconds = g.TimeIncrementSeconds,
+                    startTimeMinutes     = g.Settings.StartTimeMinutes,
+                    timeIncrementSeconds = g.Settings.TimeIncrementSeconds,
                 };
             })
             .ToList();
@@ -337,8 +337,8 @@ public class GameController(
             var cat = EloService.GetCategory(new GameSettings
             {
                 TimeControlEnabled   = g.TimeControlEnabled,
-                StartTimeMinutes     = g.StartTimeMinutes,
-                TimeIncrementSeconds = g.TimeIncrementSeconds,
+                StartTimeMinutes     = g.Settings.StartTimeMinutes,
+                TimeIncrementSeconds = g.Settings.TimeIncrementSeconds,
             });
 
             creators.TryGetValue(g.WhiteUserId!.Value, out var creator);
@@ -362,8 +362,8 @@ public class GameController(
                 creatorName          = g.White.PlayedByStr,
                 creatorElo,
                 timeControlEnabled   = g.TimeControlEnabled,
-                startTimeMinutes     = g.StartTimeMinutes,
-                timeIncrementSeconds = g.TimeIncrementSeconds,
+                startTimeMinutes     = g.Settings.StartTimeMinutes,
+                timeIncrementSeconds = g.Settings.TimeIncrementSeconds,
                 boardSize            = g.MapSize,
                 isFullRandom         = !map.IsMirrored,
                 mapSeed              = customSeed,

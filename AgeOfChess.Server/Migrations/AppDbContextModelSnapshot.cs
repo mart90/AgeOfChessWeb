@@ -356,7 +356,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("int")
                                 .HasColumnName("BoardSize");
 
-                            b1.Property<bool>("ComputerIsWhite")
+                            b1.Property<bool?>("ComputerIsWhite")
                                 .HasColumnType("tinyint(1)")
                                 .HasColumnName("ComputerIsWhite");
 
@@ -365,7 +365,6 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnName("ComputerLevel");
 
                             b1.Property<string>("CreatorColor")
-                                .IsRequired()
                                 .HasMaxLength(6)
                                 .HasColumnType("varchar(6)")
                                 .HasColumnName("CreatorColor");
@@ -376,7 +375,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("varchar(6)")
                                 .HasColumnName("Handicap");
 
-                            b1.Property<int>("HandicapGold")
+                            b1.Property<int?>("HandicapGold")
                                 .HasColumnType("int")
                                 .HasColumnName("HandicapGold");
 
@@ -394,7 +393,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("longtext")
                                 .HasColumnName("RequestedMapSeed");
 
-                            b1.Property<int>("StartTimeMinutes")
+                            b1.Property<int?>("StartTimeMinutes")
                                 .HasColumnType("int")
                                 .HasColumnName("StartTimeMinutes");
 
@@ -402,7 +401,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("tinyint(1)")
                                 .HasColumnName("TimeControlEnabled");
 
-                            b1.Property<int>("TimeIncrementSeconds")
+                            b1.Property<int?>("TimeIncrementSeconds")
                                 .HasColumnType("int")
                                 .HasColumnName("TimeIncrementSeconds");
 
@@ -445,7 +444,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("int")
                                 .HasColumnName("BoardSize");
 
-                            b1.Property<bool>("ComputerIsWhite")
+                            b1.Property<bool?>("ComputerIsWhite")
                                 .HasColumnType("tinyint(1)")
                                 .HasColumnName("ComputerIsWhite");
 
@@ -454,7 +453,6 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnName("ComputerLevel");
 
                             b1.Property<string>("CreatorColor")
-                                .IsRequired()
                                 .HasMaxLength(6)
                                 .HasColumnType("varchar(6)")
                                 .HasColumnName("CreatorColor");
@@ -465,7 +463,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("varchar(6)")
                                 .HasColumnName("Handicap");
 
-                            b1.Property<int>("HandicapGold")
+                            b1.Property<int?>("HandicapGold")
                                 .HasColumnType("int")
                                 .HasColumnName("HandicapGold");
 
@@ -483,7 +481,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("longtext")
                                 .HasColumnName("RequestedMapSeed");
 
-                            b1.Property<int>("StartTimeMinutes")
+                            b1.Property<int?>("StartTimeMinutes")
                                 .HasColumnType("int")
                                 .HasColumnName("StartTimeMinutes");
 
@@ -491,7 +489,7 @@ namespace AgeOfChess.Server.Migrations
                                 .HasColumnType("tinyint(1)")
                                 .HasColumnName("TimeControlEnabled");
 
-                            b1.Property<int>("TimeIncrementSeconds")
+                            b1.Property<int?>("TimeIncrementSeconds")
                                 .HasColumnType("int")
                                 .HasColumnName("TimeIncrementSeconds");
 

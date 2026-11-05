@@ -4,6 +4,15 @@ _Last updated: 2026-11-05_
 
 ## Current focus
 
+**Settings that don't apply are NULL (2026-11-05).** `GameSettings.Normalize` (called by
+`GameCreationService.CreateAsync`): `StartTimeMinutes` / `TimeIncrementSeconds` without time
+control, `ComputerIsWhite` for human games, `CreatorColor` for non-lobby games (matchmaking,
+rematch, computer) and with bidding, `HandicapGold` unless the handicap is manual. Migration
+`NullableSettings` (applied to dev) also nulls existing rows; `CreatorColor` "white" is nulled
+everywhere, as it was the default for automatch/rematch rows too. **Production:**
+`db-migrations/20261105_NullableSettings.sql` runs on the next full deploy; delete it afterwards.
+Also fixed: a resumed timed game kept `Settings.TimeControlEnabled = false` (its rematch was untimed).
+
 **Client-side legal-move hints (2026-11-05).** GamePage computes the green move / placement hints
 locally (`pathFinder.js`) instead of asking the server (`GameHub.GetLegalMoves` /
 `GetLegalPlacements` removed); the server still validates every move. JS placements now also apply
@@ -25,9 +34,10 @@ Checked against C# with `client/scripts/rules-oracle.mjs` (engine.md).
 - Notifications: `Notifications` table (migration `Notifications`, applied to dev),
   `NotificationService` (stored + pushed to group `user:{id}`), `api/notifications` (unread list,
   mark read). Only type so far: `gameStarted`, always stored for the lobby creator; the game page
-  marks it read once shown in a visible tab. Bell in the NavBar (gold + count when unread).
+  marks it read once shown in a visible tab. Bell in the NavBar (gold + count when unread; the
+  count also prefixes the tab title).
   Sounds play in one tab only (`playSoundOnce`, Web Locks). **Production:**
-  `db-migrations/20261102_Notifications.sql` runs on the next full deploy; delete it afterwards.
+  `db-migrations/20261102_Notifications.sql` applied in the 2026-11-05 deploy (script deleted).
 - Also: White's first-move time (game-rules.md); public lobbies say "Waiting for opponent to join…".
 - Tested with SignalR clients + headless Chrome against a local server. Not tested on a phone.
 

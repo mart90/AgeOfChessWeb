@@ -74,6 +74,21 @@
   });
 
   const unread = $derived(notifications.items.length);
+
+  // Unread count in the tab title: "(2) Your move". Pages set their own titles, so the prefix is
+  // re-applied whenever the title changes.
+  $effect(() => {
+    const prefix = unread ? `(${unread}) ` : '';
+    const strip = t => t.replace(/^\(\d+\) /, '');
+    const apply = () => {
+      const want = prefix + strip(document.title);
+      if (document.title !== want) document.title = want;
+    };
+    apply();
+    const observer = new MutationObserver(apply);
+    observer.observe(document.head, { subtree: true, childList: true, characterData: true });
+    return () => { observer.disconnect(); document.title = strip(document.title); };
+  });
   let bellDismissed = $state(false);   // after picking an item, hidden until the pointer leaves
 
   async function openNotification(n) {

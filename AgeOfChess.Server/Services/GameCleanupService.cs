@@ -106,7 +106,7 @@ public class GameCleanupService(
             {
                 var  active    = game.ActiveColor;
                 bool humanGone = game.IsComputerGame
-                              && !(game.Settings.ComputerIsWhite ? game.BlackConnected : game.WhiteConnected);
+                              && !(game.Settings.ComputerIsWhite == true ? game.BlackConnected : game.WhiteConnected);
                 active.TimeMiliseconds = 0;
                 game.ForceEnd(humanGone && game.IsComputerSide(active.IsWhite)
                     ? "abandoned"

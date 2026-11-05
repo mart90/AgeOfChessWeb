@@ -40,7 +40,7 @@ public class UserController(AppDbContext db) : ControllerBase
         g.Settings.ComputerLevel is int level ? ComputerLevels.Name(level) : null;
 
     /// <summary>Time-control category, as EloService.GetCategory, by name.</summary>
-    private static string Category(bool timeControlEnabled, int startTimeMinutes) =>
+    private static string Category(bool timeControlEnabled, int? startTimeMinutes) =>
         !timeControlEnabled || startTimeMinutes >= 30 ? "slow"
         : startTimeMinutes >= 10 ? "rapid"
         : startTimeMinutes >= 3  ? "blitz"

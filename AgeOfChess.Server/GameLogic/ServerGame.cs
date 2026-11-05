@@ -65,7 +65,7 @@ public class ServerGame : Game
     public bool SideReady(bool isWhite) => (isWhite ? WhiteConnected : BlackConnected) || IsComputerSide(isWhite);
 
     /// <summary>The computer side's token (used internally, e.g. to record its bid).</summary>
-    public string ComputerPlayerToken => Settings.ComputerIsWhite ? WhitePlayerToken : BlackPlayerToken;
+    public string ComputerPlayerToken => Settings.ComputerIsWhite == true ? WhitePlayerToken : BlackPlayerToken;
 
     /// <summary>True once the game has started (an opponent took the lobby, or both players connected).</summary>
     public bool HasGameStarted { get; set; }
@@ -243,8 +243,6 @@ public class ServerGame : Game
     /// <summary>Active bidding session, or null when bidding is not in progress.</summary>
     public BiddingSession? Bidding { get; private set; }
 
-    private readonly int _startTimeMinutes;
-    public int StartTimeMinutes => _startTimeMinutes;
 
     public ServerGame(int sessionId, GameSettings settings, string whitePlayerToken, string blackPlayerToken, string whitePlayerName, string blackPlayerName)
     {
@@ -254,10 +252,9 @@ public class ServerGame : Game
         IsSlowGame = Services.EloService.GetCategory(settings) == Services.TimeControlCategory.Slow;
         WhitePlayerToken = whitePlayerToken;
         BlackPlayerToken = blackPlayerToken;
-        _startTimeMinutes = settings.StartTimeMinutes;
 
         TimeControlEnabled = settings.TimeControlEnabled;
-        TimeIncrementSeconds = settings.TimeIncrementSeconds;
+        TimeIncrementSeconds = settings.TimeIncrementSeconds ?? 0;
 
         Colors = new List<PieceColor>
         {
@@ -268,9 +265,10 @@ public class ServerGame : Game
         // Name and rating of the computer side (also applies when resuming / replaying)
         if (Services.ComputerLevels.Get(settings.ComputerLevel) is { } level)
         {
-            var computer = settings.ComputerIsWhite ? White : Black;
+            bool computerWhite = settings.ComputerIsWhite == true;
+            var computer = computerWhite ? White : Black;
             computer.PlayedByStr = Services.ComputerLevels.Name(level.Number);
-            if (settings.ComputerIsWhite) WhiteElo = level.Elo;
+            if (computerWhite) WhiteElo = level.Elo;
             else                          BlackElo = level.Elo;
         }
 
@@ -280,7 +278,7 @@ public class ServerGame : Game
 
         if (settings.TimeControlEnabled)
         {
-            int baseMs = settings.StartTimeMinutes * 60 * 1000;
+            int baseMs = (settings.StartTimeMinutes ?? 0) * 60 * 1000;
             // With bidding the clocks start at 110% to compensate for bid time spent;
             // they will be trimmed down by StartBidding once bidding begins.
             // Without bidding, use the plain base time.
@@ -292,7 +290,7 @@ public class ServerGame : Game
         }
         // Set even when time control is off for now (resuming replays moves without it); it only
         // applies with time control on
-        FirstMoveAllowanceMs = Math.Min(settings.StartTimeMinutes * 60 * 1000 / 4, 60_000);
+        FirstMoveAllowanceMs = Math.Min((settings.StartTimeMinutes ?? 0) * 60 * 1000 / 4, 60_000);
 
         var generator = new MapGenerator();
         Map = settings.MapSeed != null
@@ -311,7 +309,7 @@ public class ServerGame : Game
     public void StartBidding()
     {
         int initialMs = TimeControlEnabled
-            ? (int)(_startTimeMinutes * 60 * 1000 * 1.1)
+            ? (int)((Settings.StartTimeMinutes ?? 0) * 60 * 1000 * 1.1)
             : int.MaxValue;   // no clock when time control disabled
 
         Bidding = new BiddingSession { InitialMs = initialMs };
@@ -401,7 +399,7 @@ public class ServerGame : Game
     {
         int whiteElo = WhiteElo ?? UnratedElo, blackElo = BlackElo ?? UnratedElo;
         int auto = (int)Math.Round((whiteElo - blackElo) / (double)HandicapEloPerGold, MidpointRounding.AwayFromZero);
-        int manual = Settings.HandicapGold;
+        int manual = Settings.HandicapGold ?? 0;
         (Settings.WhiteHandicapGold, Settings.BlackHandicapGold) = (Settings.Handicap, BiddingEnabled) switch
         {
             // Without bidding: to Black; automatic is negative when Black is the stronger player

@@ -29,6 +29,8 @@ public class GameCreationService(AppDbContext db, GameSessionManager sessions)
     {
         white ??= new PlayerInfo();
         black ??= new PlayerInfo();
+        settings = settings.Clone();
+        settings.Normalize();
 
         var session = new GameSession
         {

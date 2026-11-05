@@ -111,8 +111,10 @@ public class GameResumeService(AppDbContext db, GameSessionManager sessions)
         if (hadTimeControl)
         {
             game.TimeControlEnabled = true;
-            game.White.TimeMiliseconds = session.WhiteTimeMsRemaining ?? (settings.StartTimeMinutes * 60 * 1000);
-            game.Black.TimeMiliseconds = session.BlackTimeMsRemaining ?? (settings.StartTimeMinutes * 60 * 1000);
+            settings.TimeControlEnabled = true;   // the game's own settings (e.g. for a rematch)
+            int startMs = (settings.StartTimeMinutes ?? 0) * 60 * 1000;
+            game.White.TimeMiliseconds = session.WhiteTimeMsRemaining ?? startMs;
+            game.Black.TimeMiliseconds = session.BlackTimeMsRemaining ?? startMs;
             // LastMoveTimestamp was already set to DateTime.UtcNow by the final EndTurn replay call,
             // so the clock starts from the restored time when the next real move comes in.
             // No moves yet: White's first-move time starts again.

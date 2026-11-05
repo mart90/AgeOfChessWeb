@@ -209,7 +209,7 @@ public class MatchmakingService : IDisposable
             .SendAsync("MatchFound", new { gameId = session.Id, playerToken = session.BlackPlayerToken, isWhite = false });
     }
 
-    private static (bool enabled, int startMin, int incSec) ResolveTimeControl(MatchmakingEntry white, MatchmakingEntry black)
+    private static (bool enabled, int? startMin, int? incSec) ResolveTimeControl(MatchmakingEntry white, MatchmakingEntry black)
     {
         // A specific-TC selection always beats a category selection.
         if (white.IsSpecificTC)
@@ -225,7 +225,7 @@ public class MatchmakingService : IDisposable
     /// Default time control for each category when no specific TC was chosen.
     /// Bullet → 1+1 · Blitz → 5+3 · Rapid → 15+10 · Slow → 30+15 · Any → 10+5
     /// </summary>
-    private static (bool enabled, int startMin, int incSec) CategoryDefault(TimeControlCategory? cat) =>
+    private static (bool enabled, int? startMin, int? incSec) CategoryDefault(TimeControlCategory? cat) =>
         cat switch
         {
             TimeControlCategory.Bullet => (true,  1,  1),

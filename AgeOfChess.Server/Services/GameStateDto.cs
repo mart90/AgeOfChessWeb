@@ -29,7 +29,7 @@ public record GameStateDto(
     /// <summary>Computer opponent: level, side and node budget per move (null/false for human games);
     /// ComputerNnue: search with the evaluation network.</summary>
     int? ComputerLevel,
-    bool ComputerIsWhite,
+    bool? ComputerIsWhite,
     int? ComputerNodes,
     bool ComputerNnue,
     /// <summary>Weak computer levels: chance to play the second-best move, and the max loss (gold) allowed.</summary>
@@ -41,7 +41,7 @@ public record GameStateDto(
     string? DrawOfferBy,
     /// <summary>Handicap option ("none" | "auto" | "manual") and manual amount, for rematches.</summary>
     string Handicap,
-    int HandicapGold,
+    int? HandicapGold,
     /// <summary>Players connected to the game (the computer always is).</summary>
     bool WhiteConnected,
     bool BlackConnected,
