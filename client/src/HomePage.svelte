@@ -45,7 +45,11 @@
   const _lb = getStored('lobby_settings', {});
   const _cp = getStored('computer_settings', {});
 
-  let tab           = $state(authState.token ? 'autopair' : 'lobby');  // 'autopair' | 'lobby' | 'computer'
+  // 'autopair' | 'lobby' | 'computer'; the last one used is remembered
+  const TABS = ['autopair', 'lobby', 'computer'];
+  let tab           = $state(authState.token ? 'autopair' : 'lobby');
+  try { const t = localStorage.getItem('play_tab'); if (TABS.includes(t)) tab = t; } catch { /* default */ }
+  $effect(() => { try { localStorage.setItem('play_tab', tab); } catch { /* not remembered */ } });
   let selectedMode  = $state(_lb.selectedMode ?? 5);
   let boardSize     = $state(_lb.boardSize ?? 10);
   let boardSizeMin  = $state(_ap.boardSizeMin ?? 8);
@@ -123,6 +127,7 @@
       localStorage.setItem(`token_${gameId}`,     whitePlayerToken);
       localStorage.setItem(`color_${gameId}`,     'white');
       localStorage.setItem(`inviteUrl_${gameId}`, inviteUrl);
+      if (!settings.isPrivate && authState.token) localStorage.setItem(`publicLobby_${gameId}`, '1');  // listed on the play page
       navigate(`/game/${gameId}`);
     } catch (e) {
       lobbyError = String(e.message ?? e);
@@ -256,6 +261,7 @@
 
   let myGames     = $state([]);
   let openLobbies = $state([]);
+  let joinError   = $state('');
 
   const openChallenges = $derived(myGames.filter(g => g.waitingForOpponent));
   const ongoingGames   = $derived(myGames.filter(g => !g.waitingForOpponent));
@@ -269,13 +275,17 @@
   });
 
   async function handleJoinLobby(lobby) {
+    joinError = '';
     try {
       const { gameId, blackPlayerToken } = await joinLobby(lobby.id);
       localStorage.setItem(`token_${gameId}`, blackPlayerToken);
       localStorage.setItem(`color_${gameId}`, 'black');
       navigate(`/game/${gameId}`);
     } catch (e) {
-      // Best-effort — lobby may have been taken; refresh the list
+      // The lobby may have been taken, or closed because its creator left the site (then the
+      // server says so); refresh the list
+      const msg = String(e.message ?? '');
+      if (msg.includes('offline')) joinError = msg;
       try { openLobbies = await getOpenLobbies(); } catch { /* ignore */ }
     }
   }
@@ -293,7 +303,8 @@
       localStorage.removeItem(`token_${g.id}`);
       localStorage.removeItem(`color_${g.id}`);
       localStorage.removeItem(`inviteUrl_${g.id}`);
-      myGames = myGames.filter(x => x.id !== g.id);
+      localStorage.removeItem(`publicLobby_${g.id}`);
+      myGames =myGames.filter(x => x.id !== g.id);
     } catch { /* ignore — may already be gone */ }
   }
 
@@ -596,6 +607,7 @@
   </div>
 
   <!-- Open lobbies (unranked: everyone; ranked: logged-in users; private: never) -->
+  {#if joinError}<p class="error join-error">{joinError}</p>{/if}
   {#if openLobbies.length > 0}
     <div class="ongoing-section open-lobbies-section">
       <div class="ongoing-label">Open lobbies</div>
@@ -881,6 +893,7 @@
   select:disabled { opacity: 0.35; cursor: default; }
 
   .error { color: #e07070; font-size: 0.85rem; margin: 0; }
+  .join-error { text-align: center; margin-top: 1rem; }
 
   .login-prompt {
     color: var(--muted);

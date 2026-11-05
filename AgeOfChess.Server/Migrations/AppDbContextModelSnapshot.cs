@@ -226,6 +226,44 @@ namespace AgeOfChess.Server.Migrations
                     b.ToTable("LibraryGames");
                 });
 
+            modelBuilder.Entity("AgeOfChess.Server.Data.Models.Notification", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("GameId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("OpponentName")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime?>("ReadAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GameId");
+
+                    b.HasIndex("UserId", "ReadAt");
+
+                    b.ToTable("Notifications");
+                });
+
             modelBuilder.Entity("AgeOfChess.Server.Data.Models.User", b =>
                 {
                     b.Property<int>("Id")
@@ -474,6 +512,17 @@ namespace AgeOfChess.Server.Migrations
                 });
 
             modelBuilder.Entity("AgeOfChess.Server.Data.Models.LibraryGame", b =>
+                {
+                    b.HasOne("AgeOfChess.Server.Data.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("AgeOfChess.Server.Data.Models.Notification", b =>
                 {
                     b.HasOne("AgeOfChess.Server.Data.Models.User", "User")
                         .WithMany()

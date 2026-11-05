@@ -4,6 +4,7 @@ using AgeOfChess.Server.Data.Models;
 using AgeOfChess.Server.GameLogic;
 using AgeOfChess.Server.Hubs;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 
 namespace AgeOfChess.Server.Services;
 
@@ -12,8 +13,36 @@ namespace AgeOfChess.Server.Services;
 /// (e.g. <see cref="GameCleanupService"/> ending abandoned games), so a game ends the same way
 /// whoever ends it.
 /// </summary>
-public class GameFlowService(IHubContext<GameHub> hub, GameSessionManager sessions, IServiceScopeFactory scopeFactory)
+public class GameFlowService(
+    IHubContext<GameHub> hub, GameSessionManager sessions, IServiceScopeFactory scopeFactory,
+    NotificationService notifications)
 {
+    /// <summary>Closes a lobby nobody has started yet: everyone on its page gets LobbyCancelled(reason). Caller holds the game lock.</summary>
+    public async Task CancelLobbyAsync(ServerGame game, string reason)
+    {
+        await DeleteAsync(game);
+        await hub.Clients.Group(game.GroupName).SendAsync("LobbyCancelled", reason);
+    }
+
+    /// <summary>
+    /// Calls off a just-started game a player didn't connect to: no result, no rating change, and
+    /// it's gone (with its notifications). Caller holds the game lock.
+    /// </summary>
+    public async Task AbortAsync(ServerGame game, string reason)
+    {
+        await DeleteAsync(game);
+        await hub.Clients.Group(game.GroupName).SendAsync("GameAborted", reason);
+        await notifications.RemoveForGameAsync(game.SessionId);
+    }
+
+    private async Task DeleteAsync(ServerGame game)
+    {
+        sessions.Remove(game.SessionId);
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await db.GameSessions.Where(s => s.Id == game.SessionId && s.Result == GameResult.InProgress).ExecuteDeleteAsync();
+    }
+
     /// <summary>
     /// Sends the game state to everyone in the game's group (GameEnded once the game is over) and
     /// persists it: the final result (history, Elo) or, for slow games, the move list.

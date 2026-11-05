@@ -832,7 +832,7 @@
     const sq = sqAt({ x, y });
     if (sq?.piece && isRealPiece(sq.piece) && sq.piece.isWhite === whiteIsActive) {
       selectedSqPos = { x, y };
-      legalDests    = computeLegalMoves(sq, squares);
+      legalDests    = computeLegalMoves(sq, $state.snapshot(squares));
     } else {
       clearSelection();
     }
@@ -843,7 +843,7 @@
     if (!sq?.piece || !isRealPiece(sq.piece)) return;
     if (sq.piece.isWhite !== whiteIsActive) return; // wrong side's turn
     selectedSqPos = { x, y };
-    legalDests    = computeLegalMoves(sq, squares);
+    legalDests    = computeLegalMoves(sq, $state.snapshot(squares));
     const imgSrc  = pieceImgSrc(sq.piece.type, sq.piece.isWhite);
     dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
   }
@@ -873,7 +873,7 @@
     if (!isWhitePiece && blackGold < cost) return;
     e.preventDefault();
     clearSelection();
-    const internalState = createBoardState(squares, whiteGold, blackGold, isWhitePiece);
+    const internalState = createBoardState($state.snapshot(squares), whiteGold, blackGold, isWhitePiece);
     const placements = getAllLegalNewPiecePlacements(internalState);
     legalDests = placements.filter(p => p.pieceType === pieceType).map(p => p.toPos);
     dragging = {

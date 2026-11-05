@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<GameSession> GameSessions => Set<GameSession>();
     public DbSet<HistoricGame> HistoricGames => Set<HistoricGame>();
     public DbSet<LibraryGame> LibraryGames => Set<LibraryGame>();
+    public DbSet<Notification> Notifications => Set<Notification>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -53,6 +54,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(g => g.Result).HasMaxLength(10);
             e.Property(g => g.DataJson).HasColumnType("longtext");
             e.HasOne(g => g.User).WithMany().HasForeignKey(g => g.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Notification>(e =>
+        {
+            e.HasIndex(n => new { n.UserId, n.ReadAt });
+            e.HasIndex(n => n.GameId);
+            e.Property(n => n.Type).HasMaxLength(32);
+            e.Property(n => n.OpponentName).HasMaxLength(100);
+            e.HasOne(n => n.User).WithMany().HasForeignKey(n => n.UserId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 

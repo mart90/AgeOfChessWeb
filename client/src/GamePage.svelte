@@ -15,7 +15,7 @@
   import { addLibraryGame, updateLibraryGame } from './lib/api.js';
   import { authState } from './lib/auth.svelte.js';
   import { applyMoveToState, moveToNotation, applyPlacementToState, placementToNotation, sameSquare } from './lib/boardUtils.js';
-  import { computeLegalMoves } from './lib/pathFinder.js';
+  import { computeLegalMoves, computeLegalPlacements } from './lib/pathFinder.js';
   import { createBoardState, getAllLegalNewPiecePlacements } from './lib/analysis.js';
   import { EngineClient } from './lib/engine/engine.js';
   import { wheelNav } from './lib/wheelNav.js';
@@ -23,6 +23,7 @@
   import { computeComputerBid, BID_BUDGET_FACTOR } from './lib/engine/computerBid.js';
   import { bidNodes } from './lib/engine/levels.js';
   import { createComputerGame } from './lib/api.js';
+  import { notifications, markRead, playSoundOnce } from './lib/notifications.svelte.js';
 
   const { gameId } = $props();
 
@@ -69,6 +70,22 @@
   let gameState      = $state(null);
   let playerToken    = $state(null);
 
+  // Notifications about this game (e.g. "Game started") are read once its page shows it
+  let pageVisible = $state(!document.hidden);
+  $effect(() => {
+    notifications.openGameId = gameId;
+    const onVisibility = () => { pageVisible = !document.hidden; };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (notifications.openGameId === gameId) notifications.openGameId = null;
+    };
+  });
+  $effect(() => {
+    if (gameState && !isSpectator && pageVisible && notifications.items.some(n => n.gameId === gameId))
+      markRead({ gameId });
+  });
+
   // Sync map seed to NavBar's Copy map seed button whenever gameState arrives
   $effect(() => { if (gameState?.mapSeed) currentGame.mapSeed = gameState.mapSeed; });
   onDestroy(() => { currentGame.mapSeed = null; document.title = 'Goldrush Gambit'; });
@@ -93,6 +110,16 @@
   let localWhiteMs   = $state(0);
   let localBlackMs   = $state(0);
   let turnStartedAt  = 0;      // Unix ms when the current turn began (from server)
+  let firstMoveAllowanceMs = 0;  // White's first move: time before the main clock starts (from server)
+  let localFirstMoveMs = $state(0);  // what's left of it
+
+  // Players' connections. A just-started game waits for both (no clock runs) and is aborted at
+  // abortAt (Unix ms, 0 when not waiting) if one doesn't connect.
+  let whiteConnected = $state(true);
+  let blackConnected = $state(true);
+  let abortAt        = $state(0);
+  let localAbortMs   = $state(0);
+  let lobbyClosed    = false;   // the server closed this lobby (LobbyCancelled)
   let timeoutClaimed = false;  // prevent invoking ClaimTimeout twice per timeout
   let clockSoundPlayed = false;  // prevent playing clock sound multiple times per turn
 
@@ -162,6 +189,12 @@
     localWhiteMs  = state.white.timeMsRemaining;
     localBlackMs  = state.black.timeMsRemaining;
     turnStartedAt = state.turnStartedAt ?? 0;
+    whiteConnected = state.whiteConnected ?? true;
+    blackConnected = state.blackConnected ?? true;
+    abortAt = state.gameEnded ? 0 : state.abortAt ?? 0;
+    localAbortMs = abortAt ? Math.max(0, abortAt - Date.now()) : 0;
+    firstMoveAllowanceMs = state.firstMoveAllowanceMs ?? 0;
+    localFirstMoveMs = turnStartedAt ? Math.max(0, firstMoveAllowanceMs - (Date.now() - turnStartedAt)) : 0;
     timeoutClaimed = false;
     clockSoundPlayed = false;
   }
@@ -176,8 +209,12 @@
         ? biddingState.joinerFrozenMs
         : Math.max(0, biddingState.initialMs - elapsed);
     }
+    if (abortAt) localAbortMs = Math.max(0, abortAt - Date.now());
     if (!gameState || gameState.gameEnded || !turnStartedAt || !gameState.timeControlEnabled) return;
-    const elapsed = Date.now() - turnStartedAt;
+    // The main clock runs once the first-move time (White's first move only) is used up
+    const turnMs = Date.now() - turnStartedAt;
+    localFirstMoveMs = Math.max(0, firstMoveAllowanceMs - turnMs);
+    const elapsed = Math.max(0, turnMs - firstMoveAllowanceMs);
     if (gameState.white.isActive) {
       localWhiteMs = Math.max(0, gameState.white.timeMsRemaining - elapsed);
       if (localWhiteMs === 0 && !timeoutClaimed) {
@@ -424,7 +461,14 @@
 
   const me       = $derived(displayedState ? (isWhite ? displayedState.white : displayedState.black) : null);
   const opponent = $derived(displayedState ? (isWhite ? displayedState.black : displayedState.white) : null);
-  const isMyTurn = $derived(replayIndex === null && !isSpectator && (gameState ? (isWhite ? gameState.white.isActive : gameState.black.isActive) : false));
+  const isMyTurn = $derived(replayIndex === null && !isSpectator && !abortAt && (gameState ? (isWhite ? gameState.white.isActive : gameState.black.isActive) : false));
+  // Shown over the board while a just-started game waits for a player
+  const waitingMsg = $derived.by(() => {
+    if (!abortAt || !gameState) return '';
+    const missing = [!whiteConnected && gameState.white.name, !blackConnected && gameState.black.name].filter(Boolean);
+    return missing.length ? `Waiting for ${missing.join(' and ')} to connect…` : '';
+  });
+  const shownStatus = $derived(waitingMsg || statusMsg);
   const mapSize  = $derived(
     displayedState?.squares?.length
       ? Math.max(...displayedState.squares.map(s => Math.max(s.x, s.y))) + 1
@@ -462,6 +506,7 @@
     'w+r': 'White wins — Black resigned', 'b+r': 'Black wins — White resigned',
     'draw': 'Draw by agreement',
     'abandoned': 'Game abandoned',
+    'aborted': 'Game aborted',
   };
   function formatResult(r) { return RESULT_LABELS[r] ?? 'Game over'; }
 
@@ -484,22 +529,18 @@
     return { x: bx, y: by };
   }
 
-  // ── Legal move / placement fetching ──────────────────────────────────────
+  // ── Legal moves / placements ─────────────────────────────────────────────
+  // Computed locally by the JS rules (checked against C# by scripts/rules-oracle.mjs); the server
+  // still validates every move. On a copy: the move check temporarily changes squares.
 
-  async function fetchLegalMoves(fromX, fromY) {
-    if (!hub) return [];
-    try {
-      const raw = await hub.invoke('GetLegalMoves', playerToken, fromX, fromY);
-      return (raw ?? []).map(([x, y]) => ({ x, y }));
-    } catch { return []; }
+  function legalMovesFrom(fromX, fromY) {
+    const board = $state.snapshot(gameState.squares);
+    return computeLegalMoves(board.find(s => s.x === fromX && s.y === fromY), board, null);
   }
 
-  async function fetchLegalPlacements(code) {
-    if (!hub) return [];
-    try {
-      const raw = await hub.invoke('GetLegalPlacements', playerToken, code);
-      return (raw ?? []).map(([x, y]) => ({ x, y }));
-    } catch { return []; }
+  function legalPlacementsFor(code) {
+    const item = SHOP.find(s => s.code === code);
+    return item ? computeLegalPlacements($state.snapshot(gameState.squares), isWhite, item.name, null) : [];
   }
 
   // ── Board callbacks ───────────────────────────────────────────────────────
@@ -507,19 +548,14 @@
   // Treasure is sent as a (black) piece, but it is never selectable.
   const isOwnPiece = (sq, white) => !!sq?.piece && sq.piece.type !== 'Treasure' && sq.piece.isWhite === white;
 
-  async function onPieceGrabbed(x, y, clientX, clientY) {
+  function onPieceGrabbed(x, y, clientX, clientY) {
     if (gameState?.gameEnded || biddingState) return;
     const sq = gameState.squares.find(s => s.x === x && s.y === y);
     if (!isOwnPiece(sq, isWhite)) return;
 
     selectedSquare = { x, y };
-
-    // Premove mode: don't fetch legal moves on opponent's turn
-    if (!isMyTurn) {
-      legalDests = [];
-    } else {
-      legalDests = await fetchLegalMoves(x, y);
-    }
+    // Premove mode: no hints on the opponent's turn
+    legalDests = isMyTurn ? legalMovesFrom(x, y) : [];
 
     const imgSrc = pieceSrc(sq.piece.type, isWhite);
     dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
@@ -569,7 +605,7 @@
     if (!isOwnPiece(sq, state.white.isActive)) return; // empty, treasure, or wrong side's turn
 
     selectedSquare = { x, y };
-    legalDests = computeLegalMoves(sq, state.squares, null);
+    legalDests = computeLegalMoves(sq, $state.snapshot(state.squares), null);
 
     const imgSrc = pieceSrc(sq.piece.type, sq.piece.isWhite);
     dragging = { type: 'move', fromX: x, fromY: y, imgSrc, ghostX: clientX, ghostY: clientY };
@@ -612,7 +648,7 @@
     const activeGold = state.white.isActive ? state.white.gold : state.black.gold;
     if (activeGold < item.cost) return;
     e.preventDefault();
-    const internalState = createBoardState(state.squares, state.white.gold, state.black.gold, state.white.isActive);
+    const internalState = createBoardState($state.snapshot(state.squares), state.white.gold, state.black.gold, state.white.isActive);
     const placements = getAllLegalNewPiecePlacements(internalState);
     legalDests = placements.filter(p => p.pieceType === item.name).map(p => p.toPos);
     const placingWhite = state.white.isActive;
@@ -635,7 +671,7 @@
       if (isOwnPiece(sq, state.white.isActive)) {
         // Reselect another piece (same side only)
         selectedSquare = { x, y };
-        legalDests = computeLegalMoves(sq, state.squares, null);
+        legalDests = computeLegalMoves(sq, $state.snapshot(state.squares), null);
         return;
       }
       // Click to move
@@ -655,7 +691,7 @@
 
     if (isOwnPiece(sq, state.white.isActive)) {
       selectedSquare = { x, y };
-      legalDests = computeLegalMoves(sq, state.squares, null);
+      legalDests = computeLegalMoves(sq, $state.snapshot(state.squares), null);
     }
   }
 
@@ -670,11 +706,7 @@
       }
       if (isOwnPiece(sq, isWhite)) {
         selectedSquare = { x, y };
-        if (!isMyTurn) {
-          legalDests = [];
-        } else {
-          fetchLegalMoves(x, y).then(d => { legalDests = d; });
-        }
+        legalDests = isMyTurn ? legalMovesFrom(x, y) : [];
         return;
       }
 
@@ -699,11 +731,7 @@
     } else {
       if (isOwnPiece(sq, isWhite)) {
         selectedSquare = { x, y };
-        if (!isMyTurn) {
-          legalDests = [];
-        } else {
-          fetchLegalMoves(x, y).then(d => { legalDests = d; });
-        }
+        legalDests = isMyTurn ? legalMovesFrom(x, y) : [];
       }
     }
   }
@@ -722,16 +750,9 @@
                : !dragging ? selectedSquare : null;
     if (from) {
       if (!isOwnPiece(gameState.squares.find(s => s.x === from.x && s.y === from.y), isWhite)) { clearDrag(); return; }
-      legalDests = [];
-      if (isMyTurn) {
-        fetchLegalMoves(from.x, from.y).then(d => {
-          if (selectedSquare?.x === from.x && selectedSquare?.y === from.y) legalDests = d;
-        });
-      }
+      legalDests = isMyTurn ? legalMovesFrom(from.x, from.y) : [];
     } else if (dragging?.type === 'place') {
-      const code = dragging.code;
-      legalDests = [];
-      if (isMyTurn) fetchLegalPlacements(code).then(d => { if (dragging?.code === code) legalDests = d; });
+      legalDests = isMyTurn ? legalPlacementsFor(dragging.code) : [];
     } else {
       clearDrag();
     }
@@ -747,7 +768,7 @@
 
   // ── Shop drag ─────────────────────────────────────────────────────────────
 
-  async function shopPointerDown(e, code) {
+  function shopPointerDown(e, code) {
     if (gameState?.gameEnded || biddingState) return;
     const item = SHOP.find(s => s.code === code);
     if (!item) return;
@@ -757,12 +778,8 @@
 
     e.preventDefault();
 
-    // Premove mode: don't fetch legal placements on opponent's turn
-    if (!isMyTurn) {
-      legalDests = [];
-    } else {
-      legalDests = await fetchLegalPlacements(code);
-    }
+    // Premove mode: no hints on the opponent's turn
+    legalDests = isMyTurn ? legalPlacementsFor(code) : [];
 
     dragging = { type: 'place', code, imgSrc: shopImgSrc(code), ghostX: e.clientX, ghostY: e.clientY };
   }
@@ -926,6 +943,8 @@
 
     // Handlers live on the page-wide connection: remove them when leaving this game
     hub = getGameHub();
+    // The connection may stay up after this page closes (signed in): tell the server we left
+    cleanups.push(() => { hub.invoke('LeaveGame', gameId).catch(() => {}); });
     const on = (event, fn) => { hub.on(event, fn); cleanups.push(() => hub.off(event, fn)); };
 
     cleanups.push(onConnectionStatus((status) => {
@@ -937,7 +956,7 @@
       if (gameState?.gameEnded) return;
       computerSearchPly = -1;
       if (biddingState == null && !gameState) {
-        playSound('game_started')
+        playSoundOnce(`game-started-${gameId}`, 'game_started');
       }
       // If bidding just resolved and we're the winner, capture the opponent's bid for acknowledgement
       if (biddingState?.revealedCreatorBid != null && isWhite) {
@@ -1022,6 +1041,7 @@
       gameState = state; syncLocalTimes(state); drawOfferBy = null; resignPending = false;
       statusMsg = formatResult(state.result); clearDrag();
       localStorage.removeItem(`inviteUrl_${gameId}`);
+      localStorage.removeItem(`publicLobby_${gameId}`);
       replayIndex = stateHistory.length - 1;  // enable replayer
       // Build variation tree from mainline
       moveTree = buildFromMainline(state.moves, stateHistory);
@@ -1029,6 +1049,18 @@
     });
     on('Error', (msg) => {
       console.warn('[GameHub]', msg);
+    });
+    on('Presence', (white, black) => { whiteConnected = white; blackConnected = black; });
+    on('GameAborted', (reason) => {
+      if (!gameState) return;
+      gameState = { ...gameState, gameEnded: true, result: 'aborted', abortAt: 0 };
+      abortAt = 0; statusMsg = reason; clearDrag();
+    });
+    on('LobbyCancelled', (reason) => {
+      lobbyClosed = true;
+      statusMsg = reason; inviteUrl = '';
+      localStorage.removeItem(`inviteUrl_${gameId}`);
+      localStorage.removeItem(`publicLobby_${gameId}`);
     });
     on('ChatMessage', (msg) => {
       chatMessages = [...chatMessages, msg];
@@ -1042,7 +1074,7 @@
       bidSubmitted = isWhite ? b.creatorBidPlaced : b.joinerBidPlaced; 
       wasCreator = isWhite; 
       statusMsg = ''; inviteUrl = '';
-      playSound('game_started') 
+      playSoundOnce(`game-started-${gameId}`, 'game_started');
     });
     on('BidPlaced',      (b) => { biddingState = b; });
     on('ColorAssigned',  (white) => {
@@ -1077,10 +1109,16 @@
     async function join() {
       const rejoin = joinedBefore;
       joinedBefore = true;
+      if (lobbyClosed || gameState?.result === 'aborted') return;
       if (rejoin) {
         // Re-probe to check if the game is still live (server may have restarted)
         try {
           const res = await fetch(`/api/game/${gameId}`);
+          if (res.status === 404) {
+            statusMsg = gameState ? 'This game is no longer available.' : 'This lobby was closed.';
+            inviteUrl = '';
+            return;
+          }
           if (res.ok) {
             const reprobe = await res.json();
             if (reprobe.serverRestarted) {
@@ -1108,6 +1146,7 @@
           if (!gameState) {
             inviteUrl = rejoin ? inviteUrl : localStorage.getItem(`inviteUrl_${gameId}`) ?? '';
             statusMsg = rejoin ? 'Reconnected — waiting for opponent…'
+              : isWhite && localStorage.getItem(`publicLobby_${gameId}`) ? 'Waiting for opponent to join…'
               : isWhite ? 'Share the invite link, then wait for your opponent…'
               : 'Waiting for the game to start…';
           }
@@ -1129,7 +1168,7 @@
   }
 
   const myColor      = $derived(isWhite ? 'w' : 'b');
-  const showGameControls = $derived(!!gameState && !gameState.gameEnded && !isSpectator && !biddingState);
+  const showGameControls = $derived(!!gameState && !gameState.gameEnded && !isSpectator && !biddingState && !abortAt);
   const canOfferDraw = $derived(
     !!gameState && !gameState.gameEnded && drawOfferBy == null && !computerDrawThinking
     && gameState.moves.length >= drawOfferedAtPly + 2);
@@ -1291,6 +1330,20 @@
 {/snippet}
 
 <!-- Resign / draw controls: in the side panel on desktop, icon-only in the player bar on phones -->
+<!-- A player who isn't connected. While a just-started game waits for them: time left to connect. -->
+{#snippet disconnected()}
+  <span class="disconnected" class:waiting={abortAt}
+        title={abortAt ? 'The game is aborted if they don\'t connect in time' : 'Not connected to the game'}>
+    Disconnected{#if abortAt}<span class="clock ticking abort-clock">{formatTime(localAbortMs) || '0:00'}</span>{/if}
+  </span>
+{/snippet}
+
+{#snippet firstMoveTimer()}
+  <span class="first-move" title="Time for White's first move. The clock starts when it runs out.">
+    First move {formatTime(localFirstMoveMs)}
+  </span>
+{/snippet}
+
 {#snippet gameControls(compact)}
   {#if drawOfferBy && drawOfferBy !== myColor}
     {#if !compact}<span class="confirm-label">Draw offered</span>{/if}
@@ -1334,6 +1387,7 @@
       {opponent?.name ?? 'Waiting for opponent...'}
       {#if opponent?.elo != null}<span class="elo-label">({opponent.elo})</span>{/if}
       {#if opponent && !biddingState}<span class="color-label">{isWhite ? 'Black' : 'White'}</span>{/if}
+      {#if opponent && !gameState?.gameEnded && !(isWhite ? blackConnected : whiteConnected)}{@render disconnected()}{/if}
       {#if isComputerGame && computerThinking && !gameState?.gameEnded}<span class="thinking-label">thinking…</span>{/if}
       {#if isComputerGame && computerBidding}<span class="thinking-label"><span class="spinner"></span>deciding on a bid…</span>{/if}
     </span>
@@ -1348,7 +1402,8 @@
         {#if oppBidPlaced}<span class="bid-check">✓</span>{/if}
       {:else if opponent.timeMsRemaining > 0}
         {@const oppMs = isWhite ? localBlackMs : localWhiteMs}
-        <span class="clock" class:ticking={opponent.isActive}>{formatTime(oppMs)}</span>
+        {#if opponent.isActive && localFirstMoveMs > 0}{@render firstMoveTimer()}{/if}
+        <span class="clock" class:ticking={opponent.isActive && localFirstMoveMs === 0}>{formatTime(oppMs)}</span>
       {/if}
     {/if}
   </div>
@@ -1359,13 +1414,13 @@
       <div class="board-main" bind:clientHeight={boardColHeight}>
       <div class="board-wrap" bind:this={boardWrapEl} use:wheelNav={stepMove}>
         <!-- Status / invite banner: floats over the top of the board so it doesn't change the layout -->
-        {#if (statusMsg && statusMsg !== statusDismissed) || inviteUrl}
+        {#if (shownStatus && shownStatus !== statusDismissed) || inviteUrl}
           <div class="status-bar">
-            {#if statusMsg}<span>{statusMsg}</span>{/if}
+            {#if shownStatus}<span>{shownStatus}</span>{/if}
             {#if inviteUrl}
               <button class="copy-btn" onclick={copyInvite}>Copy invite link</button>
             {:else}
-              <button class="status-close" onclick={() => statusDismissed = statusMsg} title="Close">✕</button>
+              <button class="status-close" onclick={() => statusDismissed = shownStatus} title="Close">✕</button>
             {/if}
           </div>
         {/if}
@@ -1567,7 +1622,7 @@
                   {startingPlayAgain ? 'Starting…' : 'Rematch'}
                 </button>
               </div>
-            {:else if gameState?.gameEnded && !isSpectator}
+            {:else if gameState?.gameEnded && !isSpectator && gameState.result !== 'aborted'}
               <div class="rematch-bar">
                 {#if opponentRematchRequested && !rematchRequested}
                   <label class="rematch-option">
@@ -1623,6 +1678,7 @@
         {#if me.elo != null}<span class="elo-label">({me.elo})</span>{/if}
         {#if !biddingState}
           <span class="color-label">{isWhite ? 'White' : 'Black'}</span>
+          {#if isSpectator && !gameState?.gameEnded && !(isWhite ? whiteConnected : blackConnected)}{@render disconnected()}{/if}
         {/if}
       </span>
       {#if showGameControls}
@@ -1638,7 +1694,8 @@
         {#if myBidPlaced}<span class="bid-check">✓</span>{/if}
       {:else if me.timeMsRemaining > 0}
         {@const myMs = isWhite ? localWhiteMs : localBlackMs}
-        <span class="clock" class:ticking={me.isActive}>{formatTime(myMs)}</span>
+        {#if me.isActive && localFirstMoveMs > 0}{@render firstMoveTimer()}{/if}
+        <span class="clock" class:ticking={me.isActive && localFirstMoveMs === 0}>{formatTime(myMs)}</span>
       {/if}
     {:else}
       <span class="name muted">You</span>
@@ -1846,6 +1903,19 @@
     border-radius: 4px;
   }
   .clock.ticking { background: var(--button); color: #fff; }
+  /* Fades in, so a quick reconnect (a page reload) doesn't flash it */
+  .disconnected {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    margin-left: 0.4rem; font-size: 0.8rem; font-weight: 400; color: #e07070;
+    animation: fade-in 0.3s 3s both;
+  }
+  .disconnected.waiting { animation: none; }
+  .clock.abort-clock { font-size: 0.8rem; background: #7a2e2e; color: #fff; }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .first-move {
+    font-size: 0.8rem; color: var(--muted); white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
 
   /* ── Status bar ── */
   .status-bar {

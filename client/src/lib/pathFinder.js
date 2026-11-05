@@ -256,6 +256,51 @@ function legalPawnMoves(sqId, isWhite, ctx) {
   return moves;
 }
 
+// ── Placements (ported from C# Game.FindLegalPlacements) ───────────────────
+
+/**
+ * Squares where `isWhite` may place a piece of `pieceType` ("Queen", …, "Pawn"; gold not checked):
+ * empty, non-rock squares next to the king; for pawns also next to any non-pawn piece; for rooks,
+ * bishops and knights also next to a queen. When in check, only placements that block it.
+ */
+export function computeLegalPlacements(board, isWhite, pieceType, ctx) {
+  if (!ctx) ctx = buildContext(board);
+  const { lookup, neighbors, size } = ctx;
+  let kingId = -1;
+  const sources = [];
+  for (let i = 0; i < lookup.length; i++) {
+    const p = lookup[i].piece;
+    if (!isRealPiece(p) || p.isWhite !== isWhite) continue;
+    const base = basePieceType(p.type);
+    if (base === "King") kingId = i;
+    else if (pieceType === "Pawn" ? base !== "Pawn" : base === "Queen" && pieceType !== "Queen") sources.push(i);
+  }
+  if (kingId === -1) return [];
+  sources.push(kingId);
+
+  const inCheck = isCapturable(kingId, !isWhite, ctx);
+  const placed = { type: (isWhite ? "White" : "Black") + pieceType, isWhite };
+  const seen = new Set();
+  const result = [];
+  for (const srcId of sources) {
+    for (let d = 0; d < 8; d++) {
+      const destId = neighbors[srcId * 8 + d];
+      if (destId === -1 || seen.has(destId)) continue;
+      seen.add(destId);
+      const dest = lookup[destId];
+      if (dest.piece || isRocks(dest.type)) continue;
+      if (inCheck) {
+        dest.piece = placed;
+        const stillInCheck = isCapturable(kingId, !isWhite, ctx);
+        dest.piece = null;
+        if (stillInCheck) continue;
+      }
+      result.push(destId);
+    }
+  }
+  return result.map(id => ({ x: id % size, y: (id / size) | 0 }));
+}
+
 // ── Main export ────────────────────────────────────────────────────────────
 
 export function computeLegalMoves(square, board, ctx) {

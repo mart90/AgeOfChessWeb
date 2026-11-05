@@ -58,16 +58,18 @@ fn result_code(o: Outcome) -> Option<String> {
 
 #[test]
 fn matches_csharp_rules() {
-    // Every *.jsonl in testdata/ (oracle.jsonl is committed; bigger local sets are gitignored).
+    // Every oracle*.jsonl in testdata/ (gitignored: generate it, see the top of this file).
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata");
     let mut data = String::new();
-    for e in std::fs::read_dir(dir).unwrap() {
+    for e in std::fs::read_dir(dir).into_iter().flatten() {
         let p = e.unwrap().path();
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         if name.starts_with("oracle") && name.ends_with(".jsonl") {
             data.push_str(&std::fs::read_to_string(&p).unwrap());
         }
     }
+    assert!(!data.is_empty(), "no oracle data in engine/testdata: dotnet build -c Release tools/RulesOracle, then \
+        dotnet tools/RulesOracle/bin/Release/net9.0/RulesOracle.dll 60 7 engine/testdata/oracle.jsonl");
     let mut positions = 0;
     let mut default_start = 0;
     let mut failures = Vec::new();

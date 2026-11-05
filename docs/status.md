@@ -1,8 +1,35 @@
 # Current Work & Status
 
-_Last updated: 2026-10-30_
+_Last updated: 2026-11-05_
 
 ## Current focus
+
+**Client-side legal-move hints (2026-11-05).** GamePage computes the green move / placement hints
+locally (`pathFinder.js`) instead of asking the server (`GameHub.GetLegalMoves` /
+`GetLegalPlacements` removed); the server still validates every move. JS placements now also apply
+the "must resolve check" rule (the analysis board showed illegal placements when in check).
+Checked against C# with `client/scripts/rules-oracle.mjs` (engine.md).
+
+**Notifications, lobby start and waiting for players (2026-11-02, game-rules.md).**
+- Presence: signed-in tabs stay connected to the game hub on every page (NavBar starts
+  `lib/notifications.svelte.js`); `PresenceService` counts each user's connections. GamePage calls
+  `GameHub.LeaveGame` when it closes, so "connected to the game" means "on its page".
+- A signed-in user's lobby (`ServerGame.LobbyCreatorId`) starts when the opponent connects, even
+  with the creator elsewhere; creator offline (> 10 s) → lobby closed, joiner told "Lobby creator
+  is offline" (POST join 409 / hub `LobbyCancelled`); offline 2 min → closed by `GameCleanupService`
+  (now runs a 5 s presence check besides the 1-minute cleanup).
+- `ServerGame.UpdateWaiting`: a just-started game (no move, not bidding, not vs computer) with a
+  player missing stops its clocks (`WaitingSince`; the turn's elapsed time is kept and resumed) and
+  is aborted after 1 min (`GameFlowService.AbortAsync`: deleted, `GameAborted`). Moves are refused
+  while waiting. DTO: `whiteConnected` / `blackConnected` / `abortAt`; hub `Presence` event.
+- Notifications: `Notifications` table (migration `Notifications`, applied to dev),
+  `NotificationService` (stored + pushed to group `user:{id}`), `api/notifications` (unread list,
+  mark read). Only type so far: `gameStarted`, always stored for the lobby creator; the game page
+  marks it read once shown in a visible tab. Bell in the NavBar (gold + count when unread).
+  Sounds play in one tab only (`playSoundOnce`, Web Locks). **Production:**
+  `db-migrations/20261102_Notifications.sql` runs on the next full deploy; delete it afterwards.
+- Also: White's first-move time (game-rules.md); public lobbies say "Waiting for opponent to join…".
+- Tested with SignalR clients + headless Chrome against a local server. Not tested on a phone.
 
 **Handicap (2026-10-31, game-rules.md).** Lobby and vs-computer tabs: Handicap None / Automatic /
 Manual (+ amount), with a "?" tooltip (`InfoTip.svelte`, also behind `BidHelp.svelte`). Lobbies
@@ -14,12 +41,9 @@ Automatic = 1 gold / 100 Elo is a placeholder.
 type mapped to plain columns of `GameSessions` and `HistoricGames` (`AppDbContext.MapSettings`;
 the existing BoardSize / time-control columns are reused, the requested seed is
 `RequestedMapSeed`). Migration `SettingsColumns` copies the old JSON values over before dropping
-it; applied to dev. **Production:** `db-migrations/20261031_SettingsColumns.sql` runs on the next
-full deploy (`deploy.py`); delete that file afterwards. Live games and ServerGame use their own
-copy of the settings (`GameSettings.Clone`).
-Also pending for production (2026-11-01): `db-migrations/20261101_HistoricGamePlayerIndexes.sql`
-(indexes on `HistoricGames.WhitePlayerId` / `BlackPlayerId` for the profile query; applied to
-dev). Delete it after the deploy too.
+it. Applied to production with the 2026-11-01 deploy (as was the `HistoricGamePlayerIndexes`
+migration: indexes on `HistoricGames.WhitePlayerId` / `BlackPlayerId` for the profile query).
+Live games and ServerGame use their own copy of the settings (`GameSettings.Clone`).
 
 **Network in the browser (2026-10-31, engine.md).** `client/src/lib/engine/network.ggnn` (nn17),
 SIMD wasm build with baseline fallback. Analyze page uses it on 10×10 ("Engine (NNUE)"). New
@@ -133,7 +157,9 @@ Iterations 11–13 (2026-10-30, continued / continued / from scratch): **nn12 +1
 **nn15 +13 vs nn14, +206 vs nn3**. Iteration 16 (from scratch): **nn16 +10 vs nn15, +215 vs nn3,
 vs hand-written 1559–41**. Iterations 17–18 (continued): nn17 +5 vs nn16, nn18 −12 (not
 promoted); vs nn3 flat at +215. Iteration 19 (from scratch): nn19 +5 vs nn17, +215 vs nn3 —
-plateau. Best net: `training/runs/m10_nn19/net.ggnn`; training paused. Self-play is ~81% mates /
+plateau. Best net: `training/runs/m10_nn19/net.ggnn`; training paused. Plateau test
+(2026-11-01): last 10M positions only −99 vs nn19; + 1M at 48k nodes (3×) −102 — data volume
+matters most, deeper labels no measurable gain (training.md). Self-play is ~81% mates /
 17% gold wins (5% for nn13–nn15); hand-written wins by gold less often than before (1.4% vs 2.9% for nn6/nn7).
 Move ordering measured (engine.md): near perfect, so no policy network for now.
 

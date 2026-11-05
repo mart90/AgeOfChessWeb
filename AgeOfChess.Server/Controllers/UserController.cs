@@ -107,12 +107,19 @@ public class UserController(AppDbContext db) : ControllerBase
         if (!unranked)
             baseQuery = baseQuery.Where(g => g.Settings.IsRanked && g.Settings.ComputerLevel == null);
 
-        // Opponent name filter: human opponents whose display name contains the text
+        // Opponent name filter: human opponents whose display name contains the text, and computer
+        // levels whose name ("Computer (Level n)", not stored) does: those are worked out here
         opponent = opponent?.Trim();
         if (!string.IsNullOrEmpty(opponent))
-            baseQuery = baseQuery.Where(g => g.Settings.ComputerLevel == null
-                && db.Users.Any(u => u.Id == (g.WhitePlayerId == userId ? g.BlackPlayerId : g.WhitePlayerId)
-                                     && (u.DisplayName ?? u.Username).Contains(opponent)));
+        {
+            var computerLevels = ComputerLevels.All.Select(l => l.Number)
+                .Where(n => ComputerLevels.Name(n).Contains(opponent, StringComparison.OrdinalIgnoreCase))
+                .Cast<int?>().ToList();
+            baseQuery = baseQuery.Where(g => computerLevels.Contains(g.Settings.ComputerLevel)
+                || (g.Settings.ComputerLevel == null
+                    && db.Users.Any(u => u.Id == (g.WhitePlayerId == userId ? g.BlackPlayerId : g.WhitePlayerId)
+                                         && (u.DisplayName ?? u.Username).Contains(opponent))));
+        }
 
         // Games per category (with the filters above), for the tabs (the per-category counts on User are rated games only)
         var countRows = await baseQuery

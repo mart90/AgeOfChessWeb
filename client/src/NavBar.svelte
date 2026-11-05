@@ -5,10 +5,14 @@
   import { navigate }                  from './lib/navigate.js';
   import { currentGame }               from './lib/currentGame.svelte.js';
   import { setVolume }                 from './lib/sound.js';
+  import { restartGameHub }            from './lib/hub.js';
+  import { getGameToken }              from './lib/api.js';
+  import { notifications, startNotifications, markRead } from './lib/notifications.svelte.js';
 
   let settingsOpen  = $state(false);
   let menuOpen      = $state(false);
   let userMenuOpen  = $state(false);
+  let bellOpen      = $state(false);
 
   const isLoggedIn = $derived(!!authState.token);
   const userName   = $derived(
@@ -33,8 +37,10 @@
     settingsOpen = menu === 'settings';
     userMenuOpen = menu === 'user';
     analyzeOpen  = menu === 'analyze';
+    bellOpen     = menu === 'bell';
   }
   function toggleSettings(e) { if (!viaMouse(e)) openOnly(settingsOpen ? null : 'settings'); }
+  function toggleBell(e)     { if (!viaMouse(e)) openOnly(bellOpen ? null : 'bell'); }
   function toggleMenu()      { menuOpen = !menuOpen; }
   function onUserNameClick(e) {
     if (viaMouse(e)) userNavTo(`/profile/${authState.user?.username}`);
@@ -50,6 +56,52 @@
     if (!e.target.closest('.nav-left'))      menuOpen     = false;
     if (!e.target.closest('.user-menu-wrap')) userMenuOpen = false;
     if (!e.target.closest('.nav-group'))     analyzeOpen  = false;
+    if (!e.target.closest('.bell-wrap'))     bellOpen     = false;
+  }
+
+  // ── Notifications ──
+  // Received while signed in. The game hub connection says who's connected when it connects, so it
+  // reconnects when the sign-in changes.
+  $effect(() => {
+    if (!authState.token) return;
+    return startNotifications();
+  });
+  let lastToken = authState.token;
+  $effect(() => {
+    if (authState.token === lastToken) return;
+    lastToken = authState.token;
+    restartGameHub();
+  });
+
+  const unread = $derived(notifications.items.length);
+  let bellDismissed = $state(false);   // after picking an item, hidden until the pointer leaves
+
+  async function openNotification(n) {
+    bellOpen = false;
+    bellDismissed = true;
+    markRead({ ids: [n.id] });
+    if (n.gameId == null) return;
+    // From another device the player token isn't stored here yet
+    if (!localStorage.getItem(`token_${n.gameId}`)) {
+      try {
+        const { playerToken, isWhite } = await getGameToken(n.gameId);
+        localStorage.setItem(`token_${n.gameId}`, playerToken);
+        localStorage.setItem(`color_${n.gameId}`, isWhite ? 'white' : 'black');
+      } catch { /* the game page shows what it can */ }
+    }
+    navigate(`/game/${n.gameId}`);
+  }
+
+  function notificationText(n) {
+    return n.type === 'gameStarted' ? `Game started vs ${n.opponentName}` : 'Notification';
+  }
+
+  function timeAgo(iso) {
+    const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+    if (s < 60)    return 'just now';
+    if (s < 3600)  return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return new Date(iso).toLocaleDateString();
   }
 
   function toggleCoords() {
@@ -199,6 +251,26 @@
     </div>
 
     {#if isLoggedIn}
+      <!-- Notifications: hover (mouse) or tap to see the unread ones -->
+      <div class="bell-wrap" class:dismissed={bellDismissed}
+           role="presentation" onpointerleave={() => (bellDismissed = false)}>
+        <button class="icon-btn bell-btn" class:unread={unread > 0} onclick={toggleBell}
+                title="Notifications" aria-label={unread ? `Notifications (${unread} unread)` : 'Notifications'}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.8 15.3V9.9a6.2 6.2 0 0 1 12.4 0v5.4l1.7 1.9H4.1z"/><path d="M9.9 19.6a2.2 2.2 0 0 0 4.2 0"/></svg>
+          {#if unread}<span class="badge">{unread > 9 ? '9+' : unread}</span>{/if}
+        </button>
+        <div class="dropdown bell-dropdown" class:open={bellOpen}>
+          {#each notifications.items as n (n.id)}
+            <button class="dropdown-btn dropdown-item notification" onclick={() => openNotification(n)}>
+              <span class="notification-text">{notificationText(n)}</span>
+              <span class="notification-time">{timeAgo(n.createdAt)}</span>
+            </button>
+          {:else}
+            <div class="dropdown-item no-notifications">No new notifications</div>
+          {/each}
+        </div>
+      </div>
+
       <div class="user-menu-wrap" class:dismissed={userMenuDismissed}
            role="presentation" onpointerleave={() => (userMenuDismissed = false)}>
         <button class="user-menu-btn" onclick={onUserNameClick}>
@@ -397,13 +469,15 @@
   .dropdown.open { display: block; }
   @media (any-hover: hover) {
     .settings-wrap:hover .dropdown,
+    .bell-wrap:not(.dismissed):hover .dropdown,
     .user-menu-wrap:not(.dismissed):hover .dropdown { display: block; }
     .user-menu-wrap:not(.dismissed):hover .menu-arrow { transform: rotate(180deg); }
   }
   /* Keyboard, and keep settings open while its board select is in use */
   .settings-wrap:has(:focus-visible) .dropdown,
   .settings-wrap:has(select:focus) .dropdown,
-  .user-menu-wrap:has(:focus-visible) .dropdown { display: block; }
+  .user-menu-wrap:has(:focus-visible) .dropdown,
+  .bell-wrap:has(:focus-visible) .dropdown { display: block; }
 
   .dropdown-item {
     display: flex;
@@ -493,6 +567,25 @@
     color: var(--fg);
     padding: 0.45rem 0.85rem;
   }
+
+  /* ── Notifications ── */
+  .bell-wrap { position: relative; }
+  .bell-btn { position: relative; }
+  .bell-btn svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+  .bell-btn.unread { color: #d4a017; }
+  .bell-btn.unread:hover { color: #e8b820; }
+  .badge {
+    position: absolute; top: 1px; right: 0;
+    min-width: 15px; height: 15px; padding: 0 3px;
+    border-radius: 8px;
+    background: #d4a017; color: #15130f;
+    font-size: 0.68rem; font-weight: 700; line-height: 15px; text-align: center;
+  }
+  .bell-dropdown { min-width: 250px; }
+  .notification { flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.55rem 0.95rem; }
+  .notification-time { font-size: 0.75rem; color: var(--muted); }
+  .no-notifications { color: var(--muted); cursor: default; }
+  .no-notifications:hover { background: none; }
 
   /* ── User menu ── */
   .user-menu-wrap { position: relative; }

@@ -19,10 +19,11 @@ public record GameStateDto(
     string? Result,
     bool GameEnded,
     /// <summary>
-    /// Unix milliseconds when the current turn started (i.e. when the active player's clock began).
-    /// 0 if the first move has not yet been made (clocks not running).
+    /// Unix milliseconds when the current turn started. 0 if the clocks aren't running yet (bidding).
     /// </summary>
     long TurnStartedAt,
+    /// <summary>White's first move: time from TurnStartedAt before the main clock starts (0 otherwise).</summary>
+    int FirstMoveAllowanceMs,
     bool TimeControlEnabled,
     bool IsRanked,
     /// <summary>Computer opponent: level, side and node budget per move (null/false for human games);
@@ -40,7 +41,12 @@ public record GameStateDto(
     string? DrawOfferBy,
     /// <summary>Handicap option ("none" | "auto" | "manual") and manual amount, for rematches.</summary>
     string Handicap,
-    int HandicapGold
+    int HandicapGold,
+    /// <summary>Players connected to the game (the computer always is).</summary>
+    bool WhiteConnected,
+    bool BlackConnected,
+    /// <summary>Waiting for a player to connect to the just-started game: Unix ms when it's aborted (0 otherwise).</summary>
+    long AbortAt
 );
 
 public record SquareDto(
@@ -88,6 +94,7 @@ public static class GameStateDtoBuilder
             game.LastMoveTimestamp.HasValue
                 ? new DateTimeOffset(game.LastMoveTimestamp.Value, TimeSpan.Zero).ToUnixTimeMilliseconds()
                 : 0L,
+            game.CurrentAllowanceMs,
             game.TimeControlEnabled,
             game.Settings.IsRanked,
             game.Settings.ComputerLevel,
@@ -100,6 +107,11 @@ public static class GameStateDtoBuilder
             game.Bidding != null && !game.Bidding.BothBid,
             game.DrawOfferByWhite switch { true => "w", false => "b", null => null },
             game.Settings.Handicap,
-            game.Settings.HandicapGold
+            game.Settings.HandicapGold,
+            game.SideReady(true),
+            game.SideReady(false),
+            game.WaitingSince is { } since
+                ? new DateTimeOffset(since + ServerGame.WaitForPlayersLimit, TimeSpan.Zero).ToUnixTimeMilliseconds()
+                : 0L
         );
 }

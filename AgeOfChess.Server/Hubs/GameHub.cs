@@ -26,12 +26,21 @@ namespace AgeOfChess.Server.Hubs;
 ///   SubmitComputerBid(playerToken, amount)                                     — vs-computer games
 ///
 /// Server → Client (broadcast to both players via group):
-///   GameStarted(GameStateDto)   — when both players are connected
-///   StateUpdated(GameStateDto)  — after every valid move/placement
+///   GameStarted(GameStateDto)   — when the game starts (lobby: when the opponent connects), and to
+///                                 a player (re)joining a started game
+///   StateUpdated(GameStateDto)  — after every valid move/placement, and when a just-started game's
+///                                 clocks stop or start because a player left or connected
+///   Presence(whiteConnected, blackConnected) — a player connected or left (other cases)
 ///   GameEnded(GameStateDto)     — final state once the game is over
+///   GameAborted(reason)         — a just-started game was called off: a player didn't connect
+///   LobbyCancelled(reason)      — the lobby was closed (its creator left the site)
 ///   Error(string)               — sent only to the caller on invalid actions
+///
+/// Signed-in connections also get notifications (see NotificationService).
 /// </summary>
-public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFactory, GameFlowService flow) : Hub
+public class GameHub(
+    GameSessionManager sessions, IServiceScopeFactory scopeFactory, GameFlowService flow,
+    PresenceService presence, NotificationService notifications) : Hub
 {
     /// <summary>
     /// Join as a read-only spectator. Spectators receive the same state broadcasts
@@ -115,55 +124,80 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         if (game.ChatMessages.Count > 0)
             await Clients.Caller.SendAsync("ChatHistory", game.ChatMessages);
 
-        if (game.SideReady(true) && game.SideReady(false))
+        if (!game.HasGameStarted)
         {
-            if (!game.HasGameStarted)
+            // A lobby of a signed-in creator starts when the opponent connects, wherever the creator
+            // is on the site, but not if they've left it. Other games start once both are here.
+            // (Before the start the creator holds the white token.)
+            if (game.LobbyCreatorId is int creatorId && !isWhite)
             {
-                game.HasGameStarted = true;
-                if (game.BiddingEnabled)
-                {
-                    game.StartBidding();
-                    // Send initial board so both clients can see the map while bidding
-                    await Clients.Group(game.GroupName)
-                        .SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
-                    await Clients.Group(game.GroupName)
-                        .SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding!));
-                }
+                if (!presence.IsOnline(creatorId))
+                    await flow.CancelLobbyAsync(game, "Lobby creator is offline.");
                 else
-                {
-                    bool swapped = game.ApplyCreatorColor();
-                    game.ResolveHandicap();
-                    if (swapped || game.Settings.HasHandicap)
-                        await flow.PersistStartAsync(game);
-                    if (swapped)
-                    {
-                        if (game.WhiteConnectionId != null)
-                            await Clients.Client(game.WhiteConnectionId).SendAsync("ColorAssigned", true);
-                        if (game.BlackConnectionId != null)
-                            await Clients.Client(game.BlackConnectionId).SendAsync("ColorAssigned", false);
-                    }
-                    await Clients.Group(game.GroupName)
-                        .SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
-                }
+                    await BeginAsync(game);
             }
-            else
+            else if (game.LobbyCreatorId == null && game.SideReady(true) && game.SideReady(false))
             {
-                // Game already started - only send to the caller (who just reconnected).
-                // The other player already has the state and doesn't need a notification.
-                await Clients.Caller.SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
-                if (game.Bidding != null && !game.Bidding.BothBid)
-                    await Clients.Caller.SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
+                await BeginAsync(game);
+            }
+            return;
+        }
+
+        // Started game: (re)joining. The colour may have changed while this player was away.
+        await Clients.Caller.SendAsync("ColorAssigned", isWhite);
+        bool waitingChanged = game.UpdateWaiting(out bool biddingStarted);
+        await Clients.Caller.SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
+        if (biddingStarted)
+            await Clients.Group(game.GroupName).SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding!));
+        else if (game.Bidding != null && !game.Bidding.BothBid)
+            await Clients.Caller.SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
+        await BroadcastPresence(game, Clients.OthersInGroup(game.GroupName), waitingChanged);
+    }
+
+    /// <summary>
+    /// Starts the game: colours and handicap, then the clocks (or the bidding), unless a player
+    /// still has to connect. A lobby's creator is notified. Caller holds the game lock.
+    /// </summary>
+    private async Task BeginAsync(ServerGame game)
+    {
+        game.HasGameStarted = true;
+        if (!game.BiddingEnabled)
+        {
+            bool swapped = game.ApplyCreatorColor();
+            game.ResolveHandicap();
+            if (swapped || game.Settings.HasHandicap)
+                await flow.PersistStartAsync(game);
+            if (swapped)
+            {
+                if (game.WhiteConnectionId != null)
+                    await Clients.Client(game.WhiteConnectionId).SendAsync("ColorAssigned", true);
+                if (game.BlackConnectionId != null)
+                    await Clients.Client(game.BlackConnectionId).SendAsync("ColorAssigned", false);
             }
         }
-        else if (game.HasGameStarted)
+        game.UpdateWaiting(out bool biddingStarted);
+
+        // Board first, so both clients see the map while bidding
+        await Clients.Group(game.GroupName).SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
+        if (biddingStarted)
+            await Clients.Group(game.GroupName).SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding!));
+
+        // Always stored: the creator's tab on the lobby page (if any) marks it read once it shows the game
+        if (game.LobbyCreatorId is int creatorId)
         {
-            // Only one player connected, but game already started — send current state to caller
-            // so they can see the board and make moves while waiting for opponent to reconnect
-            await Clients.Caller.SendAsync("GameStarted", GameStateDtoBuilder.Build(game));
-            if (game.Bidding != null && !game.Bidding.BothBid)
-                await Clients.Caller.SendAsync("BiddingStarted", BiddingStateDtoBuilder.Build(game.Bidding));
+            bool creatorIsWhite = game.WhiteUserId == creatorId;
+            await notifications.GameStartedAsync(creatorId, game.SessionId, (creatorIsWhite ? game.Black : game.White).PlayedByStr);
         }
     }
+
+    /// <summary>
+    /// Tells <paramref name="target"/> a player connected or left: the full state when that started
+    /// or stopped the clocks of a just-started game, otherwise who's connected.
+    /// </summary>
+    private static Task BroadcastPresence(ServerGame game, IClientProxy target, bool waitingChanged) =>
+        waitingChanged
+            ? target.SendAsync("StateUpdated", GameStateDtoBuilder.Build(game))
+            : target.SendAsync("Presence", game.SideReady(true), game.SideReady(false));
 
     public async Task MakeMove(string playerToken, int fromX, int fromY, int toX, int toY)
     {
@@ -179,6 +213,11 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         }
 
         if (game.Bidding != null && !game.Bidding.BothBid) return;
+        if (!game.HasGameStarted || game.WaitingSince != null)
+        {
+            await Clients.Caller.SendAsync("Error", "Waiting for your opponent to connect.");
+            return;
+        }
 
         if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite)
         {
@@ -215,6 +254,11 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         }
 
         if (game.Bidding != null && !game.Bidding.BothBid) return;
+        if (!game.HasGameStarted || game.WaitingSince != null)
+        {
+            await Clients.Caller.SendAsync("Error", "Waiting for your opponent to connect.");
+            return;
+        }
 
         if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite)
         {
@@ -257,6 +301,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         if (game.GameEnded) return;
         if (!IsAuthorizedPlayer(game, playerToken)) return;
         if (game.Bidding != null && !game.Bidding.BothBid) return;
+        if (!game.HasGameStarted) return;
 
         bool callerIsWhite = game.IsWhitePlayer(playerToken);
         if (game.IsComputerSide(callerIsWhite)) return;                 // caller must be the human
@@ -301,11 +346,10 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
         if (!IsAuthorizedPlayer(game, playerToken)) return;
 
-        var active  = game.ActiveColor;
-        var elapsed = (int)(DateTime.UtcNow - game.LastMoveTimestamp.Value).TotalMilliseconds;
+        var active = game.ActiveColor;
 
         // Allow a 2-second grace window to absorb clock drift / network latency
-        if (active.TimeMiliseconds - elapsed > 2000) return;
+        if (active.TimeMiliseconds - game.ClockElapsedMs(DateTime.UtcNow) > 2000) return;
 
         active.TimeMiliseconds = 0;
         game.ForceEnd(active.IsWhite ? "b+t" : "w+t");
@@ -462,7 +506,7 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
 
     /// <summary>The game is under way (started, bidding over, not ended) and the caller plays in it.</summary>
     private bool CanActInPlay(ServerGame game, string playerToken) =>
-        !game.GameEnded && game.HasGameStarted
+        !game.GameEnded && game.HasGameStarted && game.WaitingSince == null
         && (game.Bidding == null || game.Bidding.BothBid)
         && IsAuthorizedPlayer(game, playerToken);
 
@@ -488,64 +532,64 @@ public class GameHub(GameSessionManager sessions, IServiceScopeFactory scopeFact
         await Clients.Group(game.GroupName).SendAsync("ChatMessage", msg);
     }
 
+    /// <summary>
+    /// The game's page was closed (signed-in tabs stay connected on other pages): as a disconnect,
+    /// for this game only.
+    /// </summary>
+    public async Task LeaveGame(int sessionId)
+    {
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"game-{sessionId}");
+        var game = sessions.GetById(sessionId);
+        if (game == null) return;
+        using var _ = await game.LockAsync();
+        if (game.WhiteConnectionId == Context.ConnectionId)      game.WhiteConnectionId = null;
+        else if (game.BlackConnectionId == Context.ConnectionId) game.BlackConnectionId = null;
+        else return;
+        if (Context.Items.TryGetValue("playerToken", out var t) && sessions.GetByPlayerToken(t as string) == game)
+            Context.Items.Remove("playerToken");
+        if (game.HasGameStarted && !game.GameEnded)
+            await BroadcastPresence(game, Clients.Group(game.GroupName), game.UpdateWaiting(out bool _));
+    }
+
     /// <summary>Lets a client check its connection is alive (e.g. when a phone brings the page back).</summary>
     public Task Ping() => Task.CompletedTask;
 
+    /// <summary>Signed-in tabs: counted as present on the site, and reachable for notifications.</summary>
+    public override async Task OnConnectedAsync()
+    {
+        if (GetCurrentUserId() is int userId)
+        {
+            Context.Items["userId"] = userId;
+            presence.Connected(userId);
+            await Groups.AddToGroupAsync(Context.ConnectionId, NotificationService.UserGroup(userId));
+        }
+        await base.OnConnectedAsync();
+    }
+
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        if (Context.Items.TryGetValue("userId", out var userObj) && userObj is int userId)
+            presence.Disconnected(userId);
+
         if (Context.Items.TryGetValue("playerToken", out var tokenObj) && tokenObj is string playerToken)
         {
             var game = sessions.GetByPlayerToken(playerToken);
             if (game != null)
             {
                 using var _ = await game.LockAsync();
+                bool left = true;
                 if (game.WhiteConnectionId == Context.ConnectionId)
                     game.WhiteConnectionId = null;
                 else if (game.BlackConnectionId == Context.ConnectionId)
                     game.BlackConnectionId = null;
+                else
+                    left = false;   // a newer connection of this player took over
+                if (left && game.HasGameStarted && !game.GameEnded)
+                    await BroadcastPresence(game, Clients.Group(game.GroupName), game.UpdateWaiting(out bool _));
             }
         }
 
         await base.OnDisconnectedAsync(exception);
-    }
-
-    /// <summary>
-    /// Returns legal destination squares for the piece at (fromX, fromY).
-    /// Called immediately when the player grabs a piece so the client can show green hints.
-    /// </summary>
-    public async Task<int[][]> GetLegalMoves(string playerToken, int fromX, int fromY)
-    {
-        var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null) return [];
-        using var _ = await game.LockAsync();
-        if (game.GameEnded) return [];
-        if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite) return [];
-
-        var sq = game.GetMap().GetSquareByCoordinates(fromX, fromY);
-        if (sq?.Object is not Piece piece) return [];
-
-        return game.GetMap().FindLegalDestinationsForPiece(piece, sq)
-                            .Select(s => new[] { s.X, s.Y })
-                            .ToArray();
-    }
-
-    /// <summary>
-    /// Returns legal placement squares for a given piece type.
-    /// Called immediately when the player grabs a shop piece.
-    /// </summary>
-    public async Task<int[][]> GetLegalPlacements(string playerToken, string pieceCode)
-    {
-        var game = sessions.GetByPlayerToken(playerToken);
-        if (game == null) return [];
-        using var _ = await game.LockAsync();
-        if (game.GameEnded) return [];
-        if (game.IsWhitePlayer(playerToken) != game.ActiveColor.IsWhite) return [];
-
-        var type = PieceTypeFromCode(pieceCode);
-        if (type == null) return [];
-        return game.FindLegalPlacements(type)
-                   .Select(s => new[] { s.X, s.Y })
-                   .ToArray();
     }
 
     /// <summary>

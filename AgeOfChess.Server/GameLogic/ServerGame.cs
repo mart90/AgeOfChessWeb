@@ -67,8 +67,76 @@ public class ServerGame : Game
     /// <summary>The computer side's token (used internally, e.g. to record its bid).</summary>
     public string ComputerPlayerToken => Settings.ComputerIsWhite ? WhitePlayerToken : BlackPlayerToken;
 
-    /// <summary>True once the initial GameStarted broadcast has been sent to both players.</summary>
+    /// <summary>True once the game has started (an opponent took the lobby, or both players connected).</summary>
     public bool HasGameStarted { get; set; }
+
+    /// <summary>
+    /// Lobby made by a signed-in user (null otherwise): starts as soon as an opponent connects, even
+    /// when the creator is elsewhere on the site (they get a notification). Not set on resumed games.
+    /// </summary>
+    public int? LobbyCreatorId { get; set; }
+
+    // ── Waiting for players ───────────────────────────────────────────────
+    // A game that has just started (no move yet, not bidding) needs both players connected: while
+    // one isn't, no clock runs and the game is aborted if they don't connect within a minute.
+    // Once moves are made, a disconnected player's clock keeps running as usual.
+
+    public static readonly TimeSpan WaitForPlayersLimit = TimeSpan.FromMinutes(1);
+
+    /// <summary>Since when the game has been waiting for a player to connect (null = not waiting).</summary>
+    public DateTime? WaitingSince { get; private set; }
+    private int? _pausedTurnMs;   // time the current turn had run when the clocks were stopped
+
+    private bool JustStarted =>
+        HasGameStarted && !GameEnded && !IsComputerGame && MoveList.Count == 0
+        && (Bidding == null || Bidding.BothBid);
+
+    /// <summary>
+    /// Call after a player connected or disconnected (and when the game starts): stops the clocks
+    /// while a player of a just-started game is missing, starts (or resumes) them once both are
+    /// here, starting the bidding if that's still to come. Returns true if anything changed.
+    /// </summary>
+    public bool UpdateWaiting(out bool biddingStarted)
+    {
+        biddingStarted = false;
+        if (!HasGameStarted || GameEnded) return false;
+        var now = DateTime.UtcNow;
+
+        if (JustStarted && !(SideReady(true) && SideReady(false)))
+        {
+            if (WaitingSince != null) return false;
+            WaitingSince = now;
+            if (LastMoveTimestamp is { } turnStart)
+            {
+                _pausedTurnMs = (int)(now - turnStart).TotalMilliseconds;
+                LastMoveTimestamp = null;
+            }
+            return true;
+        }
+
+        bool clocksStarted = LastMoveTimestamp != null || _pausedTurnMs != null || Bidding != null || MoveList.Count > 0;
+        if (WaitingSince == null && clocksStarted) return false;
+        WaitingSince = null;
+        if (clocksStarted)
+        {
+            LastMoveTimestamp = now.AddMilliseconds(-(_pausedTurnMs ?? 0));
+            _pausedTurnMs = null;
+        }
+        else if (BiddingEnabled)
+        {
+            StartBidding();
+            biddingStarted = true;
+        }
+        else
+        {
+            StartClock();
+        }
+        return true;
+    }
+
+    /// <summary>The names of the players a waiting game is waiting for.</summary>
+    public string MissingPlayers() =>
+        string.Join(" and ", new[] { true, false }.Where(w => !SideReady(w)).Select(w => (w ? White : Black).PlayedByStr));
 
     /// <summary>When this ServerGame was constructed — used by the cleanup service to evict stale sessions.</summary>
     public DateTime CreatedAt { get; } = DateTime.UtcNow;
@@ -222,6 +290,9 @@ public class ServerGame : Game
             White.TimeMiliseconds = startMs;
             Black.TimeMiliseconds = startMs;
         }
+        // Set even when time control is off for now (resuming replays moves without it); it only
+        // applies with time control on
+        FirstMoveAllowanceMs = Math.Min(settings.StartTimeMinutes * 60 * 1000 / 4, 60_000);
 
         var generator = new MapGenerator();
         Map = settings.MapSeed != null

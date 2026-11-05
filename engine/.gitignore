@@ -1,6 +1,7 @@
 target/
+# Local data (oracle games, other seed lists, self-play, match logs): regenerate with tools/RulesOracle,
+# see docs/engine.md. Kept: gg's default boards and the training / holdout board lists.
 testdata/*
-!testdata/oracle.jsonl
-!testdata/seeds_*.txt
-# large regenerable seed lists (RulesOracle seeds mode)
-testdata/seeds_*k.txt
+!testdata/seeds_m10.txt
+!testdata/seeds_m10_holdout.txt
+!testdata/seeds_m10_train2.txt

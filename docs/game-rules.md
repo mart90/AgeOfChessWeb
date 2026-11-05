@@ -10,8 +10,9 @@ Source of truth for the rules is the server: `AgeOfChess.Server/GameLogic/` (mai
 
 > The rules are implemented **three times**: C# (server, authoritative), Rust (`engine/`, the
 > computer opponent and training-data generator; checked against C# by `tools/RulesOracle`) and
-> JS (`client/src/lib/pathFinder.js` + `analysis.js`, for the analysis board). Rule changes must
-> be applied to all three.
+> JS (`client/src/lib/pathFinder.js` + `analysis.js`, for the legal-move hints and the analysis
+> board; checked against C# by `client/scripts/rules-oracle.mjs`). Rule changes must be applied to
+> all three.
 
 ## Design intent
 
@@ -142,4 +143,18 @@ Extra starting gold: **None** (default), **Manual** (a fixed amount, ≥ 1) or *
 
 - Time controls: 1+0, 1+1 (Bullet) · 3+0, 3+2, 5+0, 5+3 (Blitz) · 10+5, 15+10 (Rapid) ·
   30+15, 60+30, no timer (Slow).
+- First move (2026-11-02): White gets main time / 4 (at most 1 minute) for the first move before
+  the main clock starts. Unused time is lost; the increment is still added. From White's second
+  turn (and for all of Black's turns) only the main clock runs. Before this, White's first move
+  had no time limit at all (the clock started after it), except after bidding.
+- Starting a game (2026-11-02): a lobby made by a signed-in user starts as soon as an opponent
+  joins, even if the creator is elsewhere on the site (they get a "Game started" notification).
+  A lobby whose creator has left the site can't be joined ("Lobby creator is offline": the lobby is
+  closed); after 2 minutes away it's closed anyway. Lobbies made without an account still start
+  only once the creator is on the lobby page.
+- Waiting for players: while a player isn't connected to a just-started game (no move yet, not
+  during bidding), no clock runs and a 1-minute "Disconnected" clock does. If they don't connect
+  in time the game is aborted (no result, no rating change, deleted). Moves can't be made while
+  waiting. Once a move is made, a disconnected player's clock runs as usual; the player bar
+  just shows "Disconnected". Games vs the computer don't wait.
 - Separate Elo per category; K-factor starts at 100, −5 per game, floor 32.

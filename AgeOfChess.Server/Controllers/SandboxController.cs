@@ -65,7 +65,9 @@ public class SandboxController(IConfiguration config) : ControllerBase
     [HttpPost("generateBulk")]
     public IActionResult GenerateBoardsBulk([FromBody] GenerateBoardsBulkRequest req)
     {
-        if (req.Token != config["GenerateBulkToken"])
+        // Off unless a token is configured (a missing token would otherwise match a request without one)
+        var token = config["GenerateBulkToken"];
+        if (string.IsNullOrEmpty(token) || req.Token != token)
         {
             return Forbid();
         }

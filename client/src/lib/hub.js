@@ -66,6 +66,11 @@ export function onConnected(fn) {
   };
 }
 
+/** Reconnects with the current sign-in (the server reads who's connected when connecting). */
+export function restartGameHub() {
+  if (connection) replace();   // (an attempt under way checks the sign-in when it connects)
+}
+
 /** `fn('disconnected' | 'connected')` on connection changes. Returns an unsubscribe function. */
 export function onConnectionStatus(fn) {
   statusListeners.add(fn);
@@ -95,7 +100,7 @@ function build() {
   const conn = new signalR.HubConnectionBuilder()
     .withUrl('/hub/game', {
       // Read on every connect, so it picks up a login that happened after the page load
-      accessTokenFactory: () => localStorage.getItem('auth_token') ?? '',
+      accessTokenFactory: () => (conn.usedToken = currentToken()),
     })
     .build();
   // The server pings every 5 s (Program.cs): notice a dead connection after 15 s instead of 30
@@ -122,7 +127,8 @@ function ensureConnecting() {
       const conn = attempting = build();
       const result = await race(conn.start().then(() => 'ok', () => 'failed'), startTimeout(attempt), Date.now() + KICK_AFTER_MS);
       attempting = null;
-      if (result === 'ok' && connectedListeners.size) { connection = conn; return; }
+      // (signed in or out while connecting: connect again, so the server knows who this is)
+      if (result === 'ok' && connectedListeners.size && conn.usedToken === currentToken()) { connection = conn; return; }
       conn.stop().catch(() => {});   // abandoned: may still be hanging, it's not awaited
       if (result === 'kicked') { attempt = -1; continue; }
       if (await race(new Promise(resolve => setTimeout(resolve, retryDelay(attempt + 1))), null, 0) === 'kicked') attempt = -1;
@@ -183,6 +189,8 @@ function waitForConnection() {
     waiters.add(done);
   });
 }
+
+function currentToken() { return localStorage.getItem('auth_token') ?? ''; }
 
 function emitStatus(s) { for (const fn of statusListeners) fn(s); }
 

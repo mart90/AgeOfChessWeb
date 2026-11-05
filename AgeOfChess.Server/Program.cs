@@ -51,6 +51,8 @@ builder.Services.AddSignalR(o => o.KeepAliveInterval = TimeSpan.FromSeconds(5));
 builder.Services.AddSingleton<GameSessionManager>();
 builder.Services.AddSingleton<MatchmakingService>();
 builder.Services.AddSingleton<GameFlowService>();
+builder.Services.AddSingleton<PresenceService>();
+builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddScoped<GameCreationService>();
 builder.Services.AddScoped<GameResumeService>();
 builder.Services.AddHostedService<GameCleanupService>();

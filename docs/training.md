@@ -443,7 +443,7 @@ after epoch ~50 tiny). Self-play by nn17: 81% mates / 17% gold. vs nn17, nn19 co
 more gold wins (160) than it won (61) but won more by mate (724 vs 598). Stopped here as Mart
 asked.
 
-**Window + deep data (2026-11-01, running).** Plateau test, both from scratch, gated vs nn19
+**Window + deep data (2026-11-01).** Plateau test, both from scratch, gated vs nn19
 and nn3: **A `m10_w10`** = last ~10M positions only (nn13–nn19 data files); **B `m10_w10deep`** =
 A + 1M positions by nn19 at **48k nodes** (4×, `deep48k_m10_1m.bin`, train2 boards
 126000–134999), weighted 3× (`train.py --weight "deep48k_*=3"`; `--data` now takes
@@ -453,6 +453,10 @@ gain.
 Result A: **−99 ± 18 vs nn19, +95 vs nn3** (nn19 +215). Only 5.4M training positions after the
 filters (nn19: 16.5M); train/val loss 0.0198/0.0244 vs nn19's 0.0170/0.0184 — it overfits. Old
 data still helps a lot: the network is data-limited (argues against a bigger network too).
+Result B: **−102 ± 18 vs nn19, +107 vs nn3** — B − A ≈ +5 ± 25, no measurable gain from the deep
+labels. Deep batch: 1.0M positions in 3.5 h (283k/h), 90% mates / 8% gold. The 3× repeats are
+memorised: on the deep file train/val loss 0.0179/0.0274 (gap 0.0095, still growing until epoch
+~30) vs 0.0203/0.0258 overall (gap 0.0055). B's best epoch 43.
 
 ## Next steps
 

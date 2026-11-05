@@ -25,7 +25,9 @@ namespace AgeOfChess.Server.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
-public class GameController(AppDbContext db, GameSessionManager sessions, GameCreationService gameCreation) : ControllerBase
+public class GameController(
+    AppDbContext db, GameSessionManager sessions, GameCreationService gameCreation,
+    PresenceService presence, GameFlowService flow) : ControllerBase
 {
     public record CreateGameRequest(
         int BoardSize = 12,
@@ -114,7 +116,8 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
             white = new(creatorUserId, elo, creator.EffectiveDisplayName);
         }
 
-        var (session, _) = await gameCreation.CreateAsync(settings, white, isPrivate: req.IsPrivate);
+        var (session, game) = await gameCreation.CreateAsync(settings, white, isPrivate: req.IsPrivate);
+        game.LobbyCreatorId = white.UserId;
 
         var baseUrl = $"{Request.Scheme}://{Request.Host}";
         return Ok(new
@@ -203,6 +206,15 @@ public class GameController(AppDbContext db, GameSessionManager sessions, GameCr
         if (game == null || session == null) return NotFound();
         if (!LobbyVisibleTo(game, session.IsPrivate, session.Settings.IsRanked, CurrentUserId()))
             return NotFound();
+
+        // The creator left the site: the lobby goes, rather than starting a game they won't play
+        if (game.LobbyCreatorId is int creatorId && !presence.IsOnline(creatorId))
+        {
+            using (await game.LockAsync())
+                if (!game.HasGameStarted && sessions.GetById(gameId) == game)
+                    await flow.CancelLobbyAsync(game, "Lobby creator is offline.");
+            return Conflict("Lobby creator is offline.");
+        }
 
         // Game already has two players (i.e. it's in the session manager and both tokens are set)
         // The second player joins by connecting to SignalR with their token.

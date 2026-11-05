@@ -16,7 +16,7 @@ One engine, two targets: **native** (multi-threaded training-game generation) an
 | `src/bin/gg.rs` | CLI: `bench`, `selfplay`, `match`, `play` |
 | `tests/oracle.rs` | Validates rules against the C# server |
 | `params/*.json` | Eval parameter sets for matches |
-| `testdata/seeds_m10.txt` | 2000 mirrored 10×10 seeds from the server's MapGenerator |
+| `testdata/` | Local data, gitignored (oracle games, self-play, logs; generate with the RulesOracle commands below), except three board lists: `seeds_m10.txt` (2000 mirrored 10×10, `gg`'s default) and the training / holdout lists in docs/training.md |
 
 ## Browser (WebAssembly)
 
@@ -44,6 +44,13 @@ One engine, two targets: **native** (multi-threaded training-game generation) an
   (searches off the main thread), `engine.js` (main-thread instance for legal moves/status +
   worker wrapper with cancel).
 - Speed in V8 ≈ 1.2M nodes/s (close to native single-thread).
+- vs the old JS engine (`lib/analysis.js`, 2026-11-02, Node, 8 opening + 8 midgame positions from
+  `holdout_20k.bin`): raw speed only 1.5× (old 0.4–0.8M nodes/s without its every-1000-nodes
+  `setTimeout` yield, which in a browser clamps to ≥ 4 ms and cut it to ~0.2M); time to midgame
+  depth 5 **~300× less** (old 0.6–17 s, new 2–64 ms), and the gap grows with depth (old ~10× per
+  ply, new ~2–3×). In 2 s: old depth 4–5 midgame / 9–11 opening, new 10–13 / 15–22. The gain is
+  search: the old root searched every move with a full window, no move ordering, no pruning,
+  no quiescence.
 - **Analysis page "Engine" section**: *Analyze* (`engineAnalysis.js`: depth-stepped searches,
   multi-PV 5 = repeated root searches excluding earlier best moves; top move drawn on the
   board as an arrow / ghost piece) and *Engine move* (plays the top move while analyzing,
@@ -124,12 +131,18 @@ them in Rust. Last full run: **219,588 positions, 0 mismatches** (incl. 113 chec
 187 gold wins, 22 stalemates). Re-run this after any rule change.
 Rule change 2026-10-26 (queen drops, queen 75): the oracle now writes `queenDrops: true`;
 data without it (`oracle_classic*.jsonl`, recorded before) is replayed with `Rules::classic()`.
-`oracle.jsonl` (committed) and `oracle_big.jsonl` were regenerated; last full run 352,234
+`oracle.jsonl` and `oracle_big.jsonl` were regenerated; last full run 352,234
 positions (new + classic data), 0 mismatches. JS placement rules checked against the engine on
 6,866 random positions, 0 mismatches.
 
+The JS rules (`client/src/lib/pathFinder.js`: `computeLegalMoves`, `computeLegalPlacements`) show
+the legal-move hints in games and on the analysis board; `node client/scripts/rules-oracle.mjs
+[file]` replays the same oracle data against them (queen-drop data only). 2026-11-05:
+`oracle.jsonl` + `oracle_big.jsonl`, 233,467 positions, 0 mismatches.
+
 ```
 dotnet build -c Release tools/RulesOracle
+dotnet tools/RulesOracle/bin/Release/net9.0/RulesOracle.dll 60 7 engine/testdata/oracle.jsonl
 dotnet tools/RulesOracle/bin/Release/net9.0/RulesOracle.dll 600 12345 engine/testdata/oracle_big.jsonl 400
 dotnet tools/RulesOracle/bin/Release/net9.0/RulesOracle.dll seeds 2000 10 m engine/testdata/seeds_m10.txt
 ```

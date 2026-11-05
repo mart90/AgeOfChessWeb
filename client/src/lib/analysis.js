@@ -1,4 +1,4 @@
-import { computeLegalMoves, buildContext } from "./pathFinder";
+import { computeLegalMoves, computeLegalPlacements, buildContext } from "./pathFinder";
 import { SHOP, MINE_INCOME } from './constants'
 
 const MAX_DEPTH = 10;
@@ -340,70 +340,15 @@ function unmakeMove(state, undo) {
 
 // ── Legal move generation ────────────────────────────────────────────────────
 
-const MAJOR_PIECES = new Set([
-    'WhiteQueen', 'BlackQueen',
-    'WhiteRook', 'BlackRook',
-    'WhiteBishop', 'BlackBishop',
-    'WhiteKnight', 'BlackKnight'
-]);
-
-const VALID_PLACEMENT_TYPES = new Set([
-    'Grass', 'GrassTrees', 'GrassMine',
-    'Dirt', 'DirtTrees', 'DirtMine'
-]);
-
 export function getAllLegalNewPiecePlacements(state) {
     const { ctx, whiteIsActive } = state;
     const gold = whiteIsActive ? state.whiteGold : state.blackGold;
-    const { lookup, neighbors } = ctx;
     const placements = [];
-
-    const kingId = whiteIsActive ? state.whiteKingId : state.blackKingId;
-    if (kingId === -1) return placements;
-
-    // Collect major piece square IDs for pawn placement, and queens for rook/bishop/knight placement
-    const majorPieceIds = [];
-    const queenIds = [];
-    for (let i = 0; i < lookup.length; i++) {
-        const sq = lookup[i];
-        if (sq.piece && sq.piece.isWhite === whiteIsActive && MAJOR_PIECES.has(sq.piece.type)) {
-            majorPieceIds.push(i);
-            if (sq.piece.type.endsWith('Queen')) queenIds.push(i);
-        }
-    }
-
     for (const shopItem of SHOP) {
         if (gold < shopItem.cost) continue;
-
-        const pieceType = shopItem.type;
-        const visited = new Set();
-
-        // Adjacent to king
-        for (let d = 0; d < 8; d++) {
-            const destId = neighbors[kingId * 8 + d];
-            if (destId === -1) continue;
-            const dest = lookup[destId];
-            if (dest.piece != null || !VALID_PLACEMENT_TYPES.has(dest.type)) continue;
-            placements.push({ type: "p", toPos: { x: dest.x, y: dest.y }, pieceType, cost: shopItem.cost });
-            visited.add(destId);
-        }
-
-        // Pawns can also be placed adjacent to major pieces; rooks, bishops and knights adjacent to queens
-        const extraSources = pieceType === "Pawn" ? majorPieceIds
-                           : pieceType === "Queen" ? []
-                           : queenIds;
-        for (const psId of extraSources) {
-            for (let d = 0; d < 8; d++) {
-                const destId = neighbors[psId * 8 + d];
-                if (destId === -1 || visited.has(destId)) continue;
-                const dest = lookup[destId];
-                if (dest.piece != null || !VALID_PLACEMENT_TYPES.has(dest.type)) continue;
-                placements.push({ type: "p", toPos: { x: dest.x, y: dest.y }, pieceType, cost: shopItem.cost });
-                visited.add(destId);
-            }
-        }
+        for (const toPos of computeLegalPlacements(null, whiteIsActive, shopItem.type, ctx))
+            placements.push({ type: "p", toPos, pieceType: shopItem.type, cost: shopItem.cost });
     }
-
     return placements;
 }
 

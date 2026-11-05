@@ -19,6 +19,22 @@ public abstract class Game
     public int TimeIncrementSeconds;
     protected bool FirstMoveMade;
 
+    /// <summary>
+    /// Timed games: time White gets for the first move before the main clock starts (main time / 4,
+    /// at most 1 minute). Time left over is lost; the increment is still added after the move.
+    /// </summary>
+    public int FirstMoveAllowanceMs { get; protected set; }
+
+    /// <summary>The first-move allowance that applies to the current turn (0 once the first move is made).</summary>
+    public int CurrentAllowanceMs => TimeControlEnabled && !FirstMoveMade ? FirstMoveAllowanceMs : 0;
+
+    /// <summary>Main-clock time the active player has used this turn (after any first-move allowance).</summary>
+    public int ClockElapsedMs(DateTime now) =>
+        LastMoveTimestamp is { } start ? Math.Max(0, (int)(now - start).TotalMilliseconds - CurrentAllowanceMs) : 0;
+
+    /// <summary>Starts the turn timer for White's first move (the game has started).</summary>
+    public void StartClock() => LastMoveTimestamp = DateTime.UtcNow;
+
     private const int MINE_INCOME = 3;
     private static readonly Dictionary<Type, int> PieceCosts = new()
     {
@@ -76,8 +92,7 @@ public abstract class Game
         {
             if (LastMoveTimestamp.HasValue)
             {
-                var elapsed = (long)(DateTime.UtcNow - LastMoveTimestamp.Value).TotalMilliseconds;
-                previousActiveColor.TimeMiliseconds -= (int)elapsed;
+                previousActiveColor.TimeMiliseconds -= ClockElapsedMs(DateTime.UtcNow);
                 previousActiveColor.TimeMiliseconds += TimeIncrementSeconds * 1000;
                 if (previousActiveColor.TimeMiliseconds <= 0)
                 {

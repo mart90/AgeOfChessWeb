@@ -18,7 +18,7 @@ export function playSound(name) {
 
   const sound = sounds[name];
   sound.currentTime = 0;
-  sound.play();
+  sound.play()?.catch(() => { /* not allowed yet (no click on the page since it loaded) */ });
 }
 
 export function setSoundEnabled(value) {

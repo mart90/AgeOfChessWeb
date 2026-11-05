@@ -8,6 +8,10 @@ namespace AgeOfChess.Server.Services;
 /// <summary>
 /// Background service that ends abandoned games and evicts stale ones.
 ///
+/// Every 5 seconds:
+///   • Just-started game waiting for a player to connect for over a minute → aborted (deleted).
+///   • Lobby whose signed-in creator has had no connection to the site for 2 minutes → closed (deleted).
+///
 /// Every minute, per in-memory game:
 ///   • Timed game whose active player's clock has run out (+5 s grace, so a client normally claims
 ///     it first via ClaimTimeout) → ends on time like a claimed timeout (history, Elo). This covers
@@ -28,8 +32,10 @@ namespace AgeOfChess.Server.Services;
 /// </summary>
 public class GameCleanupService(
     GameSessionManager sessions, GameFlowService flow, IServiceScopeFactory scopeFactory,
-    ILogger<GameCleanupService> log) : BackgroundService
+    PresenceService presence, ILogger<GameCleanupService> log) : BackgroundService
 {
+    private static readonly TimeSpan PresenceCheckInterval  = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan LobbyCreatorGoneLimit  = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan CheckInterval          = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan DbSweepInterval        = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan NeverStartedLimit      = TimeSpan.FromHours(2);
@@ -44,26 +50,30 @@ public class GameCleanupService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Stagger the first run so startup noise settles first.
-        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
-
-        var lastSweep = DateTime.MinValue;
+        // The first full cleanup a minute after startup, so startup noise settles first
+        var lastCleanup = DateTime.UtcNow;
+        var lastSweep   = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await CleanupGamesAsync();
-                if (DateTime.UtcNow - lastSweep > DbSweepInterval)
+                await CheckPresenceAsync();
+                if (DateTime.UtcNow - lastCleanup >= CheckInterval)
                 {
-                    await SweepOrphanedSessionsAsync();
-                    lastSweep = DateTime.UtcNow;
+                    lastCleanup = DateTime.UtcNow;
+                    await CleanupGamesAsync();
+                    if (DateTime.UtcNow - lastSweep > DbSweepInterval)
+                    {
+                        await SweepOrphanedSessionsAsync();
+                        lastSweep = DateTime.UtcNow;
+                    }
                 }
             }
             catch (Exception ex)
             {
                 log.LogError(ex, "Game cleanup failed");
             }
-            await Task.Delay(CheckInterval, stoppingToken);
+            await Task.Delay(PresenceCheckInterval, stoppingToken);
         }
     }
 
@@ -130,13 +140,37 @@ public class GameCleanupService(
             _endedSeenAt.Remove(id);
     }
 
+    /// <summary>Aborts games a player didn't connect to, and closes lobbies whose creator left the site.</summary>
+    private async Task CheckPresenceAsync()
+    {
+        var now = DateTime.UtcNow;
+        bool WaitedTooLong(ServerGame g) => g.WaitingSince is { } since && now - since > ServerGame.WaitForPlayersLimit;
+        bool CreatorGone(ServerGame g) =>
+            !g.HasGameStarted && g.LobbyCreatorId is int creatorId && presence.OfflineFor(creatorId) > LobbyCreatorGoneLimit;
+
+        foreach (var game in sessions.GetAll().Where(g => WaitedTooLong(g) || CreatorGone(g)).ToList())
+        {
+            using var _ = await game.LockAsync();
+            if (sessions.GetById(game.SessionId) != game) continue;   // gone meanwhile
+            if (WaitedTooLong(game))
+            {
+                await flow.AbortAsync(game, $"Game aborted: {game.MissingPlayers()} didn't connect.");
+                log.LogInformation("Game {Id} aborted: a player didn't connect", game.SessionId);
+            }
+            else if (CreatorGone(game))
+            {
+                await flow.CancelLobbyAsync(game, "Lobby closed: you left the site.");
+                log.LogInformation("Lobby {Id} closed: its creator left the site", game.SessionId);
+            }
+        }
+    }
+
     /// <summary>True when the active player's clock ran out more than the grace period ago.</summary>
     private static bool FlagFallen(ServerGame game, DateTime now)
     {
         if (!game.TimeControlEnabled || !game.LastMoveTimestamp.HasValue) return false;
         if (game.Bidding != null && !game.Bidding.BothBid) return false;   // bid clock, not game clock
-        var elapsedMs = (now - game.LastMoveTimestamp.Value).TotalMilliseconds;
-        return game.ActiveColor.TimeMiliseconds - elapsedMs < -FlagGraceMs;
+        return game.ActiveColor.TimeMiliseconds - game.ClockElapsedMs(now) < -FlagGraceMs;
     }
 
     private async Task SweepOrphanedSessionsAsync()

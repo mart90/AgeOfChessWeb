@@ -35,9 +35,8 @@
     try { localStorage.setItem(TABLE_PREFS_KEY, JSON.stringify({ showUnranked, showHandicap })); } catch { /* not remembered */ }
   });
 
-  // The filter applies from 3 characters (the minimum name length), 300 ms after typing stops
-  const MIN_FILTER_LENGTH = 3;
-  const activeFilter = $derived(opponentFilter.trim().length >= MIN_FILTER_LENGTH ? opponentFilter.trim() : '');
+  // The filter applies 300 ms after typing stops
+  const activeFilter = $derived(opponentFilter.trim());
   let appliedFilter = '';
   let filterTimer;
   function onFilterInput() {
